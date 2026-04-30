@@ -17,12 +17,12 @@ jobs:
       SKIP_SETTINGS_SCHEMA: "1"
 
       # Reduce peak RAM usage:
-      # - Warp's default OSS bundling path uses the `release-lto` profile (ThinLTO),
-      #   which can OOM on 8–12GB machines. Disable LTO via Cargo env overrides.
-      # See Cargo: `CARGO_PROFILE_<name>_LTO` and `profile.<name>.lto = \"off\"`.
-      CARGO_PROFILE_RELEASE_LTO_LTO: "off"
-      # Optional: reduce debug info generation to speed up and reduce memory.
-      CARGO_PROFILE_RELEASE_LTO_DEBUG: "0"
+      # - OSS bundling uses the `release-lto` profile (ThinLTO).
+      # - Cargo env overrides for custom profiles can be version-sensitive and have
+      #   caused config parsing failures on GitHub runners.
+      # Use RUSTFLAGS instead: it appends rustc flags after profile defaults,
+      # effectively overriding them (e.g. `-C lto=off`).
+      RUSTFLAGS: "-C lto=off -C debuginfo=0"
 
     steps:
       - name: Checkout
