@@ -23,9 +23,7 @@ jobs:
       #   caused config parsing failures on GitHub runners.
       # Use RUSTFLAGS instead: it appends rustc flags after profile defaults,
       # effectively overriding them (e.g. `-C lto=off`).
-      #
-      # Also use mold for faster linking.
-      RUSTFLAGS: "-C lto=off -C debuginfo=0 -C link-arg=-fuse-ld=mold"
+      RUSTFLAGS: "-C lto=off -C debuginfo=0"
 
       # Enable sccache to speed up rebuilds (especially when iterating on i18n).
       # NOTE: Job-level `env` does not have access to the `runner` context, so
@@ -42,8 +40,6 @@ jobs:
       - name: Install Linux build dependencies
         run: |
           sudo apt-get update
-          # Faster linker (helps a lot on large Rust apps).
-          sudo apt-get install -y mold
           ./script/linux/install_build_deps
 
       - name: Install linuxdeploy (for AppImage bundling)
