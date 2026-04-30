@@ -28,7 +28,9 @@ jobs:
       RUSTFLAGS: "-C lto=off -C debuginfo=0 -C link-arg=-fuse-ld=mold"
 
       # Enable sccache to speed up rebuilds (especially when iterating on i18n).
-      SCCACHE_DIR: "${{ runner.temp }}/sccache"
+      # NOTE: Job-level `env` does not have access to the `runner` context, so
+      # keep this as a plain path (relative to the workspace).
+      SCCACHE_DIR: .sccache
       SCCACHE_CACHE_SIZE: "5G"
 
     steps:
