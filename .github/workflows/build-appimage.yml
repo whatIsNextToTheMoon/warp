@@ -1,0 +1,60 @@
+name: Build Warp OSS AppImage
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+
+jobs:
+  appimage:
+    runs-on: ubuntu-22.04
+    env:
+      # Warp bundling scripts read these.
+      APPIMAGE_EXTRACT_AND_RUN: "1"
+      NO_LICENSES: "1"
+      SKIP_SETTINGS_SCHEMA: "1"
+
+      # Reduce peak RAM usage:
+      # - Warp's default OSS bundling path uses the `release-lto` profile (ThinLTO),
+      #   which can OOM on 8–12GB machines. Disable LTO via Cargo env overrides.
+      # See Cargo: `CARGO_PROFILE_<name>_LTO` and `profile.<name>.lto = \"off\"`.
+      CARGO_PROFILE_RELEASE_LTO_LTO: "off"
+      # Optional: reduce debug info generation to speed up and reduce memory.
+      CARGO_PROFILE_RELEASE_LTO_DEBUG: "0"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          ./script/linux/install_build_deps
+
+      - name: Install linuxdeploy (for AppImage bundling)
+        run: |
+          ./script/linux/install_linuxdeploy
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build AppImage (OSS)
+        run: |
+          ./script/linux/bundle -c oss --packages appimage
+
+      - name: Compute checksums
+        run: |
+          cd target/release-lto/bundle/linux
+          sha256sum WarpOss-*.AppImage | tee WarpOss-*.AppImage.sha256
+
+      - name: Upload AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: WarpOss-AppImage
+          path: |
+            target/release-lto/bundle/linux/WarpOss-*.AppImage
+            target/release-lto/bundle/linux/WarpOss-*.AppImage.sha256
+
