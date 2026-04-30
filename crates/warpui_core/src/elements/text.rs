@@ -271,8 +271,14 @@ impl Text {
     /// use [`soft_warp(false)`](`Text::soft_wrap`) after creating the text element.
     #[cfg_attr(debug_assertions, track_caller)]
     pub fn new(text: impl Into<Cow<'static, str>>, family_id: FamilyId, font_size: f32) -> Self {
+        let text: Cow<'static, str> = text.into();
+        // Attempt translation for both borrowed and owned strings.
+        //
+        // We still use exact-match translation (installed by the application) so dynamic/user
+        // content is unlikely to be affected unless it exactly matches a known UI label.
+        let text = crate::i18n::translate(text.as_ref()).unwrap_or(text);
         Self {
-            text: text.into(),
+            text,
             soft_wrap: true,
             family_id,
             font_properties: Properties::default(),

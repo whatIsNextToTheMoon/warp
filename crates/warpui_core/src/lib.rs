@@ -13,6 +13,7 @@ mod debug;
 pub mod elements;
 pub mod event;
 pub mod fonts;
+pub mod i18n;
 pub mod image_cache;
 pub mod integration;
 pub mod keymap;

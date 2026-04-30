@@ -454,21 +454,46 @@ fn start_writer(conn: SqliteConnection, database_path: PathBuf) -> Result<Writer
         .name("SQLite Writer".into())
         .spawn(move || {
             let mut paused = false;
+            // When true, we stop blocking on `recv()` and instead drain any remaining queued
+            // events before exiting. This helps avoid losing events that were enqueued by
+            // background tasks right around shutdown.
+            let mut terminating = false;
             loop {
-                let events = match rx.recv() {
-                    Ok(event) => {
-                        // Wait for there to be at least one event, but collect any other pending
-                        // events too. This way, we can start dropping redundant events if the
-                        // writer thread is falling behind.
-                        let mut events = vec![event];
-                        events.extend(rx.try_iter());
-                        deduplicate_events(events)
+                let events = if terminating {
+                    // Drain any pending events without blocking.
+                    match rx.try_recv() {
+                        Ok(event) => {
+                            let mut events = vec![event];
+                            events.extend(rx.try_iter());
+                            deduplicate_events(events)
+                        }
+                        Err(std::sync::mpsc::TryRecvError::Empty) => {
+                            log::info!("SQLite writer drained queued events; exiting.");
+                            break;
+                        }
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                            log::warn!(
+                                "SQLite event sender disconnected while terminating; exiting."
+                            );
+                            break;
+                        }
                     }
-                    Err(_) => {
-                        log::warn!(
-                            "SQLite event sender has closed; terminating SQLite writer thread."
-                        );
-                        break;
+                } else {
+                    match rx.recv() {
+                        Ok(event) => {
+                            // Wait for there to be at least one event, but collect any other pending
+                            // events too. This way, we can start dropping redundant events if the
+                            // writer thread is falling behind.
+                            let mut events = vec![event];
+                            events.extend(rx.try_iter());
+                            deduplicate_events(events)
+                        }
+                        Err(_) => {
+                            log::warn!(
+                                "SQLite event sender has closed; terminating SQLite writer thread."
+                            );
+                            break;
+                        }
                     }
                 };
 
@@ -498,8 +523,10 @@ fn start_writer(conn: SqliteConnection, database_path: PathBuf) -> Result<Writer
                             }
                         }
                         ModelEvent::Terminate => {
-                            log::info!("Shutting down SQLite writer thread");
-                            return;
+                            // Don't exit immediately: mark terminating and drain anything that may
+                            // already be queued behind this Terminate event.
+                            log::info!("SQLite writer received Terminate; draining queued events.");
+                            terminating = true;
                         }
                         event => {
                             if paused {

@@ -1,6 +1,7 @@
 //! Implementation of terminal panes.
 #[cfg(feature = "local_fs")]
 use crate::pane_group::CodeSource;
+use std::sync::mpsc::TrySendError;
 use std::{collections::HashMap, sync::mpsc::SyncSender};
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
@@ -709,15 +710,33 @@ fn handle_terminal_view_event(
                                     is_local: *is_local,
                                 });
 
-                                let sender_clone = sender.clone();
-                                let _ = ctx.spawn(async move {
-                                // Sending over a sync sender can block the current thread, so we do this async.
-                                sender_clone.send(block_completed_event)
-                            }, move |_, res, _| {
-                                if let Err(err) = res {
-                                    log::error!("Error sending block completed event for terminal id {terminal_pane_id:?} {err:?}");
+                                // Best-effort: enqueue immediately so short-lived sessions (or
+                                // abrupt termination) are more likely to persist the last block.
+                                //
+                                // If the queue is full, fall back to the old async send to avoid
+                                // blocking the UI thread.
+                                match sender.try_send(block_completed_event) {
+                                    Ok(()) => {}
+                                    Err(TrySendError::Disconnected(_)) => {
+                                        log::error!(
+                                            "SQLite writer channel disconnected; could not persist block for terminal id {terminal_pane_id:?}"
+                                        );
+                                    }
+                                    Err(TrySendError::Full(event)) => {
+                                        let sender_clone = sender.clone();
+                                        let _ = ctx.spawn(
+                                            async move {
+                                                // Sending over a sync sender can block the current thread, so we do this async.
+                                                sender_clone.send(event)
+                                            },
+                                            move |_, res, _| {
+                                                if let Err(err) = res {
+                                                    log::error!("Error sending block completed event for terminal id {terminal_pane_id:?} {err:?}");
+                                                }
+                                            },
+                                        );
+                                    }
                                 }
-                            });
                             }
                         }
                         ctx.emit(pane_group::Event::ActiveSessionChanged);

@@ -55,3 +55,12 @@ desired_behavior.md
 
 # Don't include the python cache for bundled skills.
 __pycache__/
+
+# Local AppImage build artifacts
+*.AppImage
+*.AppImage.prev-*
+*.AppImage.sha256
+SHA256SUMS
+
+# Local plaintext credential store (DO NOT COMMIT)
+.git-credentials

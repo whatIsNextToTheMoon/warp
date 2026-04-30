@@ -268,9 +268,15 @@ impl FormattedTextElement {
         family_id: FamilyId,
         font_size: f32,
     ) -> Self {
+        // Apply the app-installed translator hook for UI-authored strings.
+        //
+        // Note: `markdown_parser::FormattedTextFragment` stores text as an owned `String`, so we
+        // translate *before* converting into `String`.
+        let text: Cow<'static, str> = text.into();
+        let text = crate::i18n::translate(text.as_ref()).unwrap_or(text);
         Self::internal_constructor(
             Arc::new(FormattedText::new([FormattedTextLine::Line(vec![
-                FormattedTextFragment::plain_text(text.into()),
+                FormattedTextFragment::plain_text(text.into_owned()),
             ])])),
             font_size,
             family_id,

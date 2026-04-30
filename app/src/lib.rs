@@ -41,6 +41,7 @@ mod external_secrets;
 mod font_fallback;
 mod global_resource_handles;
 mod gpu_state;
+mod i18n;
 mod input_classifier;
 mod interval_timer;
 mod linear;
@@ -909,6 +910,10 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
         ctx.background_executor()
             .spawn(warp_logging::rotate_log_files())
             .detach();
+
+        // Install the optional UI translator (currently: zh-CN mapping) early,
+        // before the first UI tree is built.
+        crate::i18n::init();
 
         ctx.add_singleton_model(|ctx| {
             AppExecutionMode::new(

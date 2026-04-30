@@ -15,92 +15,204 @@ impl CloudObjectToastMessage {
         success_type: &OperationSuccessType,
         app: &AppContext,
     ) -> Option<String> {
-        let object_name = object.model_type_name().to_owned();
-        let object_name_lowercase = object_name.to_ascii_lowercase();
+        let chinese = crate::i18n::is_chinese_locale();
+
+        let object_type_name_en = object.model_type_name();
+        let object_name = if chinese {
+            warpui::i18n::translate(object_type_name_en)
+                .map(|t| t.into_owned())
+                .unwrap_or_else(|| object_type_name_en.to_string())
+        } else {
+            object_type_name_en.to_string()
+        };
+        let object_name_lowercase = object_type_name_en.to_ascii_lowercase();
 
         match (object.object_type(), operation, success_type) {
             // We should only show toasts for creates initiated by the user, not by the system
-            (_, ObjectOperation::Create { initiated_by: InitiatedBy::User }, OperationSuccessType::Success) => {
+            (
+                _,
+                ObjectOperation::Create {
+                    initiated_by: InitiatedBy::User,
+                },
+                OperationSuccessType::Success,
+            ) => {
                 let containing_object_name = object.containing_object_name(app);
-                Some(format!("{object_name} saved to {containing_object_name}"))
+                if chinese {
+                    Some(format!("{object_name} 已保存到 {containing_object_name}"))
+                } else {
+                    Some(format!("{object_name} saved to {containing_object_name}"))
+                }
             }
             // notebooks intentionally do not have an update message, as they are updated
             // as the user types and so toasts would be VERY noisy
-            (
-                ObjectType::Notebook,
-                ObjectOperation::Update,
-                OperationSuccessType::Success,
-            ) => None,
+            (ObjectType::Notebook, ObjectOperation::Update, OperationSuccessType::Success) => None,
             (_, ObjectOperation::Update, OperationSuccessType::Success) => {
-                Some(format!("{object_name} updated"))
+                if chinese {
+                    Some(format!("{object_name} 已更新"))
+                } else {
+                    Some(format!("{object_name} updated"))
+                }
             }
-            (_, ObjectOperation::MoveToFolder, OperationSuccessType::Success) | (_, ObjectOperation::MoveToDrive, OperationSuccessType::Success) => {
+            (_, ObjectOperation::MoveToFolder, OperationSuccessType::Success)
+            | (_, ObjectOperation::MoveToDrive, OperationSuccessType::Success) => {
                 let containing_object_name = object.containing_object_name(app);
-                Some(format!("{object_name} moved to {containing_object_name}"))
+                if chinese {
+                    Some(format!("{object_name} 已移动到 {containing_object_name}"))
+                } else {
+                    Some(format!("{object_name} moved to {containing_object_name}"))
+                }
             }
             (_, ObjectOperation::Trash, OperationSuccessType::Success) => {
-                Some(format!("{object_name} trashed"))
+                if chinese {
+                    Some(format!("{object_name} 已移入回收站"))
+                } else {
+                    Some(format!("{object_name} trashed"))
+                }
             }
             (_, ObjectOperation::Untrash, OperationSuccessType::Success) => {
-                Some(format!("{object_name} restored"))
+                if chinese {
+                    Some(format!("{object_name} 已恢复"))
+                } else {
+                    Some(format!("{object_name} restored"))
+                }
             }
             (_, ObjectOperation::Leave, OperationSuccessType::Success) => {
-                Some(format!("Left {object_name}"))
+                if chinese {
+                    Some(format!("已离开 {object_name}"))
+                } else {
+                    Some(format!("Left {object_name}"))
+                }
             }
-            (_, ObjectOperation::Create { initiated_by: InitiatedBy::User }, OperationSuccessType::Failure) => {
-                Some(format!("Failed to create {object_name_lowercase}"))
+            (
+                _,
+                ObjectOperation::Create {
+                    initiated_by: InitiatedBy::User,
+                },
+                OperationSuccessType::Failure,
+            ) => {
+                if chinese {
+                    Some(format!("创建 {object_name} 失败"))
+                } else {
+                    Some(format!("Failed to create {object_name_lowercase}"))
+                }
             }
-            (_, ObjectOperation::Create { initiated_by: InitiatedBy::User }, OperationSuccessType::Denied(message)) => {
-                Some(message.to_string())
-            }
+            (
+                _,
+                ObjectOperation::Create {
+                    initiated_by: InitiatedBy::User,
+                },
+                OperationSuccessType::Denied(message),
+            ) => Some(message.to_string()),
             (_, ObjectOperation::Update, OperationSuccessType::Failure) => {
-                Some(format!("Failed to update {object_name_lowercase}"))
+                if chinese {
+                    Some(format!("更新 {object_name} 失败"))
+                } else {
+                    Some(format!("Failed to update {object_name_lowercase}"))
+                }
             }
-            (_, ObjectOperation::MoveToFolder, OperationSuccessType::Failure) | (_, ObjectOperation::MoveToDrive, OperationSuccessType::Failure) => {
-                Some(format!("Failed to move {object_name_lowercase}"))
+            (_, ObjectOperation::MoveToFolder, OperationSuccessType::Failure)
+            | (_, ObjectOperation::MoveToDrive, OperationSuccessType::Failure) => {
+                if chinese {
+                    Some(format!("移动 {object_name} 失败"))
+                } else {
+                    Some(format!("Failed to move {object_name_lowercase}"))
+                }
             }
             (_, ObjectOperation::Trash, OperationSuccessType::Failure) => {
-                Some(format!("Failed to trash {object_name_lowercase}"))
+                if chinese {
+                    Some(format!("移入回收站失败：{object_name}"))
+                } else {
+                    Some(format!("Failed to trash {object_name_lowercase}"))
+                }
             }
             (_, ObjectOperation::Untrash, OperationSuccessType::Failure) => {
-                Some(format!("Failed to restore {object_name_lowercase}"))
+                if chinese {
+                    Some(format!("恢复失败：{object_name}"))
+                } else {
+                    Some(format!("Failed to restore {object_name_lowercase}"))
+                }
             }
             // We should only show deletion failure toasts for user-initiated deletions.
-            (_, ObjectOperation::Delete { initiated_by: InitiatedBy::User }, OperationSuccessType::Failure) => {
-                Some(format!("Failed to delete {object_name_lowercase}"))
+            (
+                _,
+                ObjectOperation::Delete {
+                    initiated_by: InitiatedBy::User,
+                },
+                OperationSuccessType::Failure,
+            ) => {
+                if chinese {
+                    Some(format!("删除 {object_name} 失败"))
+                } else {
+                    Some(format!("Failed to delete {object_name_lowercase}"))
+                }
             }
             (_, ObjectOperation::Leave, OperationSuccessType::Failure) => {
-                Some(format!("Failed to leave {object_name}"))
+                if chinese {
+                    Some(format!("离开 {object_name} 失败"))
+                } else {
+                    Some(format!("Failed to leave {object_name}"))
+                }
+            }
+            (ObjectType::Workflow, ObjectOperation::Update, OperationSuccessType::Rejection) => {
+                if chinese {
+                    Some("此工作流无法保存：你编辑期间发生了其他更改。".to_string())
+                } else {
+                    Some("This workflow could not be saved because changes were made while you were editing.".to_string())
+                }
             }
             (
-                ObjectType::Workflow,
+                ObjectType::GenericStringObject(GenericStringObjectFormat::Json(
+                    JsonObjectType::EnvVarCollection,
+                )),
                 ObjectOperation::Update,
                 OperationSuccessType::Rejection,
             ) => {
-                Some("This workflow could not be saved because changes were made while you were editing.".to_string())
+                if chinese {
+                    Some("环境变量无法保存：你编辑期间发生了其他更改。".to_string())
+                } else {
+                    Some("Environment variables could not be saved because changes were made while you were editing.".to_string())
+                }
             }
             (
-                ObjectType::GenericStringObject(GenericStringObjectFormat::Json(JsonObjectType::EnvVarCollection)),
+                ObjectType::GenericStringObject(GenericStringObjectFormat::Json(
+                    JsonObjectType::AIFact,
+                )),
                 ObjectOperation::Update,
                 OperationSuccessType::Rejection,
             ) => {
-                Some("Environment variables could not be saved because changes were made while you were editing.".to_string())
-            }
-            (
-                ObjectType::GenericStringObject(GenericStringObjectFormat::Json(JsonObjectType::AIFact)),
-                ObjectOperation::Update,
-                OperationSuccessType::Rejection,
-            ) => {
-                Some("Rule could not be saved because changes were made while you were editing.".to_string())
+                if chinese {
+                    Some("规则无法保存：你编辑期间发生了其他更改。".to_string())
+                } else {
+                    Some(
+                        "Rule could not be saved because changes were made while you were editing."
+                            .to_string(),
+                    )
+                }
             }
             (_, ObjectOperation::TakeEditAccess, OperationSuccessType::Failure) => {
-                Some(format!("Failed to start editing {object_name_lowercase}"))
+                if chinese {
+                    Some(format!("开始编辑 {object_name} 失败"))
+                } else {
+                    Some(format!("Failed to start editing {object_name_lowercase}"))
+                }
             }
             (_, ObjectOperation::UpdatePermissions, OperationSuccessType::Success) => {
-                Some(format!("Successfully updated permissions for {object_name_lowercase}"))
+                if chinese {
+                    Some(format!("{object_name} 权限已更新"))
+                } else {
+                    Some(format!(
+                        "Successfully updated permissions for {object_name_lowercase}"
+                    ))
+                }
             }
             (_, ObjectOperation::UpdatePermissions, OperationSuccessType::Failure) => {
-                Some(format!("Failed to update permissions for {object_name_lowercase}"))
+                if chinese {
+                    Some(format!("更新 {object_name} 权限失败"))
+                } else {
+                    Some(format!(
+                        "Failed to update permissions for {object_name_lowercase}"
+                    ))
+                }
             }
             _ => None,
         }
@@ -111,10 +223,21 @@ impl CloudObjectToastMessage {
         operation: &ObjectOperation,
         success_type: &OperationSuccessType,
     ) -> Option<String> {
+        let chinese = crate::i18n::is_chinese_locale();
         let count_objects_message = match num_objects {
-            1 => "1 object".to_string(),
+            1 => {
+                if chinese {
+                    "1 个对象".to_string()
+                } else {
+                    "1 object".to_string()
+                }
+            }
             n => {
-                format!("{n} objects")
+                if chinese {
+                    format!("{n} 个对象")
+                } else {
+                    format!("{n} objects")
+                }
             }
         };
         match (operation, success_type) {
@@ -124,15 +247,35 @@ impl CloudObjectToastMessage {
                     initiated_by: InitiatedBy::User,
                 },
                 OperationSuccessType::Success,
-            ) => Some(format!("{count_objects_message} deleted forever")),
-            (ObjectOperation::EmptyTrash, OperationSuccessType::Success) => Some(format!(
-                "Trash emptied: {count_objects_message} deleted forever"
-            )),
+            ) => {
+                if chinese {
+                    Some(format!("{count_objects_message} 已永久删除"))
+                } else {
+                    Some(format!("{count_objects_message} deleted forever"))
+                }
+            }
+            (ObjectOperation::EmptyTrash, OperationSuccessType::Success) => {
+                if chinese {
+                    Some(format!("回收站已清空：{count_objects_message} 已永久删除"))
+                } else {
+                    Some(format!(
+                        "Trash emptied: {count_objects_message} deleted forever"
+                    ))
+                }
+            }
             (ObjectOperation::EmptyTrash, OperationSuccessType::Failure) => {
-                Some("Failed to empty trash".to_string())
+                if chinese {
+                    Some("清空回收站失败".to_string())
+                } else {
+                    Some("Failed to empty trash".to_string())
+                }
             }
             (ObjectOperation::EmptyTrash, OperationSuccessType::Rejection) => {
-                Some("No objects in trash to empty".to_string())
+                if chinese {
+                    Some("回收站中没有可清空的对象".to_string())
+                } else {
+                    Some("No objects in trash to empty".to_string())
+                }
             }
             _ => None,
         }

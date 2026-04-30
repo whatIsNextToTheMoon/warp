@@ -101,8 +101,14 @@ impl ShimmeringTextElement {
         config: ShimmerConfig,
         state_handle: ShimmeringTextStateHandle,
     ) -> Self {
+        let text: Cow<'static, str> = text.into();
+        // Attempt translation for both borrowed and owned strings.
+        //
+        // This keeps ShimmeringTextElement consistent with `Text` and `FormattedTextElement`,
+        // enabling i18n for UI-authored strings like onboarding titles.
+        let text = crate::i18n::translate(text.as_ref()).unwrap_or(text);
         Self {
-            text: text.into(),
+            text,
             font_family,
             font_size,
             base_color,

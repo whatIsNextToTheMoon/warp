@@ -59,26 +59,27 @@ fn collapsed_subtitle(
     right_label: &str,
     chips: &[ChipSpec],
 ) -> String {
+    fn tr(text: &str) -> String {
+        warpui::i18n::translate(text)
+            .map(|t| t.into_owned())
+            .unwrap_or_else(|| text.to_string())
+    }
+
     if !is_enabled {
-        return right_label.to_string();
+        return tr(right_label);
     }
     if chips.is_empty() {
-        return left_label.to_string();
+        return tr(left_label);
     }
-    let enabled_labels: Vec<&str> = chips
+    let enabled_labels: Vec<String> = chips
         .iter()
         .filter(|c| c.is_enabled)
-        .map(|c| c.label)
+        .map(|c| tr(c.label))
         .collect();
     if enabled_labels.is_empty() {
-        return left_label.to_string();
+        return tr(left_label);
     }
-    let joined = enabled_labels.join(", ");
-    let mut chars = joined.chars();
-    match chars.next() {
-        Some(c) => c.to_uppercase().to_string() + chars.as_str(),
-        None => String::new(),
-    }
+    enabled_labels.join("、")
 }
 
 fn render_collapsed(appearance: &Appearance, spec: ToggleCardSpec) -> Box<dyn Element> {

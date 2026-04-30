@@ -14,7 +14,14 @@ use crate::{app_state::PaneUuid, persistence::schema::ai_queries};
 use super::model::Block;
 use super::{model, schema};
 
-const MAX_TERMINAL_BLOCKS_TO_PERSIST_PER_SESSION: i64 = 100;
+/// Upper bound on how many terminal blocks we persist per session/pane.
+///
+/// This directly impacts how much terminal output ("console history") can be restored across
+/// restarts. The upstream default of 100 blocks is often not enough for users who expect a
+/// Tabby-like persistent scrollback experience, so we keep a larger window by default.
+///
+/// Note: this is still bounded to avoid unbounded SQLite growth.
+const MAX_TERMINAL_BLOCKS_TO_PERSIST_PER_SESSION: i64 = 1000;
 
 type PersistedBlocks = HashMap<PaneUuid, Vec<SerializedBlockListItem>>;
 

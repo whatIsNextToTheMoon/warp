@@ -291,50 +291,109 @@ impl<'a> UnsavedStateSummary<'a> {
     /// Builds warning text describing what unsaved data there is.
     pub fn warning_text(&self) -> String {
         let mut info_text_lines = Vec::<String>::new();
+        let chinese = crate::i18n::is_chinese_locale();
 
-        let scope_suffix = match self.scope {
-            QuitScope::Tabs(ref tabs) if tabs.len() == 1 => " in this tab.",
-            QuitScope::Window(_) => " in this window.",
-            QuitScope::Pane { .. } => " in this pane.",
-            QuitScope::App | QuitScope::Tabs(_) | QuitScope::EditorTab { .. } => ".",
+        let scope_suffix = if chinese {
+            match self.scope {
+                QuitScope::Tabs(ref tabs) if tabs.len() == 1 => "（此标签页）",
+                QuitScope::Window(_) => "（此窗口）",
+                QuitScope::Pane { .. } => "（此窗格）",
+                QuitScope::App | QuitScope::Tabs(_) | QuitScope::EditorTab { .. } => "",
+            }
+        } else {
+            match self.scope {
+                QuitScope::Tabs(ref tabs) if tabs.len() == 1 => " in this tab.",
+                QuitScope::Window(_) => " in this window.",
+                QuitScope::Pane { .. } => " in this pane.",
+                QuitScope::App | QuitScope::Tabs(_) | QuitScope::EditorTab { .. } => ".",
+            }
         };
 
         if self.total_long_running_commands > 0 {
-            let mut process_info_text = format!(
-                "You have {} {} running",
-                self.total_long_running_commands,
-                pluralize(self.total_long_running_commands, "process", "processes")
-            );
-            if self.windows_with_long_running_commands > 1 {
-                let _ = write!(
-                    &mut process_info_text,
-                    " in {} windows",
-                    self.windows_with_long_running_commands
+            if chinese {
+                let mut process_info_text =
+                    format!("你有 {} 个进程正在运行", self.total_long_running_commands);
+                if self.windows_with_long_running_commands > 1 {
+                    let _ = write!(
+                        &mut process_info_text,
+                        "（{} 个窗口）",
+                        self.windows_with_long_running_commands
+                    );
+                } else if self.tabs_with_long_running_commands > 1 {
+                    let _ = write!(
+                        &mut process_info_text,
+                        "（{} 个标签页）",
+                        self.tabs_with_long_running_commands
+                    );
+                }
+                if !scope_suffix.is_empty() {
+                    process_info_text.push_str(scope_suffix);
+                }
+                process_info_text.push('。');
+                info_text_lines.push(process_info_text);
+            } else {
+                let mut process_info_text = format!(
+                    "You have {} {} running",
+                    self.total_long_running_commands,
+                    pluralize(self.total_long_running_commands, "process", "processes")
                 );
-            } else if self.tabs_with_long_running_commands > 1 {
-                let _ = write!(
-                    &mut process_info_text,
-                    " in {} tabs",
-                    self.tabs_with_long_running_commands
-                );
+                if self.windows_with_long_running_commands > 1 {
+                    let _ = write!(
+                        &mut process_info_text,
+                        " in {} windows",
+                        self.windows_with_long_running_commands
+                    );
+                } else if self.tabs_with_long_running_commands > 1 {
+                    let _ = write!(
+                        &mut process_info_text,
+                        " in {} tabs",
+                        self.tabs_with_long_running_commands
+                    );
+                }
+                process_info_text.push_str(scope_suffix);
+                info_text_lines.push(process_info_text);
             }
-            process_info_text.push_str(scope_suffix);
-            info_text_lines.push(process_info_text);
         }
 
         if self.shared_sessions > 0 {
-            info_text_lines.push(format!(
-                "You are sharing {} {}{scope_suffix}",
-                self.shared_sessions,
-                pluralize(self.shared_sessions, "session", "sessions")
-            ));
+            if chinese {
+                let mut s = format!("你正在共享 {} 个会话", self.shared_sessions);
+                if !scope_suffix.is_empty() {
+                    s.push_str(scope_suffix);
+                }
+                s.push('。');
+                info_text_lines.push(s);
+            } else {
+                info_text_lines.push(format!(
+                    "You are sharing {} {}{scope_suffix}",
+                    self.shared_sessions,
+                    pluralize(self.shared_sessions, "session", "sessions")
+                ));
+            }
         }
 
         if self.unsaved_code_changes {
             if let QuitScope::EditorTab { ref file_name, .. } = self.scope {
-                info_text_lines.push(format!("Do you want to save the changes you made to {}? Your changes will be discarded if you don't save them.", file_name.clone().unwrap_or("this file".to_string())));
+                if chinese {
+                    let file = file_name.clone().unwrap_or_else(|| "此文件".to_string());
+                    info_text_lines.push(format!(
+                        "是否保存你对 {} 所做的更改？如果不保存，这些更改将被丢弃。",
+                        file
+                    ));
+                } else {
+                    info_text_lines.push(format!("Do you want to save the changes you made to {}? Your changes will be discarded if you don't save them.", file_name.clone().unwrap_or("this file".to_string())));
+                }
             } else {
-                info_text_lines.push(format!("You have unsaved file changes{scope_suffix}"));
+                if chinese {
+                    let mut s = "你有未保存的文件更改".to_string();
+                    if !scope_suffix.is_empty() {
+                        s.push_str(scope_suffix);
+                    }
+                    s.push('。');
+                    info_text_lines.push(s);
+                } else {
+                    info_text_lines.push(format!("You have unsaved file changes{scope_suffix}"));
+                }
             }
         }
 

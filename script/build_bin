@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+#
+# Minimal build script for Warp.
+#
+# Goal: build a runnable binary without setting up test/bundling tooling.
+# Default: build OSS channel binary (warp-oss) in release mode with GUI features.
+
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "${REPO_ROOT}"
+
+BIN="${WARP_BIN:-warp-oss}"
+FEATURES="${WARP_FEATURES:-gui}"
+PROFILE="${WARP_PROFILE:-release}"
+
+INSTALL_DEPS=false
+
+usage() {
+  cat <<'EOF'
+用法：
+  ./script/build_bin [--bin <warp-oss|warp|dev|stable|preview>] [--debug] [--profile <name>] [--features <...>] [--install-deps]
+
+环境变量：
+  WARP_BIN        默认 warp-oss
+  WARP_FEATURES   默认 gui
+  WARP_PROFILE    默认 release（传 --debug 会改为 dev）
+EOF
+}
+
+while (( "$#" )); do
+  case "$1" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --bin)
+      BIN="$2"
+      shift 2
+      ;;
+    --features)
+      FEATURES="$2"
+      shift 2
+      ;;
+    --debug)
+      PROFILE="dev"
+      shift
+      ;;
+    --profile)
+      PROFILE="$2"
+      shift 2
+      ;;
+    --install-deps)
+      INSTALL_DEPS=true
+      shift
+      ;;
+    *)
+      echo "未知参数：$1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+need_cmd() {
+  local cmd="$1"
+  local hint="$2"
+  if ! command -v "$cmd" >/dev/null 2>&1; then
+    echo "缺少命令：$cmd" >&2
+    echo "提示：$hint" >&2
+    return 1
+  fi
+  return 0
+}
+
+install_deps_debian() {
+  echo "⬇️  Installing minimal build deps (Debian/Ubuntu)..."
+  sudo apt-get update -y
+  sudo apt-get install -y \
+    curl git build-essential cmake pkg-config python-is-python3 \
+    libssl-dev libfreetype-dev libexpat1-dev libgit2-dev libfontconfig1-dev \
+    jq brotli libasound2-dev \
+    protobuf-compiler
+}
+
+if [[ "${INSTALL_DEPS}" == "true" ]]; then
+  if [[ -f /etc/os-release ]] && [[ "$(source /etc/os-release; echo "$ID $ID_LIKE")" = *"debian"* ]]; then
+    install_deps_debian
+  else
+    echo "当前系统不是 Debian/Ubuntu 系（或无法识别）。请自行安装构建依赖后重试。" >&2
+    echo "至少需要：pkg-config + fontconfig 开发包 + protoc + openssl/libgit2/alsa 等依赖" >&2
+    exit 3
+  fi
+fi
+
+need_cmd cargo "先安装 Rust（rustup），或按仓库文档执行 ./script/linux/install_build_deps" || exit 1
+need_cmd pkg-config "Debian/Ubuntu：sudo apt-get install -y pkg-config" || exit 1
+need_cmd protoc "Debian/Ubuntu：sudo apt-get install -y protobuf-compiler（protoc >= 3.15）" || exit 1
+
+PROTOC_VER="$(protoc --version | awk '{print $2}' || true)"
+if [[ -n "${PROTOC_VER}" ]]; then
+  # prost-build optional fields require protoc >= 3.15
+  if [[ "$(printf '%s\n' '3.15.0' "${PROTOC_VER}" | sort -V | head -n1)" != "3.15.0" ]]; then
+    echo "检测到 protoc 版本过旧：${PROTOC_VER}（需要 >= 3.15.0）" >&2
+    echo "建议：安装/升级 protobuf-compiler，或参考 script/linux/install_build_deps 安装新版本 protoc" >&2
+    exit 1
+  fi
+fi
+
+if ! pkg-config --exists fontconfig >/dev/null 2>&1; then
+  echo "pkg-config 找不到 fontconfig（缺少 fontconfig 开发包或 pkg-config 路径不对）" >&2
+  echo "Debian/Ubuntu：sudo apt-get install -y libfontconfig1-dev" >&2
+  exit 1
+fi
+
+echo "Building: cargo build -p warp --bin ${BIN} --features ${FEATURES} --profile ${PROFILE}"
+case "${PROFILE}" in
+  dev)
+    cargo build -p warp --bin "${BIN}" --features "${FEATURES}"
+    OUT="target/debug/${BIN}"
+    ;;
+  release)
+    cargo build -p warp --bin "${BIN}" --features "${FEATURES}" --release
+    OUT="target/release/${BIN}"
+    ;;
+  *)
+    cargo build -p warp --bin "${BIN}" --features "${FEATURES}" --profile "${PROFILE}"
+    OUT="target/${PROFILE}/${BIN}"
+    ;;
+esac
+
+echo "✅ Built binary: ${REPO_ROOT}/${OUT}"
