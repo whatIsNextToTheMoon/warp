@@ -3,7 +3,9 @@ name: Build Warp OSS AppImage
 on:
   workflow_dispatch:
   push:
-    branches: [main, master]
+    # This repo's default branch is `build-appimage`, so include it here; otherwise
+    # GitHub Actions won't register/show this workflow until it has a run.
+    branches: [build-appimage, main, master]
 
 jobs:
   appimage:
@@ -57,4 +59,3 @@ jobs:
           path: |
             target/release-lto/bundle/linux/WarpOss-*.AppImage
             target/release-lto/bundle/linux/WarpOss-*.AppImage.sha256
-
