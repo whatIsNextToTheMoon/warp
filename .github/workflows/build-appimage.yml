@@ -11,6 +11,7 @@ jobs:
   appimage:
     runs-on: ubuntu-22.04
     env:
+      CARGO_TERM_COLOR: always
       # Warp bundling scripts read these.
       APPIMAGE_EXTRACT_AND_RUN: "1"
       NO_LICENSES: "1"
@@ -22,7 +23,13 @@ jobs:
       #   caused config parsing failures on GitHub runners.
       # Use RUSTFLAGS instead: it appends rustc flags after profile defaults,
       # effectively overriding them (e.g. `-C lto=off`).
-      RUSTFLAGS: "-C lto=off -C debuginfo=0"
+      #
+      # Also use mold for faster linking.
+      RUSTFLAGS: "-C lto=off -C debuginfo=0 -C link-arg=-fuse-ld=mold"
+
+      # Enable sccache to speed up rebuilds (especially when iterating on i18n).
+      SCCACHE_DIR: "${{ runner.temp }}/sccache"
+      SCCACHE_CACHE_SIZE: "5G"
 
     steps:
       - name: Checkout
@@ -33,6 +40,8 @@ jobs:
       - name: Install Linux build dependencies
         run: |
           sudo apt-get update
+          # Faster linker (helps a lot on large Rust apps).
+          sudo apt-get install -y mold
           ./script/linux/install_build_deps
 
       - name: Install linuxdeploy (for AppImage bundling)
@@ -42,10 +51,32 @@ jobs:
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Install sccache
+        uses: taiki-e/install-action@v2
+        with:
+          tool: sccache
+
+      - name: Cache sccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.SCCACHE_DIR }}
+          key: ${{ runner.os }}-sccache-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-sccache-
 
       - name: Build AppImage (OSS)
+        env:
+          RUSTC_WRAPPER: sccache
         run: |
           ./script/linux/bundle -c oss --packages appimage
+
+      - name: sccache stats
+        if: always()
+        run: |
+          sccache --show-stats || true
 
       - name: Compute checksums
         run: |
