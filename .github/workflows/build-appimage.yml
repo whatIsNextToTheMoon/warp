@@ -50,7 +50,9 @@ jobs:
       - name: Compute checksums
         run: |
           cd target/release-lto/bundle/linux
-          sha256sum WarpOss-*.AppImage | tee WarpOss-*.AppImage.sha256
+          # Don't write a checksum file name containing '*' (upload-artifact
+          # rejects it for cross-platform filesystem compatibility).
+          sha256sum WarpOss-*.AppImage | tee SHA256SUMS
 
       - name: Upload AppImage
         uses: actions/upload-artifact@v4
@@ -58,4 +60,4 @@ jobs:
           name: WarpOss-AppImage
           path: |
             target/release-lto/bundle/linux/WarpOss-*.AppImage
-            target/release-lto/bundle/linux/WarpOss-*.AppImage.sha256
+            target/release-lto/bundle/linux/SHA256SUMS
