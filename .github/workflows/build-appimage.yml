@@ -26,9 +26,6 @@ jobs:
       RUSTFLAGS: "-C lto=off -C debuginfo=0"
 
       # Enable sccache to speed up rebuilds (especially when iterating on i18n).
-      # NOTE: Job-level `env` does not have access to the `runner` context, so
-      # keep this as a plain path (relative to the workspace).
-      SCCACHE_DIR: .sccache
       SCCACHE_CACHE_SIZE: "5G"
 
     steps:
@@ -60,7 +57,11 @@ jobs:
       - name: Cache sccache
         uses: actions/cache@v4
         with:
-          path: ${{ env.SCCACHE_DIR }}
+          # Must be an absolute, always-writable directory; sccache can be
+          # invoked from build scripts with various working directories
+          # (including read-only cargo registry dirs), so a relative path will
+          # fail with EACCES.
+          path: ${{ runner.temp }}/sccache
           key: ${{ runner.os }}-sccache-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-sccache-
@@ -68,11 +69,15 @@ jobs:
       - name: Build AppImage (OSS)
         env:
           RUSTC_WRAPPER: sccache
+          SCCACHE_DIR: ${{ runner.temp }}/sccache
         run: |
+          mkdir -p "$SCCACHE_DIR"
           ./script/linux/bundle -c oss --packages appimage
 
       - name: sccache stats
         if: always()
+        env:
+          SCCACHE_DIR: ${{ runner.temp }}/sccache
         run: |
           sccache --show-stats || true
 
