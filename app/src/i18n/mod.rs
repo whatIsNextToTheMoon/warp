@@ -255,6 +255,31 @@ fn looks_like_ui_string(s: &str) -> bool {
         return false;
     }
 
+    // Avoid logging secrets / tokens / keys. Even though the collector is opt-in, the log file is
+    // persistent and we should not record anything that looks like a credential.
+    let lower = s.to_ascii_lowercase();
+    if lower.starts_with("sk-")
+        || lower.starts_with("sk_")
+        || lower.starts_with("ak_")
+        || lower.starts_with("ghp_")
+        || lower.starts_with("github_pat_")
+        || lower.starts_with("xox")
+        || lower.starts_with("aizasy")
+    {
+        return false;
+    }
+    // Exclude obvious AWS key shapes and other long opaque tokens.
+    if s.starts_with("AKIA") || s.starts_with("ASIA") {
+        return false;
+    }
+    if s.len() >= 24
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'=' | b'-' | b'_'))
+        && s.bytes().any(|b| b.is_ascii_digit())
+    {
+        return false;
+    }
+
     // Require at least one ASCII letter.
     if !s
         .bytes()
@@ -264,7 +289,6 @@ fn looks_like_ui_string(s: &str) -> bool {
     }
 
     // Heuristic: exclude strings that look like shell prompts/commands.
-    let lower = s.to_ascii_lowercase();
     if lower.starts_with("$ ")
         || lower.starts_with("> ")
         || lower.starts_with("sudo ")
@@ -272,10 +296,35 @@ fn looks_like_ui_string(s: &str) -> bool {
         || lower.starts_with("git ")
         || lower.starts_with("ssh ")
         || lower.starts_with("curl ")
+        || lower.starts_with("aws ")
+        || lower.starts_with("oz ")
+        || lower.starts_with("npm ")
+        || lower.starts_with("pip ")
+        || lower.starts_with("python ")
+        || lower.starts_with("node ")
+        || lower.starts_with("cargo ")
         || lower.starts_with("http ")
         || lower.starts_with("https ")
     {
         return false;
+    }
+
+    // Exclude common "user@host" / email-like tokens that are often terminal prompts or user data.
+    if let Some((left, right)) = s.split_once('@') {
+        let left_tok = left.rsplit_whitespace().next().unwrap_or("");
+        let right_tok = right.split_whitespace().next().unwrap_or("");
+        if !left_tok.is_empty()
+            && !right_tok.is_empty()
+            && left_tok
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_' || b == b'-')
+            && right_tok
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_' | b':' | b'~'))
+            && (right_tok.contains('.') || right_tok.contains(':') || right_tok.contains('~'))
+        {
+            return false;
+        }
     }
 
     true
