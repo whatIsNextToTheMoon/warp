@@ -14,9 +14,14 @@ pub fn init() {
     }
 
     let map = zh_cn_map();
+    let collect_missing = collect_missing_translations_enabled();
+    if collect_missing {
+        log::info!(
+            target: "warp_i18n",
+            "Enabled missing translation collection (env: WARP_I18N_COLLECT_MISSES=1)."
+        );
+    }
     let _ = warpui::i18n::set_translator(Box::new(move |text| {
-        let collect_missing = collect_missing_translations_enabled();
-
         // Fast path: exact match.
         if let Some(t) = map.get(text) {
             return Some(Cow::Borrowed(*t));
