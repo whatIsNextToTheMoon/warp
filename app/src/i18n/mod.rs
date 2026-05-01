@@ -1,7 +1,7 @@
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::env;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 /// Enable basic UI string translation (Chinese) for WarpUI text elements.
 ///
@@ -15,6 +15,8 @@ pub fn init() {
 
     let map = zh_cn_map();
     let _ = warpui::i18n::set_translator(Box::new(move |text| {
+        let collect_missing = collect_missing_translations_enabled();
+
         // Fast path: exact match.
         if let Some(t) = map.get(text) {
             return Some(Cow::Borrowed(*t));
@@ -105,6 +107,9 @@ pub fn init() {
             return Some(Cow::Owned(format!("导出失败：{rest}")));
         }
 
+        if collect_missing {
+            record_missing_translation(text, trimmed);
+        }
         None
     }));
 }
@@ -183,6 +188,92 @@ fn locale_is_chinese(locale: &str) -> bool {
 fn zh_cn_map() -> &'static HashMap<&'static str, &'static str> {
     static MAP: OnceLock<HashMap<&'static str, &'static str>> = OnceLock::new();
     MAP.get_or_init(|| load_leaked_string_map(include_str!("zh_cn.json")))
+}
+
+fn collect_missing_translations_enabled() -> bool {
+    env_flag("WARP_I18N_COLLECT_MISSES")
+}
+
+fn env_flag(name: &str) -> bool {
+    env::var(name)
+        .ok()
+        .map(|v| v.trim().to_ascii_lowercase())
+        .is_some_and(|v| matches!(v.as_str(), "1" | "true" | "yes" | "on"))
+}
+
+fn record_missing_translation(original: &str, trimmed: &str) {
+    let s = trimmed;
+    if s.is_empty() {
+        return;
+    }
+
+    // Avoid logging potentially sensitive user content. This is a best-effort filter.
+    if !looks_like_ui_string(s) {
+        return;
+    }
+
+    static SEEN: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    let seen = SEEN.get_or_init(|| Mutex::new(HashSet::new()));
+    let mut guard = match seen.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+
+    // Prefer trimmed strings as stable keys, but keep the original around for debugging.
+    if guard.insert(s.to_string()) {
+        log::info!(
+            target: "warp_i18n",
+            "Missing zh-CN translation: {:?} (orig={:?})",
+            s,
+            original
+        );
+    }
+}
+
+fn looks_like_ui_string(s: &str) -> bool {
+    // Only consider ASCII-ish short/medium strings to reduce false positives from terminal output.
+    if !s.is_ascii() {
+        return false;
+    }
+    let len = s.len();
+    if len < 2 || len > 240 {
+        return false;
+    }
+    if s.contains('\n') || s.contains('\r') || s.contains('\t') {
+        return false;
+    }
+    // Common indicators of non-UI/user content.
+    if s.contains('/') || s.contains('\\') {
+        return false;
+    }
+    if s.contains("://") {
+        return false;
+    }
+
+    // Require at least one ASCII letter.
+    if !s
+        .bytes()
+        .any(|b| (b'A'..=b'Z').contains(&b) || (b'a'..=b'z').contains(&b))
+    {
+        return false;
+    }
+
+    // Heuristic: exclude strings that look like shell prompts/commands.
+    let lower = s.to_ascii_lowercase();
+    if lower.starts_with("$ ")
+        || lower.starts_with("> ")
+        || lower.starts_with("sudo ")
+        || lower.starts_with("cd ")
+        || lower.starts_with("git ")
+        || lower.starts_with("ssh ")
+        || lower.starts_with("curl ")
+        || lower.starts_with("http ")
+        || lower.starts_with("https ")
+    {
+        return false;
+    }
+
+    true
 }
 
 fn load_leaked_string_map(json: &str) -> HashMap<&'static str, &'static str> {
