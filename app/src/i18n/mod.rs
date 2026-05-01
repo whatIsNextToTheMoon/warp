@@ -311,16 +311,16 @@ fn looks_like_ui_string(s: &str) -> bool {
 
     // Exclude common "user@host" / email-like tokens that are often terminal prompts or user data.
     if let Some((left, right)) = s.split_once('@') {
-        let left_tok = left.rsplit_whitespace().next().unwrap_or("");
+        let left_tok = left.split_whitespace().last().unwrap_or("");
         let right_tok = right.split_whitespace().next().unwrap_or("");
         if !left_tok.is_empty()
             && !right_tok.is_empty()
             && left_tok
                 .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_' || b == b'-')
-            && right_tok
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_' | b':' | b'~'))
+                .all(|b: u8| b.is_ascii_alphanumeric() || b == b'.' || b == b'_' || b == b'-')
+            && right_tok.bytes().all(|b: u8| {
+                b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_' | b':' | b'~')
+            })
             && (right_tok.contains('.') || right_tok.contains(':') || right_tok.contains('~'))
         {
             return false;
