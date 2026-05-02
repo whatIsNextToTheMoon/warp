@@ -95,7 +95,6 @@ directories.workspace = true
 dirs.workspace = true
 dunce.workspace = true
 email_address = { git = "https://github.com/warpdotdev/rust-email_address", branch = "main" }
-embed_plist = "1.2"
 enclose = "1.1.8"
 enum-iterator.workspace = true
 event-listener = "5.4.0"
@@ -254,6 +253,7 @@ warp_managed_secrets.workspace = true
 block.workspace = true
 cocoa.workspace = true
 core-foundation.workspace = true
+embed_plist = "1.2"
 mach2 = "0.5"
 objc.workspace = true
 objc2-foundation = { workspace = true, features = ["NSBundle"] }
