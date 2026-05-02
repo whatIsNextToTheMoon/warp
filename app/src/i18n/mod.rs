@@ -16,7 +16,9 @@ pub fn init() {
     let map = zh_cn_map();
     let collect_missing = collect_missing_translations_enabled();
     if collect_missing {
-        log::info!(
+        // Use WARN so this shows up even with default log filters (which are
+        // commonly set to `warn` in release builds). This feature is opt-in.
+        log::warn!(
             target: "warp_i18n",
             "Enabled missing translation collection (env: WARP_I18N_COLLECT_MISSES=1)."
         );
@@ -226,7 +228,10 @@ fn record_missing_translation(original: &str, trimmed: &str) {
 
     // Prefer trimmed strings as stable keys, but keep the original around for debugging.
     if guard.insert(s.to_string()) {
-        log::info!(
+        // Use WARN so misses are visible without requiring users to tweak
+        // RUST_LOG. This is still opt-in via WARP_I18N_COLLECT_MISSES=1 and
+        // filtered through `looks_like_ui_string`.
+        log::warn!(
             target: "warp_i18n",
             "Missing zh-CN translation: {:?} (orig={:?})",
             s,
