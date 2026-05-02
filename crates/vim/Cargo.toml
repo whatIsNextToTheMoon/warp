@@ -12,4 +12,6 @@ log.workspace = true
 itertools.workspace = true
 string-offset.workspace = true
 anyhow.workspace = true
+
+[dev-dependencies]
 unindent = "0.2.4"

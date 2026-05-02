@@ -61,6 +61,7 @@ __pycache__/
 *.AppImage.prev-*
 *.AppImage.sha256
 SHA256SUMS
+squashfs-root/
 
 # Local plaintext credential store (DO NOT COMMIT)
 .git-credentials
