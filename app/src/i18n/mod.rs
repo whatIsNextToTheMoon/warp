@@ -22,6 +22,12 @@ pub fn init() {
             target: "warp_i18n",
             "Enabled missing translation collection (env: WARP_I18N_COLLECT_MISSES=1)."
         );
+        if collect_missing_translations_allow_slash() {
+            log::warn!(
+                target: "warp_i18n",
+                "Missing translation collection: allowing limited slash UI strings (env: WARP_I18N_COLLECT_MISSES_ALLOW_SLASH=1)."
+            );
+        }
     }
     let _ = warpui::i18n::set_translator(Box::new(move |text| {
         // Fast path: exact match.
@@ -201,6 +207,10 @@ fn collect_missing_translations_enabled() -> bool {
     env_flag("WARP_I18N_COLLECT_MISSES")
 }
 
+fn collect_missing_translations_allow_slash() -> bool {
+    env_flag("WARP_I18N_COLLECT_MISSES_ALLOW_SLASH")
+}
+
 fn env_flag(name: &str) -> bool {
     env::var(name)
         .ok()
@@ -253,8 +263,27 @@ fn looks_like_ui_string(s: &str) -> bool {
         return false;
     }
     // Common indicators of non-UI/user content.
-    if s.contains('/') || s.contains('\\') {
+    //
+    // NOTE: We intentionally treat path separators as non-UI by default to avoid
+    // persisting file paths, URLs, and other user-controlled strings in logs.
+    //
+    // However, some *UI* strings legitimately contain a forward slash, notably:
+    // - "Ctrl /" (keyboard shortcut hint)
+    // - "Slash command: /agent" (keyboard shortcuts list)
+    //
+    // To make localization easier without widening the default safety boundary,
+    // we gate this behind an extra opt-in env var and only allow a *narrow* set
+    // of forward-slash patterns.
+    if s.contains('\\') {
         return false;
+    }
+    if s.contains('/') {
+        if !collect_missing_translations_allow_slash() {
+            return false;
+        }
+        if !looks_like_safe_slash_ui_string(s) {
+            return false;
+        }
     }
     if s.contains("://") {
         return false;
@@ -333,6 +362,105 @@ fn looks_like_ui_string(s: &str) -> bool {
     }
 
     true
+}
+
+fn looks_like_safe_slash_ui_string(s: &str) -> bool {
+    // We only allow *one* forward slash. This filters out typical absolute/relative paths
+    // like "/home/user/..." and "src/foo/bar", while still allowing UI tokens like "Ctrl /"
+    // and "/agent".
+    let slash_count = s.as_bytes().iter().filter(|&&b| b == b'/').count();
+    if slash_count != 1 {
+        return false;
+    }
+
+    let lower = s.to_ascii_lowercase();
+
+    // Common path-like prefixes (Linux/macOS) that we should never log.
+    // Note: we keep this list short and conservative.
+    if lower.starts_with("~/")
+        || lower.starts_with("./")
+        || lower.starts_with("../")
+        || lower.starts_with("/home")
+        || lower.starts_with("/users")
+        || lower.starts_with("/usr")
+        || lower.starts_with("/etc")
+        || lower.starts_with("/var")
+        || lower.starts_with("/tmp")
+        || lower.starts_with("/opt")
+        || lower.starts_with("/proc")
+        || lower.starts_with("/sys")
+        || lower.starts_with("/dev")
+        || lower.starts_with("/run")
+        || lower.starts_with("/mnt")
+        || lower.starts_with("/media")
+        || lower.starts_with("/volumes")
+        || lower.starts_with("/applications")
+    {
+        return false;
+    }
+
+    // Windows drive-like paths: "C:/..."
+    if lower.len() >= 3 {
+        let b = lower.as_bytes();
+        if b[1] == b':' && b[2] == b'/' && b[0].is_ascii_alphabetic() {
+            return false;
+        }
+    }
+
+    // Case 1: A standalone slash separator in UI copy (e.g. "slash command / fork menus").
+    // This is very unlikely to be a filesystem path, and it helps catch untranslated
+    // instructional text.
+    if s.contains(" / ") {
+        return true;
+    }
+
+    // Case 2: Keybinding token like "Ctrl /".
+    if s.ends_with('/') {
+        if lower.contains("ctrl") || lower.contains("cmd") || lower.contains("meta") {
+            return true;
+        }
+    }
+
+    // Case 3: Slash command token like "/agent" or "/fork-and-compact" possibly embedded
+    // in a longer sentence (e.g. "Slash command: /agent").
+    if let Some(idx) = s.find('/') {
+        let after = &s[idx + 1..];
+        let mut chars = after.chars();
+        let first = match chars.next() {
+            Some(c) => c,
+            None => return false,
+        };
+        if !first.is_ascii_alphabetic() {
+            return false;
+        }
+
+        // Consume the command word.
+        let mut consumed = 1usize;
+        for c in chars {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                consumed += c.len_utf8();
+                continue;
+            }
+            break;
+        }
+
+        let cmd = &after[..consumed];
+        if cmd.len() > 64 {
+            return false;
+        }
+
+        // Block any "command" that looks like a common directory even if it starts with "/".
+        // This prevents accidental logging of "/home" or "/usr" when shown standalone.
+        match cmd.to_ascii_lowercase().as_str() {
+            "home" | "users" | "usr" | "etc" | "var" | "tmp" | "opt" | "proc" | "sys" | "dev"
+            | "run" | "mnt" | "media" | "volumes" | "applications" => return false,
+            _ => {}
+        }
+
+        return true;
+    }
+
+    false
 }
 
 fn load_leaked_string_map(json: &str) -> HashMap<&'static str, &'static str> {
