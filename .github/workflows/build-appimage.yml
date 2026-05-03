@@ -47,6 +47,14 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
+          # Make the cache key stable across workflow runs to avoid creating a new
+          # cache entry per job/run (which reduces cache hit rate and burns the 10GB budget).
+          shared-key: build-appimage
+          add-job-id-key: false
+          # By default rust-cache avoids caching workspace crates; for Warp this
+          # means expensive workspace crates (e.g. `onboarding`, `ai`, etc.) get
+          # rebuilt every run even when unchanged. Opt-in to cache them.
+          cache-workspace-crates: true
           cache-on-failure: true
 
       - name: Install sccache
