@@ -39,4 +39,10 @@ package() {
 
 	# Copy the shell script that launches the application.
 	install -Dm755 $pkgname.sh "$pkgdir"/usr/bin/$pkgname
+
+	# The OSS channel desktop entry uses `Exec=warp-oss`, so provide a compat
+	# launcher name for that channel.
+	if [[ "$pkgname" == "warp-terminal-oss" ]]; then
+		ln -sf "$pkgname" "$pkgdir"/usr/bin/warp-oss
+	fi
 }

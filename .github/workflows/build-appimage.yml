@@ -74,13 +74,33 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-sccache-
 
+      - name: Compute release tag (for packaging)
+        id: rel
+        run: |
+          # Generate a deterministic "release tag" string for this workflow run.
+          #
+          # We reuse the same format used by Warp's release tooling
+          # (v0.<date>.<channel>_NN), but we don't need a real tag object here —
+          # only a stable string for package version metadata and Arch pkgver.
+          #
+          # NOTE: Avoid '-' characters (Arch pkgver lint) and keep it short.
+          echo "tag=v0.0.0.oss_$(git rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Build AppImage (OSS)
         env:
           RUSTC_WRAPPER: sccache
           SCCACHE_DIR: ${{ runner.temp }}/sccache
+          GIT_RELEASE_TAG: ${{ steps.rel.outputs.tag }}
         run: |
           mkdir -p "$SCCACHE_DIR"
-          ./script/linux/bundle -c oss --packages appimage
+          ./script/linux/bundle -c oss --packages appimage --release-tag "$GIT_RELEASE_TAG"
+
+      - name: Bundle Arch Linux package (OSS)
+        uses: ./.github/actions/bundle_arch_package
+        with:
+          channel: oss
+          release-tag: ${{ steps.rel.outputs.tag }}
+          arch: x86_64
 
       - name: sccache stats
         if: always()
@@ -95,11 +115,14 @@ jobs:
           # Don't write a checksum file name containing '*' (upload-artifact
           # rejects it for cross-platform filesystem compatibility).
           sha256sum WarpOss-*.AppImage | tee SHA256SUMS
+          sha256sum *.pkg.tar.zst | tee SHA256SUMS.arch
 
       - name: Upload AppImage
         uses: actions/upload-artifact@v4
         with:
-          name: WarpOss-AppImage
+          name: WarpOss-Artifacts
           path: |
             target/release-lto/bundle/linux/WarpOss-*.AppImage
             target/release-lto/bundle/linux/SHA256SUMS
+            target/release-lto/bundle/linux/*.pkg.tar.zst
+            target/release-lto/bundle/linux/SHA256SUMS.arch
