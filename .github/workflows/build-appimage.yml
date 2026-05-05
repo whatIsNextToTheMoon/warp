@@ -7,6 +7,11 @@ on:
     # GitHub Actions won't register/show this workflow until it has a run.
     branches: [build-appimage, main, master]
 
+permissions:
+  # Needed to create/delete Releases and tags (we publish build artifacts as
+  # GitHub Release assets and prune old releases).
+  contents: write
+
 jobs:
   appimage:
     runs-on: ubuntu-22.04
@@ -116,6 +121,75 @@ jobs:
           # rejects it for cross-platform filesystem compatibility).
           sha256sum WarpOss-*.AppImage | tee SHA256SUMS
           sha256sum *.pkg.tar.zst | tee SHA256SUMS.arch
+
+      - name: Publish GitHub Release (OSS)
+        # Upload artifacts as Release assets so downloads are typically faster
+        # and more reliable than the Actions UI. Keep only the latest 3 OSS
+        # releases to avoid clutter.
+        uses: softprops/action-gh-release@9d7c94cfd0a1f3ed45544c887983e9fa900f0564 # v2.0.2
+        with:
+          tag_name: ${{ steps.rel.outputs.tag }}
+          name: ${{ steps.rel.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          fail_on_unmatched_files: true
+          make_latest: true
+          # Release assets live under this directory.
+          working_directory: target/release-lto/bundle/linux
+          files: |
+            WarpOss-*.AppImage
+            SHA256SUMS
+            *.pkg.tar.zst
+            SHA256SUMS.arch
+
+      - name: Prune old OSS releases (keep latest 3)
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const KEEP = 3;
+            const TAG_PREFIX = 'v0.0.0.oss_';
+
+            // Fetch releases (paged) and filter to our OSS-tagged releases.
+            const releases = await github.paginate(github.rest.repos.listReleases, {
+              owner,
+              repo,
+              per_page: 100,
+            });
+
+            const oss = releases
+              .filter(r => typeof r.tag_name === 'string' && r.tag_name.startsWith(TAG_PREFIX))
+              // Newest first
+              .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+            if (oss.length <= KEEP) {
+              console.log(`OSS releases: ${oss.length} (<= ${KEEP}); nothing to prune.`);
+              return;
+            }
+
+            const toDelete = oss.slice(KEEP);
+            console.log(`Pruning ${toDelete.length} old OSS release(s); keeping latest ${KEEP}.`);
+
+            for (const r of toDelete) {
+              console.log(`Deleting release id=${r.id} tag=${r.tag_name} created_at=${r.created_at}`);
+              await github.rest.repos.deleteRelease({
+                owner,
+                repo,
+                release_id: r.id,
+              });
+
+              // Best effort: delete the associated tag ref as well. If it was
+              // already removed (or protected), ignore errors.
+              try {
+                await github.rest.git.deleteRef({
+                  owner,
+                  repo,
+                  ref: `tags/${r.tag_name}`,
+                });
+                console.log(`Deleted tag ref tags/${r.tag_name}`);
+              } catch (e) {
+                console.log(`Could not delete tag ref tags/${r.tag_name}: ${e?.message ?? e}`);
+              }
+            }
 
       - name: Upload AppImage
         uses: actions/upload-artifact@v4
