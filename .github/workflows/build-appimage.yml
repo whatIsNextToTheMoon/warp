@@ -189,12 +189,6 @@ jobs:
               }
             }
 
-      - name: Upload AppImage
-        uses: actions/upload-artifact@v4
-        with:
-          name: WarpOss-Artifacts
-          path: |
-            target/release-lto/bundle/linux/WarpOss-*.AppImage
-            target/release-lto/bundle/linux/SHA256SUMS
-            target/release-lto/bundle/linux/*.pkg.tar.zst
-            target/release-lto/bundle/linux/SHA256SUMS.arch
+      # NOTE: We intentionally do NOT upload GitHub Actions artifacts here.
+      # We publish build outputs as GitHub Release assets instead, to reduce
+      # Actions artifact storage/retention and to make downloads more reliable.
