@@ -133,13 +133,11 @@ jobs:
           target_commitish: ${{ github.sha }}
           fail_on_unmatched_files: true
           make_latest: true
-          # Release assets live under this directory.
-          working_directory: target/release-lto/bundle/linux
           files: |
-            WarpOss-*.AppImage
-            SHA256SUMS
-            *.pkg.tar.zst
-            SHA256SUMS.arch
+            target/release-lto/bundle/linux/WarpOss-*.AppImage
+            target/release-lto/bundle/linux/SHA256SUMS
+            target/release-lto/bundle/linux/*.pkg.tar.zst
+            target/release-lto/bundle/linux/SHA256SUMS.arch
 
       - name: Prune old OSS releases (keep latest 3)
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
