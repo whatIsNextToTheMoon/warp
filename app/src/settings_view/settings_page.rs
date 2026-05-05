@@ -172,6 +172,20 @@ impl SettingsPage {
         match_data: MatchData,
         clicked: bool,
     ) -> Hoverable {
+        // When settings search is active, we append a match count (e.g. " (2)")
+        // to the section label. If we pass the combined string through the
+        // translation hook, exact-match translation will fail ("Warp Agent (2)"
+        // won't match the "Warp Agent" key).
+        //
+        // Translate the base section label first, then append the count.
+        let label = {
+            let section = self.section.to_string();
+            let section = warpui::i18n::translate(section.as_str())
+                .map(|t| t.into_owned())
+                .unwrap_or(section);
+            section + &match_data.to_string()
+        };
+
         appearance
             .ui_builder()
             .button(
@@ -182,7 +196,7 @@ impl SettingsPage {
                 },
                 self.button_state_handle.clone(),
             )
-            .with_text_label(self.section.to_string() + &match_data.to_string())
+            .with_text_label(label)
             .with_style(
                 UiComponentStyles::default()
                     .set_border_width(0.)
