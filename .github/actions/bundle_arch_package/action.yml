@@ -34,6 +34,8 @@ runs:
           -w /github/workspace \
           -v "${CARGO_HOME:-$HOME/.cargo}/git:/home/build/.cargo/git" \
           -v "${CARGO_HOME:-$HOME/.cargo}/registry:/home/build/.cargo/registry" \
+          -e NO_LICENSES="$NO_LICENSES" \
+          -e SKIP_SETTINGS_SCHEMA="$SKIP_SETTINGS_SCHEMA" \
           -e GIT_RELEASE_TAG="$GIT_RELEASE_TAG" \
           -e GITHUB_ACTIONS="$GITHUB_ACTIONS" \
           -e GITHUB_OUTPUT="/dev/null" \
