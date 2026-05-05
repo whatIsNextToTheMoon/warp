@@ -79,7 +79,12 @@ impl SettingsUmbrella {
             .button(ButtonVariant::Text, self.button_state_handle.clone())
             .with_text_and_icon_label(TextAndIcon::new(
                 TextAndIconAlignment::TextFirst,
-                self.label.to_string(),
+                // Translate the umbrella label. These labels are currently stored
+                // as `&'static str` in the sidebar nav list, and we want them to
+                // participate in the same UI translation hook as other strings.
+                warpui::i18n::translate(self.label)
+                    .map(|t| t.into_owned())
+                    .unwrap_or_else(|| self.label.to_string()),
                 chevron_icon.to_warpui_icon(text_color),
                 MainAxisSize::Max,
                 MainAxisAlignment::SpaceBetween,
@@ -105,7 +110,15 @@ impl SettingsUmbrella {
         let section = self.subpages.get(index)?;
         let mouse_state = self.subpage_button_states.get(index)?.clone();
 
-        let label = section.to_string() + &match_data.to_string();
+        // Translate the base section label first, then append the match count
+        // suffix (e.g. " (2)") so exact-match translations still apply.
+        let label = {
+            let section = section.to_string();
+            let section = warpui::i18n::translate(section.as_str())
+                .map(|t| t.into_owned())
+                .unwrap_or(section);
+            section + &match_data.to_string()
+        };
 
         let hoverable = appearance
             .ui_builder()
