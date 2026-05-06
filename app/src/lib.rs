@@ -51,6 +51,7 @@ mod menu;
 mod modal;
 mod network;
 mod notebooks;
+mod onboarding;
 mod notification;
 mod palette;
 mod persistence;

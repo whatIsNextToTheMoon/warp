@@ -54,7 +54,7 @@ use super::{
     SSHBannerAction, TerminalEditor,
 };
 
-pub use onboarding::OnboardingIntention;
+pub use crate::onboarding::OnboardingIntention;
 
 /// Version of the agent onboarding flow (non-legacy).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

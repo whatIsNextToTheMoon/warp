@@ -1,8 +1,8 @@
 //! Onboarding-specific AI types and conversions.
 
 use ai::LLMId;
-use onboarding::slides::OnboardingModelInfo;
-use onboarding::OnboardingAuthState;
+use crate::onboarding::slides::OnboardingModelInfo;
+use crate::onboarding::OnboardingAuthState;
 use warp_core::ui::icons::Icon;
 use warpui::{AppContext, SingletonEntity};
 

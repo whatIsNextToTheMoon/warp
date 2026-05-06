@@ -1,7 +1,7 @@
 use ai::LLMId;
 use chrono::{DateTime, Utc};
-use onboarding::slides::{AgentAutonomy, AgentDevelopmentSettings, ProjectOnboardingSettings};
-use onboarding::SelectedSettings;
+use crate::onboarding::slides::{AgentAutonomy, AgentDevelopmentSettings, ProjectOnboardingSettings};
+use crate::onboarding::SelectedSettings;
 use warpui::{App, SingletonEntity};
 
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
@@ -118,7 +118,7 @@ fn apply_onboarding_settings_preserves_existing_cloud_profile_on_existing_user_l
                 selected_model_id: LLMId::from("onboarding-chosen-model"),
                 autonomy: Some(AgentAutonomy::None),
                 cli_agent_toolbar_enabled: true,
-                session_default: onboarding::SessionDefault::Agent,
+                session_default: crate::onboarding::SessionDefault::Agent,
                 disable_oz: false,
                 show_agent_notifications: true,
             },

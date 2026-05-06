@@ -22,8 +22,8 @@ pub use init_project::{
     InitActionResult, InitProjectModel, InitProjectModelEvent, InitStepBlock, InitStepKind,
     ProjectScopedRulesResult,
 };
-use onboarding::callout::{FinalState, OnboardingCalloutViewEvent, OnboardingQuery};
-use onboarding::{OnboardingCalloutView, OnboardingKeybindings};
+use crate::onboarding::callout::{FinalState, OnboardingCalloutViewEvent, OnboardingQuery};
+use crate::onboarding::{OnboardingCalloutView, OnboardingKeybindings};
 pub(crate) mod docker_sandbox;
 mod link_detection;
 mod open_in_warp;
@@ -2589,7 +2589,7 @@ pub struct TerminalView {
     settings_import_onboarding_block: Option<ViewHandle<SettingsImportView>>,
     onboarding_agentic_suggestions_block: Option<ViewHandle<OnboardingAgenticSuggestionsBlock>>,
 
-    onboarding_callout_view: Option<ViewHandle<onboarding::OnboardingCalloutView>>,
+    onboarding_callout_view: Option<ViewHandle<crate::onboarding::OnboardingCalloutView>>,
 
     // If the agentic suggestions onboarding block is pending, mark it here.
     pending_onboarding_agentic_suggestions_block: bool,
