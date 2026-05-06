@@ -13,6 +13,7 @@ use crate::auth::AuthStateProvider;
 use crate::report_if_error;
 use crate::terminal::CLIAgent;
 use crate::workspaces::user_workspaces::UserWorkspaces;
+use ai::api_keys::ApiKeyManager;
 use cfg_if::cfg_if;
 use chrono::{DateTime, Utc};
 use lazy_static::lazy_static;
@@ -1497,13 +1498,14 @@ impl AISettings {
     }
 
     pub fn is_any_ai_enabled(&self, app: &AppContext) -> bool {
-        // Disable AI for anonymous and logged-out users.
         let is_anonymous_or_logged_out = AuthStateProvider::as_ref(app)
             .get()
             .is_anonymous_or_logged_out();
+        let has_local_byo_ai = UserWorkspaces::as_ref(app).is_byo_api_key_enabled()
+            && ApiKeyManager::as_ref(app).keys().has_any_key();
 
         *self.is_any_ai_enabled
-            && !is_anonymous_or_logged_out
+            && (!is_anonymous_or_logged_out || has_local_byo_ai)
             && !self.is_ai_disabled_due_to_remote_session_org_policy(app)
     }
 

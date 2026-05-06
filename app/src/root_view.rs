@@ -19,11 +19,11 @@ use crate::interval_timer::IntervalTimer;
 use crate::launch_configs::launch_config;
 use crate::linear::LinearIssueWork;
 use crate::notebooks::manager::NotebookSource;
+use crate::onboarding::OnboardingIntention;
 use crate::settings::cloud_preferences_syncer::{
     CloudPreferencesSyncer, CloudPreferencesSyncerEvent,
 };
 use crate::settings::AISettings;
-use crate::onboarding::OnboardingIntention;
 
 use crate::persistence::ModelEvent;
 use crate::server::cloud_objects::update_manager::UpdateManager;
@@ -87,7 +87,6 @@ use warp_core::context_flag::ContextFlag;
 use warp_core::user_preferences::GetUserPreferences as _;
 use warpui::keymap::{EditableBinding, FixedBinding};
 use warpui::windowing::WindowManager;
-
 
 use warpui::elements::{
     Border, ChildAnchor, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Stack,
@@ -1645,15 +1644,17 @@ impl RootView {
                     if FeatureFlag::ForceLogin.is_enabled() {
                         // ForceLogin is true for Preview
                         AuthOnboardingState::Auth(workspace_args.into())
+                    } else if FeatureFlag::SkipFirebaseAnonymousUser.is_enabled() {
+                        // When SkipFirebaseAnonymousUser is enabled, skip the login screen
+                        // entirely and go directly into the workspace. This should take
+                        // precedence over the lightweight pre-login onboarding redirect to
+                        // avoid forcing logged-out users through Auth on every startup.
+                        AuthOnboardingState::Terminal(workspace_args.create_workspace(ctx))
                     } else if should_show_pre_login_onboarding {
                         // Lightweight build: skip the full-screen onboarding UI.
                         // We still go through the Auth flow; the guided in-app tutorial
                         // can be triggered later from within the workspace.
                         AuthOnboardingState::Auth(workspace_args.into())
-                    } else if FeatureFlag::SkipFirebaseAnonymousUser.is_enabled() {
-                        // When SkipFirebaseAnonymousUser is enabled, skip the login screen
-                        // entirely and go directly into the workspace.
-                        AuthOnboardingState::Terminal(workspace_args.create_workspace(ctx))
                     } else {
                         AuthOnboardingState::Auth(workspace_args.into())
                     }
@@ -1726,6 +1727,12 @@ impl RootView {
                     .update(ctx, |view, ctx| view.import_user(ctx));
             }
             _ => {}
+        }
+
+        if !auth_state.is_logged_in() && FeatureFlag::SkipFirebaseAnonymousUser.is_enabled() {
+            AuthManager::handle(ctx).update(ctx, |auth_manager, ctx| {
+                auth_manager.create_anonymous_user(None, ctx);
+            });
         }
 
         let autoupdate_handle = AutoupdateState::handle(ctx);
@@ -1840,7 +1847,6 @@ impl RootView {
         });
         true
     }
-
 
     fn minimize_window(&mut self, _: &(), ctx: &mut ViewContext<Self>) -> bool {
         ctx.minimize_window();
@@ -2363,8 +2369,7 @@ impl RootView {
                     self.auth_onboarding_state
                         .complete_auth_and_create_workspace(ctx);
                     self.start_pending_tutorial(ctx);
-                } else if let AuthOnboardingState::NeedsSsoLink(..) = &self.auth_onboarding_state
-                {
+                } else if let AuthOnboardingState::NeedsSsoLink(..) = &self.auth_onboarding_state {
                     // We should be able to access their SSO state; if not, default to true,
                     // since we should err on the side of them _not_ being able to use Warp.
                     if auth_state.needs_sso_link() == Some(false) {

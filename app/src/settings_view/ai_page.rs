@@ -3270,6 +3270,10 @@ impl SettingsWidget for GlobalAIWidget {
         let is_anonymous = AuthStateProvider::as_ref(app)
             .get()
             .is_anonymous_or_logged_out();
+        let can_use_local_byok =
+            UserWorkspaces::as_ref(app).is_byo_api_key_enabled()
+                || FeatureFlag::SoloUserByok.is_enabled();
+        let should_show_signup_cta = is_anonymous && !can_use_local_byok;
 
         let mut row = Flex::row()
             .with_main_axis_size(MainAxisSize::Max)
@@ -3303,8 +3307,9 @@ impl SettingsWidget for GlobalAIWidget {
             );
         }
 
-        // Show sign-up button for anonymous users, toggle for logged-in users
-        if is_anonymous {
+        // Logged-out users with local BYOK enabled should still be able to
+        // configure and enable Warp Agent without creating an account first.
+        if should_show_signup_cta {
             row.add_child(
                 Flex::row()
                     .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -3357,11 +3362,16 @@ impl SettingsWidget for GlobalAIWidget {
                     .finish(),
             );
         } else {
+            let is_globally_enabled = if is_anonymous && can_use_local_byok {
+                *AISettings::as_ref(app).is_any_ai_enabled
+            } else {
+                AISettings::as_ref(app).is_any_ai_enabled(app)
+            };
             row.add_child(
                 Container::new(
                     ui_builder
                         .switch(self.switch_state.clone())
-                        .check(AISettings::as_ref(app).is_any_ai_enabled(app))
+                        .check(is_globally_enabled)
                         .build()
                         .on_click(move |ctx, _, _| {
                             ctx.dispatch_typed_action(AISettingsPageAction::ToggleGlobalAI);
@@ -6312,6 +6322,7 @@ struct ApiKeysWidget {
     openai_api_key_editor: ViewHandle<EditorView>,
     anthropic_api_key_editor: ViewHandle<EditorView>,
     google_api_key_editor: ViewHandle<EditorView>,
+    open_router_api_key_editor: ViewHandle<EditorView>,
 
     can_use_warp_credits_with_byok: SwitchStateHandle,
     upgrade_highlight_index: HighlightedHyperlink,
@@ -6323,11 +6334,13 @@ impl ApiKeysWidget {
         let workspace_handle = UserWorkspaces::handle(ctx);
         let is_any_ai_enabled = ai_settings.is_any_ai_enabled(ctx);
         let is_byo_enabled = workspace_handle.as_ref(ctx).is_byo_api_key_enabled();
+        let is_api_keys_section_enabled = is_byo_enabled || FeatureFlag::SoloUserByok.is_enabled();
 
         let ApiKeys {
             openai: openai_key,
             anthropic: anthropic_key,
             google: google_key,
+            open_router: open_router_key,
             ..
         } = ApiKeyManager::as_ref(ctx).keys().clone();
 
@@ -6360,7 +6373,7 @@ impl ApiKeysWidget {
                 });
                 AISettingsPageView::update_editor_interaction_state(
                     $editor.clone(),
-                    is_any_ai_enabled && is_byo_enabled,
+                    is_api_keys_section_enabled,
                     ctx,
                 );
                 ctx.subscribe_to_view(&$editor, |_, $editor, event, ctx| {
@@ -6375,14 +6388,15 @@ impl ApiKeysWidget {
                 let editor_clone = $editor.clone();
                 ctx.subscribe_to_model(&workspace_handle, move |_, workspace, event, ctx| {
                     if let UserWorkspacesEvent::TeamsChanged = event {
-                        let is_any_ai_enabled =
+                        let _is_any_ai_enabled =
                             AISettings::handle(ctx).as_ref(ctx).is_any_ai_enabled(ctx);
                         let is_byo_enabled = workspace.as_ref(ctx).is_byo_api_key_enabled();
-                        let is_enabled = is_any_ai_enabled && is_byo_enabled;
+                        let is_enabled =
+                            is_byo_enabled || FeatureFlag::SoloUserByok.is_enabled();
                         let has_key = !editor_clone.as_ref(ctx).is_empty(ctx);
 
                         // If BYO is disabled, clear the API key from the editor and storage
-                        if !is_byo_enabled && has_key {
+                        if !is_enabled && has_key {
                             editor_clone.update(ctx, |editor, ctx| {
                                 editor.set_buffer_text("", ctx);
                             });
@@ -6415,11 +6429,18 @@ impl ApiKeysWidget {
             set_google_key,
             "AIzaSy..."
         );
+        create_api_key_editor!(
+            open_router_api_key_editor,
+            open_router_key,
+            set_open_router_key,
+            "sk-or-v1-..."
+        );
 
         Self {
             openai_api_key_editor,
             anthropic_api_key_editor,
             google_api_key_editor,
+            open_router_api_key_editor,
 
             can_use_warp_credits_with_byok: Default::default(),
             upgrade_highlight_index: Default::default(),
@@ -6434,7 +6455,7 @@ impl ApiKeysWidget {
     ) -> Box<dyn Element> {
         let ai_settings = AISettings::as_ref(app);
         let is_any_ai_enabled = ai_settings.is_any_ai_enabled(app);
-        let is_enabled = is_any_ai_enabled && is_byo_enabled;
+        let is_api_keys_section_enabled = is_byo_enabled || FeatureFlag::SoloUserByok.is_enabled();
 
         let mut column = Flex::column()
             .with_spacing(16.)
@@ -6442,7 +6463,7 @@ impl ApiKeysWidget {
                 Container::new(
                     render_ai_setting_description(
                         "Use your own API keys from model providers for the Warp Agent to use. API keys are stored locally and never synced to the cloud. Using auto models or models from providers you have not provided API keys for will consume Warp credits.",
-                        is_enabled,
+                        is_api_keys_section_enabled,
                         app,
                     ))
                 // Remove the bottom margin of the description so that it doesn't
@@ -6492,21 +6513,28 @@ impl ApiKeysWidget {
             appearance,
             "OpenAI API Key",
             self.openai_api_key_editor.clone(),
-            is_enabled,
+            is_api_keys_section_enabled,
             app,
         ));
         column.add_child(render_api_key_input(
             appearance,
             "Anthropic API Key",
             self.anthropic_api_key_editor.clone(),
-            is_enabled,
+            is_api_keys_section_enabled,
             app,
         ));
         column.add_child(render_api_key_input(
             appearance,
             "Google API Key",
             self.google_api_key_editor.clone(),
-            is_enabled,
+            is_api_keys_section_enabled,
+            app,
+        ));
+        column.add_child(render_api_key_input(
+            appearance,
+            "OpenRouter API Key",
+            self.open_router_api_key_editor.clone(),
+            is_api_keys_section_enabled,
             app,
         ));
 
@@ -6617,6 +6645,8 @@ impl SettingsWidget for ApiKeysWidget {
         let ai_settings = AISettings::as_ref(app);
         let is_any_ai_enabled = ai_settings.is_any_ai_enabled(app);
         let is_byo_enabled = UserWorkspaces::as_ref(app).is_byo_api_key_enabled();
+        let show_byok_toggle =
+            is_byo_enabled || (FeatureFlag::SoloUserByok.is_enabled() && !is_any_ai_enabled);
 
         let mut column = Flex::column()
             .with_child(render_separator(appearance))
@@ -6631,7 +6661,7 @@ impl SettingsWidget for ApiKeysWidget {
             )
             .with_child(self.render_api_keys_section(appearance, app, is_byo_enabled));
 
-        if is_byo_enabled {
+        if show_byok_toggle {
             column.add_child(
                 Container::new(self.render_can_use_warp_credits_with_byok_toggle(view, app))
                     .with_margin_top(16.)

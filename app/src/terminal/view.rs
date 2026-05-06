@@ -17,13 +17,13 @@ use crate::ai::block_context::BlockContext;
 #[cfg(feature = "local_fs")]
 use crate::ai::skills::SkillOpenOrigin;
 use crate::global_resource_handles::GlobalResourceHandlesProvider;
+use crate::onboarding::callout::{FinalState, OnboardingCalloutViewEvent, OnboardingQuery};
+use crate::onboarding::{OnboardingCalloutView, OnboardingKeybindings};
 use crate::terminal::view::ambient_agent::is_cloud_agent_pre_first_exchange;
 pub use init_project::{
     InitActionResult, InitProjectModel, InitProjectModelEvent, InitStepBlock, InitStepKind,
     ProjectScopedRulesResult,
 };
-use crate::onboarding::callout::{FinalState, OnboardingCalloutViewEvent, OnboardingQuery};
-use crate::onboarding::{OnboardingCalloutView, OnboardingKeybindings};
 pub(crate) mod docker_sandbox;
 mod link_detection;
 mod open_in_warp;
@@ -7856,6 +7856,7 @@ impl TerminalView {
         self.model
             .lock()
             .set_marked_text(marked_text, selected_range);
+        ctx.report_active_cursor_position_update();
         ctx.notify();
     }
 
@@ -7864,6 +7865,7 @@ impl TerminalView {
             return;
         }
         self.model.lock().clear_marked_text();
+        ctx.report_active_cursor_position_update();
         ctx.notify();
     }
 
@@ -12223,8 +12225,13 @@ impl TerminalView {
         self.is_login_shell_bootstrapped = true;
         self.hide_slow_bootstrap_banner(ctx);
 
+        let has_local_byo_ai = UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled()
+            && ApiKeyManager::as_ref(ctx).keys().has_any_key();
+
         if self.auth_state.is_anonymous_or_logged_out()
             && !FeatureFlag::OpenWarpNewSettingsModes.is_enabled()
+            && !FeatureFlag::SkipFirebaseAnonymousUser.is_enabled()
+            && !has_local_byo_ai
         {
             self.insert_anonymous_user_ai_sign_up_banner(ctx);
         }
