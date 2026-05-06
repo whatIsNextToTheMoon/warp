@@ -225,7 +225,7 @@ impl ContextChipKind {
                 ),
             )),
             Self::VirtualEnvironment => Some(ContextChip::builtin_with_runtime_policy(
-                "Python Virtualenv",
+                "Python virtualenv",
                 builtins::virtual_environment,
                 RefreshConfig::OnDemandOnly,
                 ChipRuntimePolicy::new(
@@ -239,7 +239,7 @@ impl ContextChipKind {
                 ),
             )),
             Self::CondaEnvironment => Some(ContextChip::builtin_with_runtime_policy(
-                "Conda Environment",
+                "Conda environment",
                 builtins::conda_environment,
                 RefreshConfig::OnDemandOnly,
                 ChipRuntimePolicy::new(
@@ -253,7 +253,7 @@ impl ContextChipKind {
                 ),
             )),
             Self::NodeVersion => Some(ContextChip::builtin_with_runtime_policy(
-                "Node.js Version",
+                "Node.js version",
                 builtins::node_version,
                 RefreshConfig::OnDemandOnly,
                 ChipRuntimePolicy::new(
@@ -272,12 +272,12 @@ impl ContextChipKind {
                 DATE_REFRESH_CONFIG,
             )),
             Self::Time12 => Some(ContextChip::builtin(
-                "Time (12-hour format)",
+                "Time (12-hour)",
                 builtins::time12,
                 TIME_REFRESH_CONFIG,
             )),
             Self::Time24 => Some(ContextChip::builtin(
-                "Time (24-hour format)",
+                "Time (24-hour)",
                 builtins::time24,
                 TIME_REFRESH_CONFIG,
             )),
@@ -318,7 +318,7 @@ impl ContextChipKind {
                 .with_suppress_on_failure()
                 .with_invalidate_on_commands(["git", "gh", "gt"]);
                 Some(ContextChip::shell_builtin_with_runtime_policy(
-                    "GitHub Pull Request",
+                    "GitHub pull request",
                     generator,
                     None,
                     GIT_REFRESH_CONFIG,
@@ -326,25 +326,25 @@ impl ContextChipKind {
                 ))
             }
             Self::KubernetesContext => Some(ContextChip::shell_builtin(
-                "Kubernetes Context",
+                "Kubernetes context",
                 builtins::kubernetes_current_context(),
                 None,
                 RefreshConfig::OnDemandOnly,
             )),
             Self::SvnBranch => Some(ContextChip::shell_builtin(
-                "Svn Branch",
+                "SVN branch",
                 builtins::svn_branch_context(),
                 None,
                 RefreshConfig::OnDemandOnly,
             )),
             Self::SvnDirtyItems => Some(ContextChip::shell_builtin(
-                "Svn Uncommitted File Count",
+                "SVN uncommitted file count",
                 builtins::svn_dirty_items(),
                 None,
                 RefreshConfig::OnDemandOnly,
             )),
             Self::Ssh => Some(ContextChip::builtin(
-                "Remote Login",
+                "Remote login",
                 builtins::ssh_session,
                 RefreshConfig::OnDemandOnly,
             )),
@@ -354,7 +354,7 @@ impl ContextChipKind {
                 RefreshConfig::OnDemandOnly,
             )),
             Self::AgentPlanAndTodoList => Some(ContextChip::builtin(
-                "Agent Plan and Todo List",
+                "Agent plan and todo list",
                 |_| Some(ChipValue::Text(String::new())),
                 RefreshConfig::OnDemandOnly,
             )),

@@ -2,6 +2,7 @@
 
 use pathfinder_color::ColorU;
 use warp_core::ui::theme::Fill;
+use warpui::Action;
 use warpui::elements::{
     ConstrainedBox, DraggableState, Hoverable, MouseStateHandle, OffsetPositioning, ParentElement,
     ParentOffsetBounds, Stack,
@@ -9,10 +10,9 @@ use warpui::elements::{
 use warpui::fonts::{Properties, Weight};
 use warpui::platform::Cursor;
 use warpui::ui_components::components::UiComponent;
-use warpui::Action;
 use warpui::{
-    elements::{Container, CrossAxisAlignment, Flex, Text},
     Element,
+    elements::{Container, CrossAxisAlignment, Flex, Text},
 };
 
 use crate::appearance::Appearance;
@@ -205,7 +205,7 @@ impl Renderer {
             let tooltip = appearance.ui_builder().tool_tip(
                 self.tooltip_override_text
                     .clone()
-                    .unwrap_or_else(|| self.chip.title().to_string()),
+                    .unwrap_or_else(|| self.chip.localized_title()),
             );
             let mut stack = Stack::new();
             stack.add_child(container.finish());

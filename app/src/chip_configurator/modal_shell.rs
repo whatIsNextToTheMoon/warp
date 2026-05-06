@@ -18,7 +18,7 @@ use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{Action, Element};
 
 use super::{ChipConfigurator, ChipConfiguratorAction};
-use crate::Appearance;
+use crate::{Appearance, i18n};
 
 const MODAL_WIDTH: f32 = 700.;
 const BORDER_WIDTH: f32 = 1.;
@@ -127,7 +127,7 @@ pub fn render_chip_editor_modal<A: Action + Clone + Copy + 'static>(
 fn render_header(title: &str, appearance: &Appearance) -> Box<dyn Element> {
     appearance
         .ui_builder()
-        .span(title.to_string())
+        .span(i18n::ui_text(title))
         .with_style(UiComponentStyles {
             font_size: Some(MODAL_TITLE_FONT_SIZE),
             font_weight: Some(warpui::fonts::Weight::Bold),
@@ -146,7 +146,7 @@ fn render_restore_default_button<A: Action + Clone + Copy + 'static>(
     let button = Hoverable::new(mouse_handle.clone(), |_state| {
         appearance
             .ui_builder()
-            .span(RESTORE_DEFAULT_LABEL.to_string())
+            .span(i18n::ui_str(RESTORE_DEFAULT_LABEL))
             .with_style(UiComponentStyles {
                 font_size: Some(MODAL_CONTENT_FONT_SIZE),
                 ..Default::default()
@@ -167,7 +167,7 @@ fn render_restore_default_button<A: Action + Clone + Copy + 'static>(
 fn render_section_label(label: &str, appearance: &Appearance) -> Box<dyn Element> {
     appearance
         .ui_builder()
-        .span(label.to_string())
+        .span(i18n::ui_text(label))
         .with_style(UiComponentStyles {
             font_size: Some(MODAL_CONTENT_FONT_SIZE),
             font_weight: Some(warpui::fonts::Weight::Semibold),

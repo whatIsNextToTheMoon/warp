@@ -466,6 +466,10 @@ impl ContextChip {
         self.title.as_str()
     }
 
+    pub fn localized_title(&self) -> String {
+        crate::i18n::ui_text(self.title())
+    }
+
     pub fn generator(&self) -> &PromptGenerator {
         &self.generator
     }

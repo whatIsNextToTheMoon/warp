@@ -6,8 +6,8 @@
 pub(crate) mod modal_shell;
 
 pub(crate) use modal_shell::{
-    render_chip_editor_modal, render_chip_editor_sections, ChipEditorModalConfig,
-    ChipEditorMouseHandles, ChipEditorSectionsConfig,
+    ChipEditorModalConfig, ChipEditorMouseHandles, ChipEditorSectionsConfig,
+    render_chip_editor_modal, render_chip_editor_sections,
 };
 
 use pathfinder_geometry::rect::RectF;
@@ -223,7 +223,7 @@ impl ControlItemRenderer {
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let font_size = udi_font_size(appearance);
-        let label = self.display_label().to_string();
+        let label = crate::i18n::ui_text(self.display_label());
         let icon = self.display_icon();
         let is_dragging = matches!(drag_state, ChipDragState::Draggable { is_dragging: true });
         let mut hoverable = Hoverable::new(self.tooltip_state_handle.clone(), move |mouse_state| {

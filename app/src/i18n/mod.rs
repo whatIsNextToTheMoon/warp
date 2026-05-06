@@ -152,6 +152,17 @@ pub(crate) fn ui_str(text: &'static str) -> String {
         .unwrap_or_else(|| text.to_string())
 }
 
+/// Translate a UI-authored string into the current locale (if a translator is installed).
+///
+/// Unlike [`ui_str`], this accepts any `&str`, which is useful for call sites that work with
+/// borrowed runtime strings that still come from UI-authored static content (for example, values
+/// stored in instruction tables or tooltip metadata).
+pub(crate) fn ui_text(text: &str) -> String {
+    warpui::i18n::translate(text)
+        .map(|t| t.into_owned())
+        .unwrap_or_else(|| text.to_string())
+}
+
 fn normalize_whitespace(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut prev_ws = false;

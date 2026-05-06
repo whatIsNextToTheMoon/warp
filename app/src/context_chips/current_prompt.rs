@@ -20,7 +20,7 @@ use crate::{
         view::{ContextMenuAction, PromptPart, PromptPosition, TerminalAction},
     },
 };
-use futures::{pin_mut, FutureExt as _};
+use futures::{FutureExt as _, pin_mut};
 use itertools::Itertools;
 use settings::Setting as _;
 use warp_completer::completer::{CommandExitStatus, CommandOutput};
@@ -28,7 +28,7 @@ use warp_core::user_preferences::GetUserPreferences;
 
 use super::ChipResult;
 use super::{
-    chips_to_string,
+    ChipValue, ContextChipKind, chips_to_string,
     context_chip::{
         ChipAvailability, ChipDisabledReason, ChipFingerprintInput, ChipRuntimeCapabilities,
         ContextChip, Environment, ExternalCommandsAvailability, GeneratorContext, PromptGenerator,
@@ -36,7 +36,6 @@ use super::{
     },
     logging::{ChipCommandLogEntry, PromptChipExecutionPhase, PromptChipLogger},
     prompt::Prompt,
-    ChipValue, ContextChipKind,
 };
 #[cfg(feature = "local_fs")]
 use crate::code_review::git_status_update::{GitRepoStatusEvent, GitRepoStatusModel};
@@ -49,8 +48,8 @@ use std::time::Duration;
 #[cfg(feature = "local_fs")]
 use warpui::WeakModelHandle;
 use warpui::{
-    r#async::{SpawnedFutureHandle, Timer},
     AppContext, ViewHandle,
+    r#async::{SpawnedFutureHandle, Timer},
 };
 use warpui::{Entity, ModelAsRef, ModelContext, ModelHandle, SingletonEntity};
 
@@ -1362,14 +1361,18 @@ impl CurrentPrompt {
                 if has_value && chip_kind.is_copyable() {
                     if let Some(chip) = chip_kind.to_chip() {
                         Some(
-                            MenuItemFields::new(format!("Copy {}", chip.title()))
-                                .with_on_select_action(TerminalAction::ContextMenu(
-                                    ContextMenuAction::CopyPrompt {
-                                        position,
-                                        part: PromptPart::ContextChip(chip_kind),
-                                    },
-                                ))
-                                .into_item(),
+                            MenuItemFields::new(format!(
+                                "{} {}",
+                                crate::i18n::ui_str("Copy"),
+                                chip.localized_title()
+                            ))
+                            .with_on_select_action(TerminalAction::ContextMenu(
+                                ContextMenuAction::CopyPrompt {
+                                    position,
+                                    part: PromptPart::ContextChip(chip_kind),
+                                },
+                            ))
+                            .into_item(),
                         )
                     } else {
                         log::error!("Missing definition for chip: {chip_kind:?}");
@@ -1558,9 +1561,11 @@ impl CurrentPrompt {
         let current = *SessionSettings::as_ref(ctx).github_pr_chip_default_validation;
         if current != GithubPrPromptChipDefaultValidation::Suppressed {
             SessionSettings::handle(ctx).update(ctx, |settings, ctx| {
-                report_if_error!(settings
-                    .github_pr_chip_default_validation
-                    .set_value(GithubPrPromptChipDefaultValidation::Suppressed, ctx));
+                report_if_error!(
+                    settings
+                        .github_pr_chip_default_validation
+                        .set_value(GithubPrPromptChipDefaultValidation::Suppressed, ctx)
+                );
             });
         }
     }
@@ -1586,9 +1591,11 @@ impl CurrentPrompt {
             .unwrap_or(false);
         if gh_on_path {
             SessionSettings::handle(ctx).update(ctx, |settings, ctx| {
-                report_if_error!(settings
-                    .github_pr_chip_default_validation
-                    .set_value(GithubPrPromptChipDefaultValidation::Unvalidated, ctx));
+                report_if_error!(
+                    settings
+                        .github_pr_chip_default_validation
+                        .set_value(GithubPrPromptChipDefaultValidation::Unvalidated, ctx)
+                );
             });
         }
     }
@@ -1597,9 +1604,11 @@ impl CurrentPrompt {
         let current = *SessionSettings::as_ref(ctx).github_pr_chip_default_validation;
         if current == GithubPrPromptChipDefaultValidation::Unvalidated {
             SessionSettings::handle(ctx).update(ctx, |settings, ctx| {
-                report_if_error!(settings
-                    .github_pr_chip_default_validation
-                    .set_value(GithubPrPromptChipDefaultValidation::Validated, ctx));
+                report_if_error!(
+                    settings
+                        .github_pr_chip_default_validation
+                        .set_value(GithubPrPromptChipDefaultValidation::Validated, ctx)
+                );
             });
         }
     }

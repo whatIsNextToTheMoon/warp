@@ -16,14 +16,14 @@ use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use warpui::elements::FormattedTextElement;
 
 use crate::ai::blocklist::code_block::{
-    render_code_block_plain, CodeBlockOptions, CodeSnippetButtonHandles,
+    CodeBlockOptions, CodeSnippetButtonHandles, render_code_block_plain,
 };
 use crate::appearance::Appearance;
-use crate::terminal::cli_agent_sessions::plugin_manager::PluginInstructions;
 use crate::terminal::CLIAgent;
+use crate::terminal::cli_agent_sessions::plugin_manager::PluginInstructions;
 use crate::ui_components::icons::Icon;
-use crate::view_components::action_button::{ActionButton, ButtonSize, NakedTheme};
 use crate::view_components::DismissibleToast;
+use crate::view_components::action_button::{ActionButton, ButtonSize, NakedTheme};
 use crate::workspace::{ToastStack, WorkspaceAction};
 
 pub(crate) struct PluginInstructionsBlock {
@@ -102,8 +102,11 @@ impl PluginInstructionsBlock {
 
         let desc_element: Box<dyn Element> = if let Some(url) = link {
             let fragments = vec![
-                FormattedTextFragment::plain_text(format!("{description} ")),
-                FormattedTextFragment::hyperlink("Learn more", url),
+                FormattedTextFragment::plain_text(format!(
+                    "{} ",
+                    crate::i18n::ui_text(description)
+                )),
+                FormattedTextFragment::hyperlink(crate::i18n::ui_str("Learn more"), url),
             ];
             let formatted = FormattedText::new(vec![FormattedTextLine::Line(fragments)]);
             FormattedTextElement::new(
@@ -122,9 +125,13 @@ impl PluginInstructionsBlock {
             })
             .finish()
         } else {
-            Text::new(description.to_owned(), appearance.ui_font_family(), 14.)
-                .with_color(theme.nonactive_ui_text_color().into_solid())
-                .finish()
+            Text::new(
+                crate::i18n::ui_text(description),
+                appearance.ui_font_family(),
+                14.,
+            )
+            .with_color(theme.nonactive_ui_text_color().into_solid())
+            .finish()
         };
 
         let title_row = Flex::row()
@@ -240,7 +247,7 @@ impl View for PluginInstructionsBlock {
         }
 
         for note in self.instructions.post_install_notes {
-            let post_note = Text::new((*note).to_owned(), appearance.ui_font_family(), 14.)
+            let post_note = Text::new(crate::i18n::ui_text(note), appearance.ui_font_family(), 14.)
                 .with_color(theme.nonactive_ui_text_color().into_solid())
                 .finish();
             content.add_child(post_note);
