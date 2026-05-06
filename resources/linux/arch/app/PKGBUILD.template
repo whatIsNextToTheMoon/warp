@@ -1,4 +1,4 @@
-pkgname=warp-terminal@@CHANNEL_SUFFIX@@
+pkgname=@@PACKAGE_NAME@@
 pkgver=@@VERSION@@
 pkgrel=@@RELEASE@@
 pkgdesc="Warp, the Rust-based terminal for developers and teams"
@@ -40,9 +40,9 @@ package() {
 	# Copy the shell script that launches the application.
 	install -Dm755 $pkgname.sh "$pkgdir"/usr/bin/$pkgname
 
-	# The OSS channel desktop entry uses `Exec=warp-oss`, so provide a compat
-	# launcher name for that channel.
-	if [[ "$pkgname" == "warp-terminal-oss" ]]; then
+	# The OSS desktop entry uses `Exec=warp-oss`, so provide a compat launcher
+	# name whenever the bundled binary keeps that command name.
+	if [[ "@@BINARY_NAME@@" == "warp-oss" ]]; then
 		ln -sf "$pkgname" "$pkgdir"/usr/bin/warp-oss
 	fi
 }

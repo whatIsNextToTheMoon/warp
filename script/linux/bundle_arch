@@ -30,6 +30,12 @@ fi
 
 if [ "$ARTIFACT" = "app" ]; then
   PACKAGE_NAME="warp-terminal$CHANNEL_SUFFIX"
+
+  # The Arch package name for the OSS channel should be more distinctive than
+  # the generic upstream-style name to avoid collisions with existing packages.
+  if [ "$RELEASE_CHANNEL" = "oss" ]; then
+    PACKAGE_NAME="warp-terminal-zh-cn-oss"
+  fi
 elif [ "$ARTIFACT" = "cli" ]; then
   PACKAGE_NAME="oz$CHANNEL_SUFFIX"
 else
@@ -71,14 +77,14 @@ tar cvf "$PKGDIR/data.tar" -C "$PKGDIR/stage" .
 VERSION="$GIT_RELEASE_TAG"
 RELEASE=1
 sed \
-    "s#@@CHANNEL_SUFFIX@@#$CHANNEL_SUFFIX#g; s#@@VERSION@@#$VERSION#g; s#@@RELEASE@@#$RELEASE#g; s#@@ARCH@@#$ARCH#g; s#@@OUTDIR@@#$OUT_DIR#g; s#@@BINARY_NAME@@#$BINARY_NAME#g" \
+    "s#@@PACKAGE_NAME@@#$PACKAGE_NAME#g; s#@@CHANNEL_SUFFIX@@#$CHANNEL_SUFFIX#g; s#@@VERSION@@#$VERSION#g; s#@@RELEASE@@#$RELEASE#g; s#@@ARCH@@#$ARCH#g; s#@@OUTDIR@@#$OUT_DIR#g; s#@@BINARY_NAME@@#$BINARY_NAME#g" \
     < "$WORKSPACE_ROOT_DIR/resources/linux/arch/$ARTIFACT/PKGBUILD.template" \
     > "$PKGDIR/PKGBUILD"
 
 # Only create wrapper script for app artifact
 if [ "$ARTIFACT" = "app" ]; then
   sed \
-      "s#@@CHANNEL_SUFFIX@@#$CHANNEL_SUFFIX#g; s#@@BINARY_NAME@@#$BINARY_NAME#g" \
+      "s#@@PACKAGE_NAME@@#$PACKAGE_NAME#g; s#@@CHANNEL_SUFFIX@@#$CHANNEL_SUFFIX#g; s#@@BINARY_NAME@@#$BINARY_NAME#g" \
       < "$WORKSPACE_ROOT_DIR/resources/linux/arch/$ARTIFACT/warp.sh.template" \
       > "$PKGDIR/$PACKAGE_NAME.sh"
 fi
