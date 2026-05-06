@@ -5034,10 +5034,12 @@ impl AIFactWidget {
 
         let rules_description = vec![
             FormattedTextFragment::plain_text(
-                "Rules help the Warp Agent follow your conventions, whether for codebases or specific workflows. ",
+                crate::i18n::ui_str(
+                    "Rules help the Warp Agent follow your conventions, whether for codebases or specific workflows. ",
+                ),
             ),
             FormattedTextFragment::hyperlink(
-                "Learn more",
+                crate::i18n::ui_str("Learn more"),
                 "https://docs.warp.dev/agent-platform/capabilities/rules",
             ),
         ];

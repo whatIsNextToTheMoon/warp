@@ -138,6 +138,20 @@ pub fn is_chinese_locale() -> bool {
     }
 }
 
+/// Translate a UI-authored string literal into the current locale (if a translator is installed).
+///
+/// This is primarily for call sites that build UI copy as owned `String`s (e.g. via
+/// `FormattedTextFragment`), which do not automatically go through the `Text` /
+/// `FormattedTextElement::from_str` translation hook.
+///
+/// When missing translation collection is enabled (`WARP_I18N_COLLECT_MISSES=1`), this also lets
+/// the collector observe and record misses for these strings.
+pub(crate) fn ui_str(text: &'static str) -> String {
+    warpui::i18n::translate(text)
+        .map(|t| t.into_owned())
+        .unwrap_or_else(|| text.to_string())
+}
+
 fn normalize_whitespace(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut prev_ws = false;
