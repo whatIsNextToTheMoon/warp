@@ -55,7 +55,6 @@ pub use input_mode::*;
 #[cfg(target_os = "linux")]
 pub use linux::*;
 pub use native_preference::*;
-pub use crate::onboarding::*;
 pub use pane::*;
 pub use privacy::*;
 pub use same_line_prompt_block::*;
