@@ -114,6 +114,22 @@ jobs:
         run: |
           sccache --show-stats || true
 
+      - name: Create stable latest asset aliases
+        run: |
+          cd target/release-lto/bundle/linux
+
+          pkg="$(find . -maxdepth 1 -type f -name 'warp-terminal-zh-cn-oss-*.pkg.tar.zst' ! -name 'warp-terminal-zh-cn-oss-latest-x86_64.pkg.tar.zst' -printf '%f\n' | head -n 1)"
+          if [[ -z "$pkg" ]]; then
+            echo "::error::Could not find versioned Arch package to alias"
+            exit 1
+          fi
+          cp -f "$pkg" warp-terminal-zh-cn-oss-latest-x86_64.pkg.tar.zst
+
+          appimage="$(find . -maxdepth 1 -type f -name 'WarpOss-*.AppImage' ! -name 'WarpOss-latest-x86_64.AppImage' -printf '%f\n' | head -n 1)"
+          if [[ -n "$appimage" ]]; then
+            cp -f "$appimage" WarpOss-latest-x86_64.AppImage
+          fi
+
       - name: Compute checksums
         run: |
           cd target/release-lto/bundle/linux
