@@ -1,7 +1,9 @@
 use crate::appearance::Appearance;
 use crate::onboarding::OnboardingIntention;
 use warpui::elements::Empty;
-use warpui::{AppContext, Element, Entity, ModelHandle, SingletonEntity, UpdateModel, View, ViewContext};
+use warpui::{
+    AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
+};
 
 use super::model::{
     AgentModalityCalloutState, FinalState, OnboardingCalloutModel, OnboardingCalloutModelEvent,
@@ -138,6 +140,10 @@ impl View for OnboardingCalloutView {
             _ => Empty::new().finish(),
         }
     }
+}
+
+impl TypedActionView for OnboardingCalloutView {
+    type Action = ();
 }
 
 impl SingletonEntity for OnboardingCalloutView {}

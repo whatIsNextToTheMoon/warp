@@ -1,4 +1,4 @@
-use pathfinder_geometry::vector::vec2f;
+use warpui::assets::asset_cache::AssetSource;
 use warpui::elements::{
     Align, CacheOption, Clipped, ConstrainedBox, Container, CrossAxisAlignment, Flex, Image,
     MainAxisSize, ParentElement, Shrinkable, SizeConstraintCondition, SizeConstraintSwitch, Stack,
@@ -65,12 +65,17 @@ pub fn onboarding_right_panel_with_bg(
     path: &'static str,
     _layout: ForegroundLayout,
 ) -> Box<dyn Element> {
-    let background = Image::new(ONBOARDING_BG_PATH, CacheOption::Original)
-        .cover()
-        .finish();
+    let background = Image::new(
+        AssetSource::Bundled {
+            path: ONBOARDING_BG_PATH,
+        },
+        CacheOption::Original,
+    )
+    .cover()
+    .finish();
 
     let foreground = Container::new(
-        Image::new(path, CacheOption::Original)
+        Image::new(AssetSource::Bundled { path }, CacheOption::Original)
             .cover()
             .top_aligned()
             .finish(),
