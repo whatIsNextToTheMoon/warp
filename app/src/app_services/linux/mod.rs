@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+#[cfg(feature = "release_bundle")]
+use std::os::unix::io::AsRawFd;
 
 use futures_util::FutureExt as _;
 use itertools::Itertools as _;
@@ -18,6 +20,71 @@ pub fn teardown(ctx: &mut AppContext) {
     DBusServiceHost::handle(ctx).update(ctx, |service_host, _| {
         service_host.terminate();
     });
+}
+
+/// Process-lifetime guard for the Linux/FreeBSD single-instance lock.
+///
+/// The lock is released automatically when the file descriptor is closed.
+#[cfg(feature = "release_bundle")]
+pub struct SingleInstanceLock {
+    _file: std::fs::File,
+}
+
+/// Error returned while attempting to acquire the single-instance lock.
+#[cfg(feature = "release_bundle")]
+#[derive(Debug, thiserror::Error)]
+pub enum SingleInstanceLockError {
+    /// Another Warp process already holds the lock.
+    #[error("another Warp instance is already running")]
+    AlreadyRunning,
+    /// The lock file could not be created or locked.
+    #[error("failed to acquire single-instance lock")]
+    Io(#[from] std::io::Error),
+}
+
+/// Attempts to acquire a process-lifetime lock for the current app channel.
+///
+/// This closes the race where two release-bundle processes start before the
+/// org.freedesktop.Application D-Bus service has been registered. The existing
+/// D-Bus forwarding path still handles the normal "open a new window in the
+/// existing instance" case; this lock is the fail-closed guard after forwarding
+/// reports that no instance is reachable.
+#[cfg(feature = "release_bundle")]
+pub fn try_acquire_single_instance_lock() -> Result<SingleInstanceLock, SingleInstanceLockError> {
+    let state_dir = {
+        let dir = warp_core::paths::state_dir();
+        if dir.as_os_str().is_empty() {
+            std::env::temp_dir().join(ChannelState::app_id().to_string())
+        } else {
+            dir
+        }
+    };
+    std::fs::create_dir_all(&state_dir)?;
+
+    let lock_path = state_dir.join("single-instance.lock");
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(lock_path)?;
+
+    loop {
+        // SAFETY: flock(2) is safe to call with a valid fd and valid operation flags.
+        let ret = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        if ret == 0 {
+            return Ok(SingleInstanceLock { _file: file });
+        }
+
+        let err = std::io::Error::last_os_error();
+        match err.kind() {
+            std::io::ErrorKind::Interrupted => continue,
+            std::io::ErrorKind::WouldBlock => {
+                return Err(SingleInstanceLockError::AlreadyRunning);
+            }
+            _ => return Err(SingleInstanceLockError::Io(err)),
+        }
+    }
 }
 
 /// Attempts to forward startup arguments to an existing instance of the

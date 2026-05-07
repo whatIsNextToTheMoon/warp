@@ -61,7 +61,7 @@ use crate::terminal::alt_screen_reporting::{
 };
 use crate::terminal::general_settings::{
     AutoOpenCodeReviewPaneOnFirstAgentChange, GeneralSettings, LinkTooltip, LoginItem,
-    QuitOnLastWindowClosed, RestoreSession, ShowWarningBeforeQuitting,
+    QuitOnLastWindowClosed, RestoreSession, ShowWarningBeforeQuitting, SingleInstanceMode,
 };
 use crate::terminal::keys_settings::{
     ActivationHotkeyEnabled, CtrlTabBehaviorSetting, KeysSettings, KeysSettingsChangedEvent,
@@ -317,6 +317,22 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
         context,
         flags::LINK_TOOLTIP_CONTEXT_FLAG,
     ));
+
+    toggle_binding_pairs.push(
+        ToggleSettingActionPair::new(
+            "open only one Warp instance",
+            builder(SettingsAction::FeaturesPageToggle(
+                FeaturesPageAction::ToggleSingleInstanceMode,
+            )),
+            context,
+            flags::SINGLE_INSTANCE_MODE_CONTEXT_FLAG,
+        )
+        .is_supported_on_current_platform(
+            GeneralSettings::as_ref(app)
+                .single_instance_mode
+                .is_supported_on_current_platform(),
+        ),
+    );
 
     toggle_binding_pairs.push(
         ToggleSettingActionPair::new(
@@ -618,6 +634,7 @@ pub enum FeaturesPageAction {
     ToggleNotificationSound,
     SetNotificationToastDuration,
     ToggleShowWarningBeforeQuitting,
+    ToggleSingleInstanceMode,
     ToggleLoginItem,
     ToggleQuitOnLastWindowClosed,
     ToggleSmartSelection,
@@ -986,6 +1003,10 @@ impl FeaturesPageAction {
                         .quit_on_last_window_closed
                         .value(),
                 ),
+            },
+            Self::ToggleSingleInstanceMode => TelemetryEvent::FeaturesPageAction {
+                action: "ToggleSingleInstanceMode".to_string(),
+                value: to_string(*GeneralSettings::as_ref(ctx).single_instance_mode.value()),
             },
             Self::ToggleSmartSelection => TelemetryEvent::FeaturesPageAction {
                 action: "ToggleSmartSelection".to_string(),
@@ -1855,6 +1876,11 @@ impl TypedActionView for FeaturesPageView {
                         .toggle_and_save_value(ctx));
                 })
             }
+            ToggleSingleInstanceMode => {
+                GeneralSettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings.single_instance_mode.toggle_and_save_value(ctx));
+                })
+            }
             ToggleLoginItem => GeneralSettings::handle(ctx).update(ctx, |settings, ctx| {
                 report_if_error!(settings.add_app_as_login_item.toggle_and_save_value(ctx));
             }),
@@ -2452,6 +2478,13 @@ impl FeaturesPageView {
 
         general_widgets.push(Box::new(SnackbarHeaderWidget::default()));
         general_widgets.push(Box::new(LinkTooltipWidget::default()));
+
+        if general_settings
+            .single_instance_mode
+            .is_supported_on_current_platform()
+        {
+            general_widgets.push(Box::new(SingleInstanceModeWidget::default()));
+        }
 
         #[cfg(feature = "local_fs")]
         {
@@ -4587,6 +4620,57 @@ impl SettingsWidget for QuitWhenAllWindowsClosedWidget {
                 })
                 .finish(),
             None,
+        )
+    }
+}
+
+#[derive(Default)]
+struct SingleInstanceModeWidget {
+    switch_state: SwitchStateHandle,
+}
+
+impl SettingsWidget for SingleInstanceModeWidget {
+    type View = FeaturesPageView;
+
+    fn search_terms(&self) -> &str {
+        "single instance multiple process startup app launch"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let general_settings = GeneralSettings::as_ref(app);
+        let ui_builder = appearance.ui_builder();
+        render_body_item::<FeaturesPageAction>(
+            "Open only one Warp instance".into(),
+            None,
+            LocalOnlyIconState::for_setting(
+                SingleInstanceMode::storage_key(),
+                SingleInstanceMode::sync_to_cloud(),
+                &mut view
+                    .button_mouse_states
+                    .local_only_icon_tooltip_states
+                    .borrow_mut(),
+                app,
+            ),
+            ToggleState::Enabled,
+            appearance,
+            ui_builder
+                .switch(self.switch_state.clone())
+                .check(*general_settings.single_instance_mode)
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(FeaturesPageAction::ToggleSingleInstanceMode);
+                })
+                .finish(),
+            Some(
+                "When enabled, launching Warp again reuses the existing instance instead of \
+                 starting a second process."
+                    .into(),
+            ),
         )
     }
 }

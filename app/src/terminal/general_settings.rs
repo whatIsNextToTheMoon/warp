@@ -33,6 +33,18 @@ define_settings_group!(GeneralSettings, settings: [
         toml_path: "general.restore_session",
         description: "Whether to restore the previous session when Warp starts up.",
     },
+    single_instance_mode: SingleInstanceMode {
+        type: bool,
+        default: true,
+        supported_platforms: SupportedPlatforms::OR(
+            Box::new(SupportedPlatforms::LINUX),
+            Box::new(SupportedPlatforms::WINDOWS),
+        ),
+        sync_to_cloud: SyncToCloud::Never,
+        private: false,
+        toml_path: "general.single_instance_mode",
+        description: "Whether to prevent starting more than one Warp process at a time.",
+    },
     add_app_as_login_item: LoginItem {
         type: bool,
         default: true,

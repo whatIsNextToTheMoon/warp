@@ -839,55 +839,6 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
     )]
     let mut pre_sentry_errors: Vec<anyhow::Error> = Vec::new();
 
-    #[cfg(all(
-        feature = "release_bundle",
-        any(target_os = "linux", target_os = "freebsd")
-    ))]
-    if let LaunchMode::App { .. } = launch_mode {
-        match app_services::linux::pass_startup_args_to_existing_instance(
-            launch_mode.args().as_ref(),
-        ) {
-            // If we were able to contact an existing application instance, quit -
-            // we only want to run a single instance of Warp at a time.
-            Ok(_) => std::process::exit(0),
-            // If Warp isn't already running, we're good to go.
-            Err(app_services::linux::StartupArgsForwardingError::NoExistingInstance) => {}
-            // If we just finished an auto-update, we should continue running.
-            Err(app_services::linux::StartupArgsForwardingError::IgnoredAfterAutoUpdate) => {}
-            // If we were unable to perform the forwarding for an unknown reason,
-            // it's better to run a second instance than potentially end up in a
-            // state where Warp refuses to run even a first instance.
-            Err(err) => {
-                let err = anyhow::Error::from(err).context("Failed to forward startup args");
-                log::error!("{err:#}");
-                pre_sentry_errors.push(err);
-            }
-        }
-    }
-
-    #[cfg(all(feature = "release_bundle", windows))]
-    if let LaunchMode::App { .. } = launch_mode {
-        match app_services::windows::pass_startup_args_to_existing_instance(
-            launch_mode.args().as_ref(),
-        ) {
-            // If we were able to contact an existing application instance, quit -
-            // we only want to run a single instance of Warp at a time.
-            Ok(_) => std::process::exit(0),
-            // If Warp isn't already running, we're good to go.
-            Err(app_services::windows::StartupArgsForwardingError::NoExistingInstance) => {}
-            // If we just finished an auto-update, we should continue running.
-            Err(app_services::windows::StartupArgsForwardingError::IgnoredAfterAutoUpdate) => {}
-            // If we were unable to perform the forwarding for an unknown reason,
-            // it's better to run a second instance than potentially end up in a
-            // state where Warp refuses to run even a first instance.
-            Err(err) => {
-                let err = anyhow::Error::from(err).context("Failed to forward startup args");
-                log::error!("{err:#}");
-                pre_sentry_errors.push(err);
-            }
-        }
-    }
-
     // Sets up a Job Object that we associate with the Warp process to handle
     // shared fate with its child processes. This should be called before we
     // start spawning any child processes.
@@ -901,7 +852,11 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
     // the TOML-backed store. When disabled, they live in the platform-native
     // store (same backend as private). Use the correct one for pre-app reads.
     #[cfg_attr(
-        not(any(enable_crash_recovery, any(target_os = "linux", target_os = "freebsd"))),
+        not(any(
+            enable_crash_recovery,
+            any(target_os = "linux", target_os = "freebsd"),
+            all(feature = "release_bundle", windows)
+        )),
         expect(unused)
     )]
     let prefs_for_public_settings: &dyn warpui_extras::user_preferences::UserPreferences =
@@ -910,6 +865,126 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
         } else {
             private_preferences.deref()
         };
+
+    #[cfg(all(
+        feature = "release_bundle",
+        any(target_os = "linux", target_os = "freebsd")
+    ))]
+    let _single_instance_lock = {
+        use crate::app_services::linux::StartupArgsForwardingError;
+        use crate::terminal::general_settings::SingleInstanceMode;
+
+        let single_instance_mode = SingleInstanceMode::read_from_preferences(
+            prefs_for_public_settings,
+        )
+        .unwrap_or(SingleInstanceMode::default_value());
+
+        if !single_instance_mode {
+            None
+        } else if let LaunchMode::App { .. } = launch_mode {
+            let app_args = launch_mode.args();
+            #[cfg(enable_crash_recovery)]
+            let skip_single_instance =
+                crash_recovery::is_crash_recovery_process(app_args.as_ref());
+            #[cfg(not(enable_crash_recovery))]
+            let skip_single_instance = false;
+
+            if skip_single_instance {
+                None
+            } else {
+                let forwarding_result =
+                    app_services::linux::pass_startup_args_to_existing_instance(app_args.as_ref());
+                let should_acquire_lock = match forwarding_result {
+                    // If we were able to contact an existing application instance, quit -
+                    // we only want to run a single instance of Warp at a time.
+                    Ok(_) => std::process::exit(0),
+                    // If Warp isn't already running, we're good to go.
+                    Err(StartupArgsForwardingError::NoExistingInstance) => true,
+                    // If we just finished an auto-update, we should continue running.
+                    Err(StartupArgsForwardingError::IgnoredAfterAutoUpdate) => false,
+                    // If we were unable to perform the forwarding for an unknown reason,
+                    // acquire the startup lock as a fail-closed single-instance guard.
+                    Err(err) => {
+                        let err =
+                            anyhow::Error::from(err).context("Failed to forward startup args");
+                        log::error!("{err:#}");
+                        pre_sentry_errors.push(err);
+                        true
+                    }
+                };
+
+                if should_acquire_lock {
+                    match app_services::linux::try_acquire_single_instance_lock() {
+                        Ok(lock) => Some(lock),
+                        Err(app_services::linux::SingleInstanceLockError::AlreadyRunning) => {
+                            log::info!(
+                                "Another Warp instance is already running; exiting because \
+                                 single-instance mode is enabled"
+                            );
+                            std::process::exit(0);
+                        }
+                        Err(err) => {
+                            let err =
+                                anyhow::Error::from(err).context("Failed to acquire startup lock");
+                            log::error!("{err:#}");
+                            pre_sentry_errors.push(err);
+                            None
+                        }
+                    }
+                } else {
+                    None
+                }
+            }
+        } else {
+            None
+        }
+    };
+
+    #[cfg(all(feature = "release_bundle", windows))]
+    {
+        use crate::terminal::general_settings::SingleInstanceMode;
+
+        let single_instance_mode = SingleInstanceMode::read_from_preferences(
+            prefs_for_public_settings,
+        )
+        .unwrap_or(SingleInstanceMode::default_value());
+
+        if single_instance_mode {
+            if let LaunchMode::App { .. } = launch_mode {
+                let app_args = launch_mode.args();
+                #[cfg(enable_crash_recovery)]
+                let skip_single_instance =
+                    crash_recovery::is_crash_recovery_process(app_args.as_ref());
+                #[cfg(not(enable_crash_recovery))]
+                let skip_single_instance = false;
+
+                if !skip_single_instance {
+                    match app_services::windows::pass_startup_args_to_existing_instance(
+                        app_args.as_ref(),
+                    ) {
+                        // If we were able to contact an existing application instance, quit -
+                        // we only want to run a single instance of Warp at a time.
+                        Ok(_) => std::process::exit(0),
+                        // If Warp isn't already running, we're good to go.
+                        Err(app_services::windows::StartupArgsForwardingError::NoExistingInstance) => {}
+                        // If we just finished an auto-update, we should continue running.
+                        Err(
+                            app_services::windows::StartupArgsForwardingError::IgnoredAfterAutoUpdate,
+                        ) => {}
+                        // If we were unable to perform the forwarding for an unknown reason,
+                        // it's better to run a second instance than potentially end up in a
+                        // state where Warp refuses to run even a first instance.
+                        Err(err) => {
+                            let err =
+                                anyhow::Error::from(err).context("Failed to forward startup args");
+                            log::error!("{err:#}");
+                            pre_sentry_errors.push(err);
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     #[cfg(enable_crash_recovery)]
     let crash_recovery =

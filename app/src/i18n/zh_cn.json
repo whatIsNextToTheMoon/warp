@@ -1984,5 +1984,7 @@
   "Remote Login": "远程登录",
   "Remote login": "远程登录",
   "Agent Plan and Todo List": "代理计划与待办列表",
-  "Agent plan and todo list": "代理计划与待办列表"
+  "Agent plan and todo list": "代理计划与待办列表",
+  "Open only one Warp instance": "仅打开一个 Warp 实例",
+  "When enabled, launching Warp again reuses the existing instance instead of starting a second process.": "启用后，再次启动 Warp 会复用现有实例，而不是启动第二个进程。"
 }

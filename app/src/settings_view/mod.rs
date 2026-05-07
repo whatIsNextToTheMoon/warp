@@ -389,6 +389,7 @@ pub mod flags {
     pub const SSH_TMUX_WRAPPER_CONTEXT_FLAG: &str = "SSH_Tmux_Wrapper";
     pub const NOTIFICATIONS_CONTEXT_FLAG: &str = "Notifications_Enabled";
     pub const LINK_TOOLTIP_CONTEXT_FLAG: &str = "Link_Tooltip";
+    pub const SINGLE_INSTANCE_MODE_CONTEXT_FLAG: &str = "Single_Instance_Mode";
     pub const COMPACT_MODE_CONTEXT_FLAG: &str = "Compact_Mode_Enabled";
     pub const CURSOR_BLINK_CONTEXT_FLAG: &str = "Cursor_Blink_Enabled";
     pub const VIM_MODE_CONTEXT_FLAG: &str = "Vim_Mode_Enabled";

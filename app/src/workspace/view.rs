@@ -19556,6 +19556,14 @@ impl Workspace {
             context.set.insert(flags::LINK_TOOLTIP_CONTEXT_FLAG);
         }
 
+        if general_settings
+            .single_instance_mode
+            .is_supported_on_current_platform()
+            && *general_settings.single_instance_mode.value()
+        {
+            context.set.insert(flags::SINGLE_INSTANCE_MODE_CONTEXT_FLAG);
+        }
+
         if *input_settings.completions_open_while_typing.value() {
             context
                 .set
