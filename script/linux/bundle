@@ -195,7 +195,7 @@ fi
 if [[ "$ARTIFACT" == "cli" ]]; then
   FEATURES="$FEATURES,standalone"
 elif [[ "$ARTIFACT" == "app" ]]; then
-  FEATURES="$FEATURES,gui,nld_improvements,ime_marked_text"
+  FEATURES="$FEATURES,gui,nld_improvements"
 fi
 
 BUNDLE_ID="dev.warp.$APP_NAME"
