@@ -961,8 +961,9 @@ pub const RELEASE_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::Autoupdate,
     FeatureFlag::Changelog,
     FeatureFlag::CrashReporting,
-    // Marked text is currently only supported on MacOS.
-    #[cfg(target_os = "macos")]
+    // Marked text is supported on macOS and on Linux/FreeBSD builds that route
+    // IME preedit through winit's desktop IME events.
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "freebsd"))]
     FeatureFlag::ImeMarkedText,
     // Remote server binary is not yet supported on Windows.
     #[cfg(not(windows))]
