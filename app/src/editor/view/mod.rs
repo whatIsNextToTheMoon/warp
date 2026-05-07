@@ -8099,13 +8099,23 @@ impl EditorView {
         ctx.notify();
     }
 
+    fn should_handle_marked_text() -> bool {
+        // Keep the legacy terminal-grid marked-text path behind
+        // FeatureFlag::ImeMarkedText, but allow editor-backed inputs to consume
+        // desktop IME preedit on Linux/FreeBSD. This lets fcitx5/GNOME show
+        // inline pinyin in the command input without changing grid selection or
+        // cursor semantics.
+        FeatureFlag::ImeMarkedText.is_enabled()
+            || cfg!(any(target_os = "linux", target_os = "freebsd"))
+    }
+
     fn set_marked_text(
         &mut self,
         marked_text: &str,
         selected_range: &Range<usize>,
         ctx: &mut ViewContext<Self>,
     ) {
-        if !FeatureFlag::ImeMarkedText.is_enabled() {
+        if !Self::should_handle_marked_text() {
             return;
         }
 
@@ -8139,7 +8149,7 @@ impl EditorView {
     }
 
     fn clear_marked_text(&mut self, ctx: &mut ViewContext<Self>) {
-        if !FeatureFlag::ImeMarkedText.is_enabled() {
+        if !Self::should_handle_marked_text() {
             return;
         }
 
