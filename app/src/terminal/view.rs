@@ -384,6 +384,7 @@ use warp_core::user_preferences::GetUserPreferences as _;
 #[cfg(feature = "local_fs")]
 use warp_util::path::LineAndColumnArg;
 use warp_util::path::ShellFamily;
+use warp_util::user_input::UserInput;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::new_scrollable::{
     AxisConfiguration, ClippedAxisConfiguration, DualAxisConfig, NewScrollableElement,
@@ -7850,23 +7851,49 @@ impl TerminalView {
         selected_range: &Range<usize>,
         ctx: &mut ViewContext<Self>,
     ) {
-        if !FeatureFlag::ImeMarkedText.is_enabled() {
+        if FeatureFlag::ImeMarkedText.is_enabled() {
+            self.model
+                .lock()
+                .set_marked_text(marked_text, selected_range);
+            ctx.report_active_cursor_position_update();
+            ctx.notify();
             return;
         }
-        self.model
-            .lock()
-            .set_marked_text(marked_text, selected_range);
-        ctx.report_active_cursor_position_update();
-        ctx.notify();
+
+        // On Linux/Wayland, the active command line is an EditorView child.
+        // Forward IME preedit there so fcitx5/GNOME can show inline pinyin
+        // without enabling the legacy terminal-grid marked-text overlay, which
+        // mutates cursor/selection behavior.
+        if cfg!(any(target_os = "linux", target_os = "freebsd")) {
+            self.input.update(ctx, |input, ctx| {
+                input.editor().update(ctx, |editor, ctx| {
+                    editor.handle_action(
+                        &EditorAction::SetMarkedText {
+                            marked_text: UserInput::new(marked_text),
+                            selected_range: selected_range.clone(),
+                        },
+                        ctx,
+                    );
+                });
+            });
+        }
     }
 
     fn clear_marked_text_on_terminal(&mut self, ctx: &mut ViewContext<Self>) {
-        if !FeatureFlag::ImeMarkedText.is_enabled() {
+        if FeatureFlag::ImeMarkedText.is_enabled() {
+            self.model.lock().clear_marked_text();
+            ctx.report_active_cursor_position_update();
+            ctx.notify();
             return;
         }
-        self.model.lock().clear_marked_text();
-        ctx.report_active_cursor_position_update();
-        ctx.notify();
+
+        if cfg!(any(target_os = "linux", target_os = "freebsd")) {
+            self.input.update(ctx, |input, ctx| {
+                input.editor().update(ctx, |editor, ctx| {
+                    editor.handle_action(&EditorAction::ClearMarkedText, ctx);
+                });
+            });
+        }
     }
 
     pub(crate) fn write_to_pty<B: Into<Cow<'static, [u8]>>>(
