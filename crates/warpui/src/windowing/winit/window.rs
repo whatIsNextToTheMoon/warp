@@ -1437,6 +1437,15 @@ fn create_window(
         .create_window(window_attributes)
         .map_err(Into::into);
 
+    if let Ok(window) = created_window.as_ref() {
+        // IME is disabled by default in winit. Enable it for all native desktop
+        // windows so Linux/Wayland input methods (e.g. fcitx5) can enter
+        // preedit/commit mode and modifier-based input source switching (such
+        // as pressing Shift to toggle Chinese input) can take effect.
+        #[cfg(not(target_family = "wasm"))]
+        window.set_ime_allowed(true);
+    }
+
     #[cfg(windows)]
     {
         use super::windows::WindowExt;
@@ -1459,7 +1468,6 @@ fn create_window(
             }
 
             window.set_visible(true);
-            window.set_ime_allowed(true);
 
             // When launching a window from windows file explorer, it isn't given focus. We're considering
             // this a winit quirk and forcing it to be focused.
