@@ -93,7 +93,7 @@ impl UiComponent for KeyboardShortcut {
                 .join(sep);
 
             let text_element = Align::new(
-                Span::new(
+                Span::new_untranslated(
                     combined_text,
                     // Removing any margin from the style passed to Span, since we process it below
                     self.style,
@@ -269,7 +269,7 @@ impl Key {
             (icon, false)
         } else {
             let is_multi_char_key = text.chars().count() > 1;
-            let content = Span::new(
+            let content = Span::new_untranslated(
                 text,
                 // Removing any margin from the style passed to Span, since we process it below
                 UiComponentStyles {

@@ -277,6 +277,20 @@ impl Text {
         // We still use exact-match translation (installed by the application) so dynamic/user
         // content is unlikely to be affected unless it exactly matches a known UI label.
         let text = crate::i18n::translate(text.as_ref()).unwrap_or(text);
+        Self::new_untranslated(text, family_id, font_size)
+    }
+
+    /// Like [`Text::new`], but skips the application i18n hook.
+    ///
+    /// Use this for semantic tokens such as key names ("Tab", "Ctrl") where the
+    /// rendered glyphs should remain stable regardless of UI copy translation.
+    #[cfg_attr(debug_assertions, track_caller)]
+    pub fn new_untranslated(
+        text: impl Into<Cow<'static, str>>,
+        family_id: FamilyId,
+        font_size: f32,
+    ) -> Self {
+        let text: Cow<'static, str> = text.into();
         Self {
             text,
             soft_wrap: true,

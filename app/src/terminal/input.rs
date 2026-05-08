@@ -7702,7 +7702,16 @@ impl Input {
     }
 
     pub fn focus_input_box(&self, ctx: &mut ViewContext<Self>) {
-        ctx.focus_self();
+        // CLI rich input is backed by the editor itself. Focusing only the
+        // parent Input view can leave focus on auxiliary footer/chip views,
+        // which breaks IME composition in Codex/Claude/Gemini prompt boxes.
+        if CLIAgentSessionsModel::as_ref(ctx).is_input_open(self.terminal_view_id) {
+            ctx.focus(&self.editor);
+            ctx.dispatch_typed_action(&PaneGroupAction::HandleFocusChange);
+            ctx.notify();
+        } else {
+            ctx.focus_self();
+        }
     }
 
     pub fn input_type(&self, app: &AppContext) -> InputType {
@@ -14475,6 +14484,15 @@ impl View for Input {
             INPUT_A11Y_HELPER,
             WarpA11yRole::TextareaRole,
         ))
+    }
+
+    fn active_cursor_position(&self, ctx: &ViewContext<Self>) -> Option<CursorInfo> {
+        let cursor_id = position_id_for_cursor(self.editor.id());
+        let appearance = Appearance::as_ref(ctx);
+        let font_size = appearance.monospace_font_size();
+
+        ctx.element_position_by_id(cursor_id)
+            .map(|position| CursorInfo { position, font_size })
     }
 
     fn on_focus(&mut self, focus_ctx: &FocusContext, ctx: &mut ViewContext<Self>) {

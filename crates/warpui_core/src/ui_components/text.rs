@@ -13,6 +13,7 @@ pub struct WrappableText {
     text: Cow<'static, str>,
     styles: UiComponentStyles,
     wrap: bool,
+    translate: bool,
     line_height_ratio: f32,
     highlights: Vec<HighlightedRange>,
     /// Whether the text is selectable when rendered as a descendant of a [`SelectableArea`].
@@ -25,9 +26,21 @@ impl WrappableText {
             text,
             styles,
             wrap: soft_wrap,
+            translate: true,
             line_height_ratio: DEFAULT_UI_LINE_HEIGHT_RATIO,
             highlights: vec![],
             is_selectable: true,
+        }
+    }
+
+    pub fn new_untranslated(
+        text: Cow<'static, str>,
+        soft_wrap: bool,
+        styles: UiComponentStyles,
+    ) -> Self {
+        Self {
+            translate: false,
+            ..Self::new(text, soft_wrap, styles)
         }
     }
 
@@ -57,11 +70,19 @@ impl UiComponent for WrappableText {
     type ElementType = Container;
     fn build(self) -> Container {
         let styles = self.styles;
-        let mut text = Text::new(
-            self.text,
-            styles.font_family_id.unwrap(),
-            styles.font_size.unwrap_or_default(),
-        )
+        let mut text = if self.translate {
+            Text::new(
+                self.text,
+                styles.font_family_id.unwrap(),
+                styles.font_size.unwrap_or_default(),
+            )
+        } else {
+            Text::new_untranslated(
+                self.text,
+                styles.font_family_id.unwrap(),
+                styles.font_size.unwrap_or_default(),
+            )
+        }
         .soft_wrap(self.wrap)
         .with_line_height_ratio(self.line_height_ratio)
         .with_selectable(self.is_selectable);
@@ -110,6 +131,12 @@ impl Span {
     pub fn new(text: impl Into<Cow<'static, str>>, styles: UiComponentStyles) -> Self {
         Span {
             text: WrappableText::new(text.into(), false, styles),
+        }
+    }
+
+    pub fn new_untranslated(text: impl Into<Cow<'static, str>>, styles: UiComponentStyles) -> Self {
+        Span {
+            text: WrappableText::new_untranslated(text.into(), false, styles),
         }
     }
 
