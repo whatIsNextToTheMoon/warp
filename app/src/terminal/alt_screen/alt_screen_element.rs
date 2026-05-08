@@ -225,6 +225,13 @@ impl AltScreenElement {
         true
     }
 
+    fn ime_commit(&mut self, text: &str, ctx: &mut EventContext) -> bool {
+        if self.is_terminal_focused {
+            ctx.dispatch_typed_action(TerminalAction::ImeCommit(UserInput::new(text)));
+        }
+        true
+    }
+
     fn drag_and_drop_file(&mut self, paths: &[String], ctx: &mut EventContext) -> bool {
         if self.is_terminal_focused && !paths.is_empty() {
             let paths = paths.iter().map(ToOwned::to_owned).collect();
@@ -954,6 +961,7 @@ impl Element for AltScreenElement {
                 self.middle_mouse_down(to_local(*position), ctx)
             }
             Event::TypedCharacters { chars } => self.typed_characters(chars, ctx),
+            Event::ImeCommit { text } => self.ime_commit(text, ctx),
             Event::DragAndDropFiles { paths, .. } if in_bounds => {
                 self.drag_and_drop_file(paths, ctx)
             }

@@ -7896,6 +7896,26 @@ impl TerminalView {
         }
     }
 
+    fn ime_commit_on_terminal(&mut self, text: &str, ctx: &mut ViewContext<Self>) {
+        if FeatureFlag::ImeMarkedText.is_enabled() {
+            self.model.lock().clear_marked_text();
+            ctx.report_active_cursor_position_update();
+            ctx.notify();
+            self.typed_characters_on_terminal(text, ctx);
+            return;
+        }
+
+        if cfg!(any(target_os = "linux", target_os = "freebsd")) {
+            self.input.update(ctx, |input, ctx| {
+                input.editor().update(ctx, |editor, ctx| {
+                    editor.handle_action(&EditorAction::ImeCommit(UserInput::new(text)), ctx);
+                });
+            });
+        } else {
+            self.typed_characters_on_terminal(text, ctx);
+        }
+    }
+
     pub(crate) fn write_to_pty<B: Into<Cow<'static, [u8]>>>(
         &mut self,
         data: B,
@@ -24804,6 +24824,7 @@ impl TypedActionView for TerminalView {
             | ForkConversationFromLastKnownGoodState
             | ToggleAIDocumentPane
             | ClearMarkedText
+            | ImeCommit(_)
             | StartLspServer => ActionAccessibilityContent::from_debug(),
             #[cfg(feature = "local_fs")]
             OpenCodeInWarp { .. } => ActionAccessibilityContent::from_debug(),
@@ -25552,6 +25573,7 @@ impl TypedActionView for TerminalView {
                 selected_range,
             } => self.set_marked_text_on_terminal(marked_text, selected_range, ctx),
             ClearMarkedText => self.clear_marked_text_on_terminal(ctx),
+            ImeCommit(text) => self.ime_commit_on_terminal(text, ctx),
             SelectAgenticSuggestion(index) => {
                 if let Some(block) = self.onboarding_agentic_suggestions_block.as_ref() {
                     block.update(ctx, |block, ctx| {

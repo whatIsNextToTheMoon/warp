@@ -38,6 +38,7 @@ impl DispatchedEvent {
             Event::ModifierStateChanged { .. } => Some(&self.event),
             Event::ModifierKeyChanged { .. } => Some(&self.event),
             Event::TypedCharacters { .. } => Some(&self.event),
+            Event::ImeCommit { .. } => Some(&self.event),
             Event::DragAndDropFiles { .. } => Some(&self.event),
             Event::DragFiles { .. } => Some(&self.event),
             Event::DragFileExit => Some(&self.event),
@@ -190,6 +191,12 @@ pub enum Event {
     /// with a set of characters and thus the output from IME could be more than one single character.
     TypedCharacters {
         chars: String,
+    },
+    /// Text committed by an input method after a preedit/composition session.
+    /// This is separate from [`TypedCharacters`] so text editors can replace
+    /// the active marked text atomically instead of inserting next to it.
+    ImeCommit {
+        text: String,
     },
     /// Gets fired when user drags a file or folder into Warp. Note that there could exist
     /// multiple file paths in one event as user could drag and drop multiple targets.
@@ -403,6 +410,7 @@ impl Scale for Event {
                 Event::ModifierKeyChanged { key_code, state }
             }
             Event::TypedCharacters { chars } => Event::TypedCharacters { chars },
+            Event::ImeCommit { text } => Event::ImeCommit { text },
             Event::SetMarkedText {
                 marked_text,
                 selected_range,

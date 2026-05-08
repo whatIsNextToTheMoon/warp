@@ -38,7 +38,7 @@ use crate::r#async::Timer;
 use crate::rendering::wgpu::renderer;
 use crate::windowing::winit::app::RequestPermissionsCallback;
 use crate::windowing::winit::window::MIN_WINDOW_SIZE;
-use crate::Event::{ClearMarkedText, SetMarkedText, TypedCharacters};
+use crate::Event::{ClearMarkedText, ImeCommit, SetMarkedText, TypedCharacters};
 use crate::{AppContext, WindowId};
 
 #[cfg(target_family = "wasm")]
@@ -1585,10 +1585,11 @@ impl EventLoop {
                 };
 
                 let mut window_callbacks = self.callbacks.for_window(window.as_ref());
-                // We clear the marked text state before inserting typed characters so that the Vim
-                // FSA knows it can interpret the committed text as a user insertion.
+                // Clear any visible preedit first. Editor-backed inputs handle
+                // ImeCommit atomically, while legacy terminal-grid inputs still
+                // need the explicit clear before inserting committed text.
                 window_callbacks.dispatch_event(ClearMarkedText);
-                window_callbacks.dispatch_event(TypedCharacters { chars });
+                window_callbacks.dispatch_event(ImeCommit { text: chars });
             }
             winit::event::Ime::Disabled => {
                 if self.ime_enabled_window_id == Some(winit_window_id) {

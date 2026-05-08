@@ -1323,6 +1323,13 @@ impl BlockListElement {
         true
     }
 
+    fn ime_commit(&mut self, text: &str, ctx: &mut EventContext) -> bool {
+        if self.is_terminal_focused {
+            ctx.dispatch_typed_action(TerminalAction::ImeCommit(UserInput::new(text)));
+        }
+        true
+    }
+
     fn ctrl_d(&self, ctx: &mut EventContext) -> bool {
         if self.is_terminal_focused {
             ctx.dispatch_typed_action(TerminalAction::CtrlD);
@@ -4461,6 +4468,7 @@ impl Element for BlockListElement {
                 | Event::RightMouseDown { .. }
                 | Event::KeyDown { .. }
                 | Event::TypedCharacters { .. }
+                | Event::ImeCommit { .. }
                 | Event::ScrollWheel { .. }
         );
 
@@ -4627,6 +4635,7 @@ impl Element for BlockListElement {
             }
             Event::MouseMoved { position, .. } => self.mouse_moved(*position, app, ctx),
             Event::TypedCharacters { chars } => self.typed_characters(chars, ctx),
+            Event::ImeCommit { text } => self.ime_commit(text, ctx),
             Event::MiddleMouseDown { position, .. } => self.middle_mouse_down(*position, ctx),
             Event::SetMarkedText {
                 marked_text,

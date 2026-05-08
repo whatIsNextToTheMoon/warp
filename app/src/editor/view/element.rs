@@ -2190,6 +2190,7 @@ impl Element for EditorElement {
                 key_code, state, ..
             } => self.modifier_key_change(key_code, state, ctx),
             Event::TypedCharacters { chars } => self.typed_characters(chars, ctx),
+            Event::ImeCommit { text } => self.ime_commit(text, ctx),
             Event::DragAndDropFiles { paths, location } => {
                 self.drag_and_drop_file(paths.clone(), *location, ctx)
             }
