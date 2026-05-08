@@ -28,7 +28,7 @@ use winit::event_loop::{ActiveEventLoop, EventLoopProxy, OwnedDisplayHandle};
 use winit::monitor::MonitorHandle;
 #[cfg(windows)]
 use winit::platform::windows::{BackdropType, WindowExtWindows};
-use winit::window::{CursorIcon, ResizeDirection, UserAttentionType, WindowLevel};
+use winit::window::{CursorIcon, ImePurpose, ResizeDirection, UserAttentionType, WindowLevel};
 use winit::{
     dpi::{LogicalPosition, LogicalSize, PhysicalSize, Position, Size},
     window::Fullscreen,
@@ -1443,7 +1443,10 @@ fn create_window(
         // preedit/commit mode and modifier-based input source switching (such
         // as pressing Shift to toggle Chinese input) can take effect.
         #[cfg(not(target_family = "wasm"))]
-        window.set_ime_allowed(true);
+        {
+            window.set_ime_allowed(true);
+            window.set_ime_purpose(ImePurpose::Terminal);
+        }
     }
 
     #[cfg(windows)]
