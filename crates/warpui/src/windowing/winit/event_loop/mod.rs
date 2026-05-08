@@ -5,6 +5,7 @@ mod drag_drop_tests;
 
 use std::collections::HashMap;
 use std::mem::ManuallyDrop;
+use std::ops::Range;
 
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 use crate::notification::RequestPermissionsOutcome;
@@ -84,6 +85,25 @@ const MOMENTUM_THRESHOLD: f32 = 50.0; // Min-velocity to start momentum scroll, 
 const MOMENTUM_MIN_VELOCITY: f32 = 1.0; // When velocity falls below this, scrolling stops. 1.0 is subpixel
 const MOMENTUM_MAX_VELOCITY: f32 = 2000.0; // Hard cap on momentum initial velocity (px/s)
 const MIN_VELOCITY_TIME_DELTA: f32 = 0.004; // Floor for time deltas to prevent spikes from batched events
+
+fn utf8_byte_index_to_char_index(text: &str, byte_index: usize) -> usize {
+    let byte_index = byte_index.min(text.len());
+    let byte_index = if text.is_char_boundary(byte_index) {
+        byte_index
+    } else {
+        (0..byte_index)
+            .rev()
+            .find(|index| text.is_char_boundary(*index))
+            .unwrap_or(0)
+    };
+
+    text[..byte_index].chars().count()
+}
+
+fn ime_byte_range_to_char_range(text: &str, byte_range: Range<usize>) -> Range<usize> {
+    utf8_byte_index_to_char_index(text, byte_range.start)
+        ..utf8_byte_index_to_char_index(text, byte_range.end)
+}
 
 /// TryFrom implementation for converting winit's `KeyCode` to
 /// `crate::platform::keyboard::KeyCode`.
@@ -1533,11 +1553,20 @@ impl EventLoop {
                     return;
                 }
 
+                // winit reports IME preedit cursor positions as UTF-8 byte
+                // offsets. Warp's editor renderer stores the marked-text
+                // selection as character/column offsets.
+                let selected_range = cursor_position
+                    .map(|cursor_position| {
+                        ime_byte_range_to_char_range(
+                            &preedit_text,
+                            cursor_position.0..cursor_position.1,
+                        )
+                    })
+                    .unwrap_or(0..0);
                 window_callbacks.dispatch_event(SetMarkedText {
                     marked_text: preedit_text,
-                    selected_range: cursor_position
-                        .map(|cursor_position| cursor_position.0..cursor_position.1)
-                        .unwrap_or(0..0),
+                    selected_range,
                 });
             }
             winit::event::Ime::Commit(chars) => {
@@ -1559,6 +1588,20 @@ impl EventLoop {
             }
             winit::event::Ime::Disabled => {
                 self.ime_enabled = false;
+
+                let Some(window_state) = self.state.windows.get_mut(&winit_window_id) else {
+                    return;
+                };
+                let Some(window) = self
+                    .ui_app
+                    .read(|ctx| ctx.windows().platform_window(window_state.window_id))
+                else {
+                    return;
+                };
+
+                self.callbacks
+                    .for_window(window.as_ref())
+                    .dispatch_event(ClearMarkedText);
             }
         };
     }
