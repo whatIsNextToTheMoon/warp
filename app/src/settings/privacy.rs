@@ -200,24 +200,21 @@ impl PrivacySettingsSnapshot {
     }
 
     pub fn should_disable_telemetry(&self) -> bool {
-        // If a user has opted in to the agent mode analytics experiment, telemetry must be enabled.
-        !self.is_telemetry_enabled
-            && !self.is_telemetry_force_enabled
-            && !FeatureFlag::AgentModeAnalytics.is_enabled()
+        true
     }
 
     pub fn should_collect_ai_ugc_telemetry(&self) -> bool {
-        self.should_collect_ai_ugc_telemetry
+        false
     }
 
     #[cfg(test)]
     pub fn mock() -> Self {
         Self {
             cloud_conversation_storage_enabled: None,
-            is_telemetry_enabled: true,
+            is_telemetry_enabled: false,
             is_crash_reporting_enabled: true,
-            is_telemetry_force_enabled: true,
-            should_collect_ai_ugc_telemetry: true,
+            is_telemetry_force_enabled: false,
+            should_collect_ai_ugc_telemetry: false,
         }
     }
 }
@@ -250,7 +247,7 @@ impl PrivacySettings {
         // Initialize from `WarpDrivePrivacySettings`, which is the source of truth for these
         // booleans.
         let warp_drive_privacy = WarpDrivePrivacySettings::as_ref(ctx);
-        let is_telemetry_enabled = *warp_drive_privacy.is_telemetry_enabled.value();
+        let is_telemetry_enabled = false;
         let is_crash_reporting_enabled = *warp_drive_privacy.is_crash_reporting_enabled.value();
         let is_cloud_conversation_storage_enabled = *warp_drive_privacy
             .is_cloud_conversation_storage_enabled
@@ -363,7 +360,7 @@ impl PrivacySettings {
 
     pub fn refresh_to_default(&mut self) {
         // TODO(zach): this seems incorrect - should we also update the values on disk?
-        self.is_telemetry_enabled = true;
+        self.is_telemetry_enabled = false;
         self.is_crash_reporting_enabled = true;
         self.is_cloud_conversation_storage_enabled = true;
         self.is_telemetry_force_enabled = false;
@@ -530,25 +527,18 @@ impl PrivacySettings {
         new_value: bool,
         ctx: &mut ModelContext<PrivacySettings>,
     ) {
+        let _ = new_value;
         let old_value = self.is_telemetry_enabled;
-        if new_value != old_value {
-            self.is_telemetry_enabled = new_value;
+        if old_value {
+            self.is_telemetry_enabled = false;
 
             WarpDrivePrivacySettings::handle(ctx).update(ctx, |settings, ctx| {
-                log::info!("Setting is_telemetry_enabled to {new_value}");
-                let _ = settings.is_telemetry_enabled.set_value(new_value, ctx);
+                let _ = settings.is_telemetry_enabled.set_value(false, ctx);
             });
 
-            if self.auth_state.is_logged_in() {
-                let auth_client = self.auth_client.clone();
-                let _ = ctx.spawn(
-                    async move { auth_client.set_is_telemetry_enabled(new_value).await },
-                    |_, _, _| (),
-                );
-            }
             ctx.emit(PrivacySettingsChangedEvent::UpdateIsTelemetryEnabled {
                 old_value,
-                new_value,
+                new_value: false,
             });
             ctx.notify();
         }

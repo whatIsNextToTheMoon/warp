@@ -62,15 +62,17 @@ pub fn create_event(
     contains_ugc: bool,
     timestamp: DateTime<Utc>,
 ) -> Event {
-    let mut telemetry = TELEMETRY.lock();
-    telemetry.create_event(
-        user_id,
-        anonymous_id,
-        name,
-        payload,
-        contains_ugc,
+    Event {
+        payload: EventPayload::NamedEvent {
+            user_id,
+            anonymous_id,
+            name,
+            value: payload,
+        },
+        session_created_at: timestamp,
         timestamp,
-    )
+        contains_ugc,
+    }
 }
 
 pub fn record_event(
@@ -81,20 +83,11 @@ pub fn record_event(
     contains_ugc: bool,
     timestamp: DateTime<Utc>,
 ) {
-    let mut telemetry = TELEMETRY.lock();
-    telemetry.record_event(
-        user_id,
-        anonymous_id,
-        name,
-        payload,
-        contains_ugc,
-        timestamp,
-    );
+    let _ = (user_id, anonymous_id, name, payload, contains_ugc, timestamp);
 }
 
 pub fn record_identify_user_event(user_id: String, anonymous_id: String, timestamp: DateTime<Utc>) {
-    let mut telemetry = TELEMETRY.lock();
-    telemetry.record_identify_user_event(user_id, anonymous_id, timestamp);
+    let _ = (user_id, anonymous_id, timestamp);
 }
 
 /// Adds a 'App Active' event to the global event queue.  This should only be called in an async
@@ -104,10 +97,9 @@ pub fn record_app_active_event(
     anonymous_id: String,
     timestamp: DateTime<Utc>,
 ) {
-    let mut telemetry = TELEMETRY.lock();
-    telemetry.record_app_active(user_id, anonymous_id, timestamp);
+    let _ = (user_id, anonymous_id, timestamp);
 }
 
 pub fn flush_events() -> Vec<Event> {
-    TELEMETRY.lock().events.drain(..).collect()
+    Vec::new()
 }

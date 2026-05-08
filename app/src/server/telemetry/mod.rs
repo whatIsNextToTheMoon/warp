@@ -91,26 +91,9 @@ impl TelemetryApi {
     // Batches up telemetry events from the global queue and sends a Message to the Rudderstack API.
     // Returns the number of events that were flushed.
     pub async fn flush_events(&self, settings_snapshot: PrivacySettingsSnapshot) -> Result<usize> {
-        let events = warpui::telemetry::flush_events();
-        let event_count = events.len();
-
-        #[cfg(not(target_family = "wasm"))]
-        if FeatureFlag::SendTelemetryToFile.is_enabled() {
-            self.persist_events_to_telemetry_log_file(events.clone())?;
-        }
-
-        if ChannelState::is_release_bundle() || FeatureFlag::WithSandboxTelemetry.is_enabled() {
-            self.send_batch_messages_to_rudder(
-                events
-                    .into_iter()
-                    .map(Event::to_rudder_batch_message)
-                    .collect(),
-                settings_snapshot,
-            )
-            .await?;
-        }
-
-        Ok(event_count)
+        let _ = settings_snapshot;
+        let _ = warpui::telemetry::flush_events();
+        Ok(0)
     }
 
     /// Flushes events directly to Rudder that were previously written into a file at `path`
@@ -120,23 +103,7 @@ impl TelemetryApi {
         path: &Path,
         settings_snapshot: PrivacySettingsSnapshot,
     ) -> Result<()> {
-        if path.exists() {
-            let file = File::open(path)?;
-            let events: Vec<RudderBatchMessage> = serde_json::from_reader(file)?;
-            if !events.is_empty() {
-                let rudder_batch_messages = events
-                    .into_iter()
-                    .map(|message| RudderBatchMessageWithMetadata {
-                        message,
-                        // We don't persist any events that contain sensitive user data.
-                        contains_ugc: false,
-                    })
-                    .collect();
-                self.send_batch_messages_to_rudder(rudder_batch_messages, settings_snapshot)
-                    .await?;
-                log::info!("Successfully flushed events to rudder from disk");
-            }
-        }
+        let _ = (path, settings_snapshot);
         Ok(())
     }
 
@@ -148,11 +115,9 @@ impl TelemetryApi {
         max_event_count: usize,
         settings_snapshot: PrivacySettingsSnapshot,
     ) -> Result<()> {
-        self.flush_and_persist_events_at_path(
-            max_event_count,
-            settings_snapshot,
-            rudder_event_file_path(),
-        )
+        let _ = (max_event_count, settings_snapshot);
+        let _ = warpui::telemetry::flush_events();
+        Ok(())
     }
 
     fn flush_and_persist_events_at_path(
@@ -217,17 +182,9 @@ impl TelemetryApi {
         event: impl warp_core::telemetry::TelemetryEvent,
         settings_snapshot: PrivacySettingsSnapshot,
     ) -> Result<()> {
-        let event = warpui::telemetry::create_event(
-            user_id.map(|uid| uid.as_string()),
-            anonymous_id,
-            event.name().into(),
-            event.payload(),
-            event.contains_ugc(),
-            warpui::time::get_current_time(),
-        );
-
-        self.send_telemetry_event_internal(event, settings_snapshot)
-            .await
+        let _ = (user_id, anonymous_id, settings_snapshot);
+        let _ = event;
+        Ok(())
     }
 
     /// Internal implementation for sending telemetry events. This reduces code size, since
