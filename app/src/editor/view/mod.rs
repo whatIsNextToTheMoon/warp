@@ -8120,6 +8120,7 @@ impl EditorView {
         }
 
         if marked_text.is_empty() {
+            self.clear_marked_text(ctx);
             return;
         }
 
