@@ -522,7 +522,7 @@ pub(super) struct EventLoop {
     window_class: Option<String>,
     state: State,
     proxy: EventLoopProxy<CustomEvent>,
-    ime_enabled: bool,
+    ime_enabled_window_id: Option<WinitWindowId>,
     /// Whether to downrank non-NVIDIA vulkan adapters. This is set to true when we detect a DRI3
     /// error that occurs when trying to present against a non-NVIDIA Vulkan adapter when the
     /// PRIME Profile is set to "Performance" mode.  It's not fully clear why this error occurs. Our
@@ -551,7 +551,7 @@ impl EventLoop {
             window_class,
             state: Default::default(),
             proxy,
-            ime_enabled: false,
+            ime_enabled_window_id: None,
             downrank_non_nvidia_vulkan_adapters: false,
             #[cfg(target_family = "wasm")]
             soft_keyboard_manager: None,
@@ -770,7 +770,7 @@ impl EventLoop {
                 });
             }
             Event::UserEvent(CustomEvent::ActiveCursorPositionUpdated) => {
-                if self.ime_enabled {
+                if self.ime_enabled_window_id.is_some() {
                     self.update_ime_position();
                 }
             }
@@ -1506,6 +1506,10 @@ impl EventLoop {
             }
         }
 
+        if self.ime_enabled_window_id == Some(winit_window_id) {
+            self.ime_enabled_window_id = None;
+        }
+
         self.callbacks.window_will_close(window_id)
     }
 
@@ -1528,12 +1532,12 @@ impl EventLoop {
     fn handle_ime_event(&mut self, winit_window_id: WinitWindowId, event: ImeEvent) {
         match event {
             winit::event::Ime::Enabled => {
-                self.ime_enabled = true;
+                self.ime_enabled_window_id = Some(winit_window_id);
                 self.ui_app
                     .update(|ctx| ctx.report_active_cursor_position_update());
             }
             winit::event::Ime::Preedit(preedit_text, cursor_position) => {
-                if !self.ime_enabled {
+                if self.ime_enabled_window_id != Some(winit_window_id) {
                     return;
                 }
 
@@ -1587,7 +1591,9 @@ impl EventLoop {
                 window_callbacks.dispatch_event(TypedCharacters { chars });
             }
             winit::event::Ime::Disabled => {
-                self.ime_enabled = false;
+                if self.ime_enabled_window_id == Some(winit_window_id) {
+                    self.ime_enabled_window_id = None;
+                }
 
                 let Some(window_state) = self.state.windows.get_mut(&winit_window_id) else {
                     return;
