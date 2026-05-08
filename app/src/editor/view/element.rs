@@ -660,6 +660,14 @@ impl EditorElement {
         false
     }
 
+    fn ime_commit(&self, text: &str, ctx: &mut EventContext) -> bool {
+        if self.view_snapshot.is_focused {
+            ctx.dispatch_typed_action(EditorAction::ImeCommit(UserInput::new(text)));
+            return true;
+        }
+        false
+    }
+
     fn drag_and_drop_file(
         &self,
         paths: Vec<String>,
