@@ -1528,6 +1528,11 @@ impl EventLoop {
                 };
 
                 let mut window_callbacks = self.callbacks.for_window(window.as_ref());
+                if preedit_text.is_empty() {
+                    window_callbacks.dispatch_event(ClearMarkedText);
+                    return;
+                }
+
                 window_callbacks.dispatch_event(SetMarkedText {
                     marked_text: preedit_text,
                     selected_range: cursor_position

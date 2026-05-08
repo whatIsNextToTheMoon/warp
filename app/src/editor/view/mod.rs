@@ -8119,6 +8119,10 @@ impl EditorView {
             return;
         }
 
+        if marked_text.is_empty() {
+            return;
+        }
+
         // If in Normal or Visual mode, we don't want to insert any text.
         if matches!(
             self.vim_mode(ctx),
