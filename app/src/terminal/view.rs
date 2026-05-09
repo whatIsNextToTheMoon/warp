@@ -7845,13 +7845,22 @@ impl TerminalView {
         self.typed_characters_on_terminal(text, ctx);
     }
 
+    fn should_route_ime_to_pty(&self, ctx: &mut ViewContext<Self>) -> bool {
+        // IME events are not followed by a TypedCharacters fallback, so when a
+        // running TUI/CLI (Codex, Claude, Gemini, etc.) owns the active PTY we
+        // must commit CJK text to the PTY. The exception is Warp's CLI rich
+        // input composer, which is editor-backed and should keep receiving IME.
+        self.should_write_typed_chars_to_pty(ctx)
+            && !CLIAgentSessionsModel::as_ref(ctx).is_input_open(self.view_id)
+    }
+
     fn set_marked_text_on_terminal(
         &mut self,
         marked_text: &str,
         selected_range: &Range<usize>,
         ctx: &mut ViewContext<Self>,
     ) {
-        if FeatureFlag::ImeMarkedText.is_enabled() {
+        if FeatureFlag::ImeMarkedText.is_enabled() || self.should_route_ime_to_pty(ctx) {
             self.model
                 .lock()
                 .set_marked_text(marked_text, selected_range);
@@ -7880,7 +7889,7 @@ impl TerminalView {
     }
 
     fn clear_marked_text_on_terminal(&mut self, ctx: &mut ViewContext<Self>) {
-        if FeatureFlag::ImeMarkedText.is_enabled() {
+        if FeatureFlag::ImeMarkedText.is_enabled() || self.should_route_ime_to_pty(ctx) {
             self.model.lock().clear_marked_text();
             ctx.report_active_cursor_position_update();
             ctx.notify();
@@ -7897,7 +7906,7 @@ impl TerminalView {
     }
 
     fn ime_commit_on_terminal(&mut self, text: &str, ctx: &mut ViewContext<Self>) {
-        if FeatureFlag::ImeMarkedText.is_enabled() {
+        if FeatureFlag::ImeMarkedText.is_enabled() || self.should_route_ime_to_pty(ctx) {
             self.model.lock().clear_marked_text();
             ctx.report_active_cursor_position_update();
             ctx.notify();
