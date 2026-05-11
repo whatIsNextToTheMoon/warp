@@ -1726,12 +1726,12 @@ fn test_tab_completion_with_spaces() {
             );
         });
 
-        // Use tab to select next element, tab-shift to go to the previous & enter to confirm
+        // Use down to select next element, shift-tab to go to the previous & enter to confirm
         input.update(&mut app, |input, ctx| {
-            input.input_tab(ctx);
+            input.editor_down(ctx);
         });
         input.read(&app, |input, _| {
-            // after first tab
+            // after first down
             input.input_suggestions.read(&app, |suggestions, _| {
                 assert_eq!(suggestions.get_selected_item_text().unwrap(), "A\\ desktop");
             });
@@ -1970,21 +1970,22 @@ fn test_tab_completion() {
             );
         });
 
-        // Use tab to select next element, tab-shift to go to the previous & enter to confirm
+        // Use down to select next element, down again to select the following one, then
+        // shift-tab to go back and enter to confirm
         input.update(&mut app, |input, ctx| {
-            input.input_tab(ctx);
+            input.editor_down(ctx);
         });
         input.read(&app, |input, _| {
-            // after first tab
+            // after first down
             input.input_suggestions.read(&app, |suggestions, _| {
                 assert_eq!(suggestions.get_selected_item_text().unwrap(), "Downloads");
             });
         });
         input.update(&mut app, |input, ctx| {
-            input.input_tab(ctx);
+            input.editor_down(ctx);
         });
         input.read(&app, |input, _| {
-            // second tab
+            // second down
             input.input_suggestions.read(&app, |suggestions, _| {
                 assert_eq!(suggestions.get_selected_item_text().unwrap(), "Documents");
             });
@@ -2210,8 +2211,77 @@ fn test_tab_completion_longest_common_prefix_with_fuzzy_suggestions_and_completi
             input.input_tab(ctx);
         });
         input.read(&app, |input, ctx| {
-            // The common prefix between the two prefix matches should be inserted.
-            assert_eq!(input.buffer_text(ctx), "open charl");
+            // Tab confirms the preselected first suggestion when the completion menu is open.
+            assert_eq!(input.buffer_text(ctx), "open charlie.txt ");
+        });
+    });
+}
+
+#[test]
+fn test_completion_suggestions_up_down_and_tab_confirm() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(
+            &mut app, None, /* history_file_commands */
+            None,
+        )
+        .await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+
+        input.update(&mut app, |input, ctx| {
+            input.clear_buffer_and_reset_undo_stack(ctx);
+            input.user_insert("cd D", ctx);
+            input.input_tab(ctx);
+            input.handle_completion_suggestions_results(
+                build_suggestion_results(
+                    vec![
+                        argument_suggestion("Desktop"),
+                        argument_suggestion("Documents"),
+                        argument_suggestion("Downloads"),
+                    ],
+                    (3, 4),
+                    MatchStrategy::CaseInsensitive,
+                ),
+                CompletionsTrigger::Keybinding,
+                editor_model_snapshot(input, ctx),
+                ctx,
+            );
+        });
+
+        input.read(&app, |input, _| {
+            input.input_suggestions.read(&app, |suggestions, _| {
+                assert_eq!(suggestions.get_selected_item_text().unwrap(), "Desktop");
+            });
+        });
+
+        input.update(&mut app, |input, ctx| {
+            input.editor_down(ctx);
+        });
+        input.read(&app, |input, _| {
+            input.input_suggestions.read(&app, |suggestions, _| {
+                assert_eq!(suggestions.get_selected_item_text().unwrap(), "Documents");
+            });
+        });
+
+        input.update(&mut app, |input, ctx| {
+            input.editor_up(ctx);
+        });
+        input.read(&app, |input, _| {
+            input.input_suggestions.read(&app, |suggestions, _| {
+                assert_eq!(suggestions.get_selected_item_text().unwrap(), "Desktop");
+            });
+        });
+
+        input.update(&mut app, |input, ctx| {
+            input.input_tab(ctx);
+        });
+        input.read(&app, |input, ctx| {
+            assert_eq!(input.buffer_text(ctx), "cd Desktop ");
+            assert!(matches!(
+                input.suggestions_mode_model.as_ref(ctx).mode(),
+                InputSuggestionsMode::Closed
+            ));
         });
     });
 }

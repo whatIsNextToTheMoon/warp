@@ -1087,7 +1087,8 @@ impl View for InputSuggestions {
         Some(AccessibilityContent::new(
             "Command suggestions.",
             // TODO use bindings from user settings
-            "Navigate with tab and shift-tab, and confirm with enter. Execute selected command \
+            "Navigate with up and down arrows, tab or enter confirms the selected suggestion. \
+                Shift-tab selects the previous suggestion. Execute selected command \
                 with command + enter. Esc leaves the suggestions menu.",
             WarpA11yRole::MenuRole,
         ))

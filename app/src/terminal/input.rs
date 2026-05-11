@@ -7885,11 +7885,15 @@ impl Input {
                 });
                 true
             }
-            InputSuggestionsMode::HistoryUp { .. }
-            | InputSuggestionsMode::CompletionSuggestions { .. }
+            InputSuggestionsMode::CompletionSuggestions { .. }
             | InputSuggestionsMode::StaticWorkflowEnumSuggestions { .. }
-            | InputSuggestionsMode::DynamicWorkflowEnumSuggestions { .. }
-            | InputSuggestionsMode::Closed => false,
+            | InputSuggestionsMode::DynamicWorkflowEnumSuggestions { .. } => {
+                self.input_suggestions.update(ctx, |suggestions, ctx| {
+                    suggestions.select_prev(ctx);
+                });
+                true
+            }
+            InputSuggestionsMode::HistoryUp { .. } | InputSuggestionsMode::Closed => false,
         };
 
         if handled {
@@ -8239,10 +8243,15 @@ impl Input {
                 });
                 true
             }
-            InputSuggestionsMode::HistoryUp { .. }
-            | InputSuggestionsMode::CompletionSuggestions { .. }
+            InputSuggestionsMode::CompletionSuggestions { .. }
             | InputSuggestionsMode::StaticWorkflowEnumSuggestions { .. }
-            | InputSuggestionsMode::DynamicWorkflowEnumSuggestions { .. }
+            | InputSuggestionsMode::DynamicWorkflowEnumSuggestions { .. } => {
+                self.input_suggestions.update(ctx, |suggestions, ctx| {
+                    suggestions.select_next(ctx);
+                });
+                true
+            }
+            InputSuggestionsMode::HistoryUp { .. }
             | InputSuggestionsMode::InlineHistoryMenu { .. }
             | InputSuggestionsMode::Closed => false,
         };
@@ -11584,10 +11593,9 @@ impl Input {
     /// Handles a tab keypress from the editor.
     ///
     /// "Tab" is the default trigger to open the completion suggestions menu, but this may be
-    /// overridden in settings. If the completion suggestions menu is already open, tab and
-    /// shift-tab are used to select the next and previous suggestion, respectively -- this is not
-    /// overridable; note that even if "open completion suggestions menu" is rebound to a non-tab
-    /// key, tab and shift-tab are still used to navigate within the menu once it is open.
+    /// overridden in settings. If the completion suggestions menu is already open, tab confirms
+    /// the currently selected suggestion (or the first suggestion if none is selected).
+    /// Shift-tab still moves to the previous suggestion.
     ///
     /// If tab is not bound to "open completion suggestions menu" nor is the suggestions menu
     /// already open, inserts a tab char into the input editor.
@@ -11626,67 +11634,11 @@ impl Input {
             None
         };
         if let Some(replacement_start) = replacement_start_opt {
-            // The completions menu is already open, in which there are two cases.
-            // Case 1: There is a common prefix amongst filtered suggestions that we could fill; so
-            //         we fill it in buffer.
-            // Case 2: Else, tab should move to next option.
-            let (common_prefix_of_filtered_suggestions, is_single_prefix_suggestion) =
-                self.input_suggestions.read(ctx, |suggestions, _| {
-                    // Ignore fuzzy matches when calculating longest common
-                    // prefix of suggestions. So even if there are fuzzy
-                    // matches, we can find a common prefix and try to insert it.
-                    let suggestion_texts = suggestions
-                        .items()
-                        .iter()
-                        .filter(|item| {
-                            matches!(
-                                item.match_type(),
-                                MatchType::Prefix {
-                                    is_case_sensitive: true
-                                } | MatchType::Exact {
-                                    is_case_sensitive: true
-                                }
-                            )
-                        })
-                        .map(|item| item.text())
-                        .collect_vec();
-                    let num_suggestions = suggestion_texts.len();
-                    (
-                        longest_common_prefix(suggestion_texts).map(|x| x.to_owned()),
-                        num_suggestions == 1,
-                    )
-                });
-            if let Some(common_prefix) = common_prefix_of_filtered_suggestions {
-                let input_text = self.editor.as_ref(ctx).buffer_text(ctx);
-                // Determine the current word in the editor that will be replaced by the tab
-                // completion. We use the start index of the selection since the completer only sees
-                // the text up to the start of the selection when generating completion results.
-                let current_word = &input_text
-                    [replacement_start..self.start_byte_index_of_last_selection(ctx).as_usize()];
-
-                // Insert the common prefix if it is longer than what the user has currently typed
-                // This check is necessary because the suggestions are case-insensitive, while the
-                // common prefix logic is necessarily case-sensitive. That can lead to the common
-                // prefix being shorter, causing confusing behavior where the input is shortened.
-                // Also, we check if the replacement
-                if common_prefix.len() > current_word.len()
-                    && common_prefix.starts_with(current_word)
-                {
-                    self.insert_completion_prefix_into_editor(
-                        ctx,
-                        &common_prefix,
-                        replacement_start,
-                    );
-                    // If there was only a single completion remaining and we just inserted it into the editor,
-                    // close the completions menu.
-                    if is_single_prefix_suggestion {
-                        self.close_input_suggestions(true, ctx)
-                    }
-                    return;
-                }
-            }
             self.input_suggestions.update(ctx, |suggestions, ctx| {
-                suggestions.select_next(ctx);
+                if suggestions.get_selected_item().is_none() {
+                    suggestions.select_next(ctx);
+                }
+                suggestions.confirm(ctx);
             });
         } else if matches!(
             self.suggestions_mode_model.as_ref(ctx).mode(),
