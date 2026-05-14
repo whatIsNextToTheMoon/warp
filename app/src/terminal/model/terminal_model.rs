@@ -2372,6 +2372,14 @@ impl TerminalModel {
         }
         delegate!(self.clear_marked_text())
     }
+
+    pub fn set_pty_ime_marked_text(&mut self, marked_text: &str, selected_range: &Range<usize>) {
+        delegate!(self.set_marked_text(marked_text, selected_range))
+    }
+
+    pub fn clear_pty_ime_marked_text(&mut self) {
+        delegate!(self.clear_marked_text())
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
