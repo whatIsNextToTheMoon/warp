@@ -2780,7 +2780,7 @@ impl BlockListElement {
             if let Some(origin) = active_output_ime_popup_origin.or(active_command_ime_popup_origin)
             {
                 ctx.position_cache.cache_position_indefinitely(
-                    grid_renderer::cursor_position_id_for_terminal_view(terminal_view_id),
+                    format!("terminal_view:cursor_{terminal_view_id}"),
                     RectF::new(
                         origin,
                         vec2f(
