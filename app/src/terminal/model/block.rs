@@ -2878,6 +2878,16 @@ impl Block {
         }
         self.output_grid.clear_marked_text();
     }
+
+    pub(in crate::terminal) fn output_grid_ime_popup_cursor_origin(
+        &self,
+        grid_origin: Vector2F,
+        cell_size: Vector2F,
+        padding_x: f32,
+    ) -> Option<Vector2F> {
+        self.output_grid
+            .ime_popup_cursor_origin(grid_origin, cell_size, padding_x)
+    }
 }
 
 /// Used in the ansi::Handler implementation for Block below. Performs

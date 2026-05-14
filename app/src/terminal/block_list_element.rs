@@ -2634,6 +2634,20 @@ impl BlockListElement {
                 app,
             );
         }
+        let active_command_ime_popup_origin =
+            block.is_active_and_long_running()
+                .then(|| {
+                    block.prompt_and_command_grid().ime_popup_cursor_origin(
+                        command_origin,
+                        block_grid_params.grid_render_params.cell_size,
+                        block_grid_params
+                            .grid_render_params
+                            .size_info
+                            .padding_x_px()
+                            .as_f32(),
+                    )
+                })
+                .flatten();
 
         // Update grid_origin & draw output
         *grid_origin += vec2f(
@@ -2746,6 +2760,34 @@ impl BlockListElement {
                             .into()
                     },
                     app,
+                );
+            }
+
+            let active_output_ime_popup_origin =
+                block.is_active_and_long_running()
+                    .then(|| {
+                        block.output_grid_ime_popup_cursor_origin(
+                            *grid_origin,
+                            block_grid_params.grid_render_params.cell_size,
+                            block_grid_params
+                                .grid_render_params
+                                .size_info
+                                .padding_x_px()
+                                .as_f32(),
+                        )
+                    })
+                    .flatten();
+            if let Some(origin) = active_output_ime_popup_origin.or(active_command_ime_popup_origin)
+            {
+                ctx.position_cache.cache_position_indefinitely(
+                    grid_renderer::cursor_position_id_for_terminal_view(terminal_view_id),
+                    RectF::new(
+                        origin,
+                        vec2f(
+                            block_grid_params.grid_render_params.cell_size.x(),
+                            block_grid_params.grid_render_params.font_size,
+                        ),
+                    ),
                 );
             }
 

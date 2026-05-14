@@ -21,6 +21,8 @@ use std::num::NonZeroUsize;
 use std::ops::{Range, RangeInclusive};
 use std::sync::{Arc, OnceLock};
 
+use pathfinder_geometry::vector::Vector2F;
+
 use super::find::RegexDFAs;
 use super::grid::RespectDisplayedOutput;
 use super::image_map::StoredImageMetadata;
@@ -702,6 +704,28 @@ impl BlockGrid {
 
     pub(super) fn clear_marked_text(&mut self) {
         self.grid_handler.clear_marked_text();
+    }
+
+    pub(in crate::terminal) fn cursor_point_for_ime_popup(&self) -> Point {
+        self.grid_handler.cursor_point()
+    }
+
+    pub(in crate::terminal) fn has_marked_text(&self) -> bool {
+        self.grid_handler.marked_text().is_some()
+    }
+
+    pub(in crate::terminal) fn ime_popup_cursor_origin(
+        &self,
+        grid_origin: Vector2F,
+        cell_size: Vector2F,
+        padding_x: f32,
+    ) -> Option<Vector2F> {
+        self.has_marked_text().then(|| {
+            let cursor_point = self.cursor_point_for_ime_popup();
+            grid_origin
+                + Vector2F::new(padding_x, 0.)
+                + cell_size * Vector2F::new(cursor_point.col as f32, cursor_point.row as f32)
+        })
     }
 }
 

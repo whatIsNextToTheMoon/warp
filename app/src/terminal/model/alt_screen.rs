@@ -30,6 +30,7 @@ use itertools::Itertools;
 use num_traits::Float as _;
 use parking_lot::Mutex;
 use pathfinder_color::ColorU;
+use pathfinder_geometry::vector::Vector2F;
 use std::sync::Arc;
 use vec1::Vec1;
 use warp_core::semantic_selection::SemanticSelection;
@@ -358,6 +359,20 @@ impl AltScreen {
 
     pub(super) fn clear_marked_text(&mut self) {
         self.grid_handler.clear_marked_text();
+    }
+
+    pub(in crate::terminal) fn ime_popup_cursor_origin(
+        &self,
+        grid_origin: Vector2F,
+        cell_size: Vector2F,
+        padding_x: f32,
+    ) -> Option<Vector2F> {
+        self.grid_handler.marked_text().is_some().then(|| {
+            let cursor_point = self.grid_handler.cursor_point();
+            grid_origin
+                + Vector2F::new(padding_x, 0.)
+                + cell_size * Vector2F::new(cursor_point.col as f32, cursor_point.row as f32)
+        })
     }
 
     pub fn inferred_bg_color(&self) -> Option<ColorU> {
