@@ -84,6 +84,7 @@ use crate::terminal::input::suggestions_mode_model::{
 };
 use crate::terminal::input::terminal_message_bar::TerminalInputMessageBar;
 use crate::terminal::input::user_query::{UserQueryMenuEvent, UserQueryMenuView};
+use crate::terminal::model::completions::ShellCompletion;
 use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::package_installers::command_at_cursor_has_common_package_installer_prefix;
 use crate::terminal::prompt_render_helper::should_render_ps1_prompt;
@@ -268,6 +269,7 @@ use warp_core::{
     ui::theme::{color::internal_colors, AnsiColorIdentifier},
 };
 use warp_editor::editor::NavigationKey;
+use warpui::r#async::FutureExt as _;
 use warp_util::path::ShellFamily;
 use warpui::{
     accessibility::{AccessibilityContent, ActionAccessibilityContent, WarpA11yRole},
@@ -486,6 +488,7 @@ const COMPLETIONS_START_OF_REPLACEMENT_SPAN_POSITION_ID: &str =
 const HISTORY_DETAILS_VIEW_WIDTH_REQUIREMENT: f32 = 1100.;
 
 const MIN_BUFFER_LEN_TO_SHOW_COMPLETIONS_WHILE_TYPING: usize = 2;
+const NATIVE_SHELL_COMPLETIONS_TIMEOUT: Duration = Duration::from_millis(750);
 
 const AI_COMMAND_SEARCH_TRIGGER: &str = "#";
 
@@ -10831,6 +10834,7 @@ impl Input {
         ctx: &mut ViewContext<'_, Input>,
     ) {
         let buffer_text = self.buffer_text(ctx);
+        let input_type = self.ai_input_model.as_ref(ctx).input_type();
 
         // The 'ForceNativeShellCompletions' user pref can be used to unconditionally
         // generate and show native shell completion results (i.e. regardless of whether or
@@ -10843,16 +10847,29 @@ impl Input {
             .and_then(|s| s.parse().ok())
             .unwrap_or(false);
 
-        let use_native_shell_completions = (FeatureFlag::NativeShellCompletions.is_enabled() || force_native_shell_completions)
-            && completion_context
-                .session
-                .shell()
-                .supports_native_shell_completions()
+        let supports_native_shell_completions = completion_context
+            .session
+            .shell()
+            .supports_native_shell_completions()
             // For now, don't use native shell completions for multi-line commands.
             && !buffer_text.contains('\n');
 
+        // Manual Tab completion should respect the shell's own completion stack (for example,
+        // zsh-provided completions such as `man` flags) before falling back to Warp's specs.
+        // Keep as-you-type completions on the Warp path to avoid running shell completion hooks on
+        // every keystroke.
+        let prefer_native_shell_completions =
+            completions_trigger == CompletionsTrigger::Keybinding && !input_type.is_ai();
+
+        let use_native_shell_completions = supports_native_shell_completions
+            && (FeatureFlag::NativeShellCompletions.is_enabled()
+                || force_native_shell_completions
+                || prefer_native_shell_completions);
+
         let fallback_strategy = match completions_trigger {
-            CompletionsTrigger::Keybinding if !use_native_shell_completions => {
+            CompletionsTrigger::Keybinding
+                if !use_native_shell_completions || prefer_native_shell_completions =>
+            {
                 CompletionsFallbackStrategy::FilePaths
             }
             _ => CompletionsFallbackStrategy::None,
@@ -10863,8 +10880,6 @@ impl Input {
                 last_abort_handle.abort();
             }
         }
-
-        let input_type = self.ai_input_model.as_ref(ctx).input_type();
 
         // Don't trigger completions if the last character typed is whitespace, in AI input mode.
         // The user is likely typing in a natural language word at this point, not a filepath.
@@ -10903,25 +10918,12 @@ impl Input {
         let abort_handle = ctx
             .spawn_abortable(
                 async move {
-                    let suggestions = completer::suggestions(
-                        before_cursor_text.as_str(),
-                        cursor_position,
-                        session_env_vars.as_ref(),
-                        CompleterOptions {
-                            match_strategy: matcher,
-                            fallback_strategy,
-                            suggest_file_path_completions_only: input_type.is_ai(),
-                            parse_quotes_as_literals: input_type.is_ai(),
-                        },
-                        &completion_context,
-                    )
-                    .await;
+                    let native_results_to_suggestions =
+                        |results: Vec<ShellCompletion>| -> Option<SuggestionResults> {
+                            if results.is_empty() {
+                                return None;
+                            }
 
-                    let suggestions = match suggestions {
-                        Some(s) if !s.suggestions.is_empty() && !force_native_shell_completions => {
-                            Some(s)
-                        }
-                        _ => native_results_fut.await.map(|results| {
                             let suggestions = results.into_iter().map(Into::into).collect_vec();
 
                             let token_end = cursor_position;
@@ -10935,12 +10937,53 @@ impl Input {
                                 // Otherwise, the start is the beginning of the buffer.
                                 .unwrap_or_default();
 
-                            SuggestionResults {
+                            Some(SuggestionResults {
                                 replacement_span: (token_start, token_end).into(),
                                 suggestions,
                                 match_strategy: MatchStrategy::Fuzzy,
+                            })
+                        };
+
+                    let warp_suggestions_fut = async {
+                        completer::suggestions(
+                            before_cursor_text.as_str(),
+                            cursor_position,
+                            session_env_vars.as_ref(),
+                            CompleterOptions {
+                                match_strategy: matcher,
+                                fallback_strategy,
+                                suggest_file_path_completions_only: input_type.is_ai(),
+                                parse_quotes_as_literals: input_type.is_ai(),
+                            },
+                            &completion_context,
+                        )
+                        .await
+                        .filter(|s| !s.suggestions.is_empty())
+                    };
+
+                    let suggestions = if force_native_shell_completions {
+                        native_results_fut
+                            .await
+                            .and_then(native_results_to_suggestions)
+                    } else if prefer_native_shell_completions {
+                        match native_results_fut
+                            .with_timeout(NATIVE_SHELL_COMPLETIONS_TIMEOUT)
+                            .await
+                        {
+                            Ok(Some(results)) => {
+                                native_results_to_suggestions(results)
+                                    .or(warp_suggestions_fut.await)
                             }
-                        }),
+                            _ => warp_suggestions_fut.await,
+                        }
+                    } else {
+                        let warp_suggestions = warp_suggestions_fut.await;
+                        match warp_suggestions {
+                            Some(s) => Some(s),
+                            _ => native_results_fut
+                                .await
+                                .and_then(native_results_to_suggestions),
+                        }
                     };
 
                     (suggestions, completions_trigger, editor_snapshot)
