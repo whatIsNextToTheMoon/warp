@@ -13,6 +13,9 @@ permissions:
 jobs:
   analyze:
     name: Analyze feature flags
+    # This upstream automation uses Namespace runners that are not available in
+    # this fork, so scheduled runs can stay queued forever here.
+    if: github.repository == 'warpdotdev/warp'
     runs-on: namespace-profile-ubuntu-small
     permissions:
       contents: read

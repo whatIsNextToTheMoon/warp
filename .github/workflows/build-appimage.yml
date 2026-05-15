@@ -12,6 +12,13 @@ permissions:
   # GitHub Release assets and prune old releases).
   contents: write
 
+concurrency:
+  # Only keep the newest AppImage/Arch packaging run per branch. If GitHub
+  # leaves an older run queued/stuck, later pushes should supersede it instead
+  # of stacking more release builds.
+  group: build-appimage-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   appimage:
     runs-on: ubuntu-22.04
