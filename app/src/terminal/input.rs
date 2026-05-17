@@ -10866,9 +10866,19 @@ impl Input {
                 || force_native_shell_completions
                 || prefer_native_shell_completions);
 
+        // When Tab is backed by native shell completions, only fall back to Warp's filepath
+        // completer if the user is editing a non-empty token. For commands like `man `, zsh may
+        // legitimately return no native matches for the empty argument; falling back to file paths
+        // there incorrectly shows `./` entries instead of preserving the command-specific shell
+        // completion behavior. Once the user types a prefix (`man te`), fallback remains useful.
+        let is_completing_empty_argument = before_cursor_text
+            .chars()
+            .next_back()
+            .is_some_and(char::is_whitespace);
         let fallback_strategy = match completions_trigger {
             CompletionsTrigger::Keybinding
-                if !use_native_shell_completions || prefer_native_shell_completions =>
+                if !use_native_shell_completions
+                    || (prefer_native_shell_completions && !is_completing_empty_argument) =>
             {
                 CompletionsFallbackStrategy::FilePaths
             }
