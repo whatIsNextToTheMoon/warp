@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use warp_completer::completer::{Match, MatchedSuggestion, Suggestion, SuggestionType};
 
 /// The completions data coming from the shell.
@@ -67,15 +69,29 @@ impl From<ShellData> for Vec<ShellCompletion> {
     fn from(shell_data: ShellData) -> Self {
         match shell_data {
             // TODO(suraj): Determine the correct parsing strategy for raw shell completion data.
-            ShellData::Raw { output } => output
-                .split_whitespace()
-                .map(|name| ShellCompletion::new(name.into()))
-                .collect(),
+            ShellData::Raw { output } => {
+                let mut seen = HashSet::new();
+                output
+                    .split_whitespace()
+                    .filter(|name| seen.insert((*name).to_string()))
+                    .map(|name| ShellCompletion::new(name.into()))
+                    .collect()
+            }
             ShellData::IncrementallyTyped { mut output } => {
                 // TODO: we need to get metadata from the shell about how the results
                 // should be sorted (intra- and inter-groups).
                 output.sort_by(|a, b| a.name.cmp(&b.name));
+
+                // zsh can emit the same completion from multiple compadd calls/groups
+                // (for example when our capture widget invokes completion twice to
+                // force all matches). Regular zsh UI coalesces these, so do the same
+                // before handing results to Warp's completion menu. Keep the first
+                // description we saw for a given candidate.
+                let mut seen = HashSet::new();
                 output
+                    .into_iter()
+                    .filter(|completion| seen.insert(completion.name.clone()))
+                    .collect()
             }
         }
     }
