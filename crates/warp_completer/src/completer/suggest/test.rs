@@ -1202,6 +1202,40 @@ pub fn test_ls() {
     );
 }
 
+#[test]
+pub fn test_file_path_only_keeps_directory_token_context() {
+    let pwd = TypedPathBuf::from(TEST_WORK_DIR);
+    let home_dir = pwd.join("home/hentaku");
+    let deeplx_dir = home_dir.join("go/src/deeplx/");
+    let path_ctx = MockPathCompletionContext::new(pwd.clone())
+        .with_home_directory(home_dir.to_string_lossy().to_string())
+        .with_entries_in_pwd([
+            EngineDirEntry::test_file("AGENTS.md"),
+            EngineDirEntry::test_file("BUGFIX_LOG.md"),
+        ])
+        .with_entries(
+            deeplx_dir,
+            [
+                EngineDirEntry::test_file("apis.txt"),
+                EngineDirEntry::test_file("Dockerfile"),
+                EngineDirEntry::test_file("go.mod"),
+                EngineDirEntry::test_file("main.go"),
+                EngineDirEntry::test_file("README.md"),
+            ],
+        );
+    let ctx = FakeCompletionContext::new(CommandRegistry::default())
+        .with_path_completion_context(path_ctx);
+
+    assert_eq!(
+        complete_at_end_of_line_file_path_only("cat ~/go/src/deeplx/", &ctx),
+        vec!["apis.txt", "Dockerfile", "go.mod", "main.go", "README.md"]
+    );
+    assert_eq!(
+        complete_replacement_span("cat ~/go/src/deeplx/", &ctx),
+        Some(Span::new(4, "cat ~/go/src/deeplx/".len()))
+    );
+}
+
 #[cfg(not(feature = "v2"))]
 #[test]
 pub fn test_mv() {

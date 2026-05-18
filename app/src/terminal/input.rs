@@ -490,6 +490,39 @@ const HISTORY_DETAILS_VIEW_WIDTH_REQUIREMENT: f32 = 1100.;
 const MIN_BUFFER_LEN_TO_SHOW_COMPLETIONS_WHILE_TYPING: usize = 2;
 const NATIVE_SHELL_COMPLETIONS_TIMEOUT: Duration = Duration::from_millis(750);
 
+fn is_path_like_completion_token(token: &str, path_separators: &[char]) -> bool {
+    let starts_with_path_separator = token
+        .chars()
+        .next()
+        .is_some_and(|c| path_separators.contains(&c));
+    let starts_with_home_shorthand = path_separators
+        .iter()
+        .any(|separator| token.starts_with(&format!("~{separator}")));
+    let starts_with_home_env = path_separators
+        .iter()
+        .any(|separator| token.starts_with(&format!("$HOME{separator}")));
+    let starts_with_dot_path = path_separators.iter().any(|separator| {
+        token.starts_with(&format!(".{separator}"))
+            || token.starts_with(&format!("..{separator}"))
+    });
+    let starts_with_windows_drive = token.len() >= 3
+        && token.as_bytes()[1] == b':'
+        && token
+            .chars()
+            .nth(2)
+            .is_some_and(|c| path_separators.contains(&c));
+    let contains_relative_path_separator =
+        token.contains(path_separators) && !token.starts_with('$') && !token.starts_with('~');
+
+    !token.contains("://")
+        && (starts_with_home_shorthand
+            || starts_with_home_env
+            || starts_with_path_separator
+            || starts_with_dot_path
+            || starts_with_windows_drive
+            || contains_relative_path_separator)
+}
+
 const AI_COMMAND_SEARCH_TRIGGER: &str = "#";
 
 /// If the editor buffer matches this prefix, AI input is enabled.
@@ -10856,11 +10889,26 @@ impl Input {
 
         // Manual Tab completion should respect the shell's own completion stack (for example,
         // zsh-provided completions such as `man` flags) before falling back to Warp's specs.
-        // Keep as-you-type completions on the Warp path to avoid running shell completion hooks on
-        // every keystroke.
-        let prefer_native_shell_completions =
-            completions_trigger == CompletionsTrigger::Keybinding && !input_type.is_ai();
+        // Path-like tokens are an exception: Warp's path completer keeps the directory token
+        // context stable, while captured native shell path results can collapse to the directory
+        // itself (for example `~/go/src/deeplx/`) or fall back to the current working directory.
+        // Keep as-you-type completions on the Warp path to avoid running shell completion hooks
+        // on every keystroke.
+        let cursor_position = cursor_position.as_usize();
+        let path_separators = self.path_separators(ctx);
+        let current_completion_token = buffer_text[0..cursor_position]
+            .rfind(char::is_whitespace)
+            .map(|pos| &buffer_text[pos + 1..cursor_position])
+            .unwrap_or(&buffer_text[0..cursor_position]);
+        let is_completing_path_like_token =
+            is_path_like_completion_token(current_completion_token, path_separators.all);
+        let prefer_native_shell_completions = completions_trigger == CompletionsTrigger::Keybinding
+            && !input_type.is_ai()
+            && !is_completing_path_like_token;
 
+        // Leave the ForceNativeShellCompletions preference and feature-flagged native shell
+        // completions untouched. The path-like-token override below only applies to the manual
+        // Tab path where this branch would otherwise force native completions.
         let use_native_shell_completions = supports_native_shell_completions
             && (FeatureFlag::NativeShellCompletions.is_enabled()
                 || force_native_shell_completions
@@ -10882,6 +10930,7 @@ impl Input {
             {
                 CompletionsFallbackStrategy::FilePaths
             }
+            _ if is_completing_path_like_token => CompletionsFallbackStrategy::FilePaths,
             _ => CompletionsFallbackStrategy::None,
         };
 
@@ -10907,7 +10956,6 @@ impl Input {
             sessions.get_env_vars_for_session(session_id)
         });
 
-        let cursor_position = cursor_position.as_usize();
         let native_results_fut = if use_native_shell_completions {
             // If we're using native shell completions, construct a future that
             // will be resolved with any completions data provided by the shell.
@@ -10962,7 +11010,8 @@ impl Input {
                             CompleterOptions {
                                 match_strategy: matcher,
                                 fallback_strategy,
-                                suggest_file_path_completions_only: input_type.is_ai(),
+                                suggest_file_path_completions_only: input_type.is_ai()
+                                    || is_completing_path_like_token,
                                 parse_quotes_as_literals: input_type.is_ai(),
                             },
                             &completion_context,
