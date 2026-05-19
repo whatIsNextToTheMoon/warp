@@ -155,6 +155,18 @@ struct ScrollVelocity {
     last_update: Instant,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ImeMarkedTextState {
+    text: String,
+    selected_range: Range<usize>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ImePositionRefresh {
+    NotNeeded,
+    AfterNextFrame,
+}
+
 /// The set of state we need to track per-window across frames.
 struct WindowState {
     /// The UI framework's identifier for the window in question (not to be
@@ -189,6 +201,13 @@ struct WindowState {
     /// Tracks scroll velocity during active touch scrolling and momentum scrolling.
     /// Active phase determined through `momentum_scroll_abort.is_some()`.
     scroll_velocity: Option<ScrollVelocity>,
+    /// Last IME preedit text sent to the app for this window.
+    ///
+    /// Wayland/fcitx can resend identical preedit cleanup/update events many
+    /// times while a candidate window is open. Tracking the state here lets us
+    /// drop no-op SetMarkedText/ClearMarkedText events before they fan out
+    /// through the view tree and flood logs / redraws.
+    ime_marked_text: Option<ImeMarkedTextState>,
     /// Abort handle for momentum scrolling timer. Present only during the momentum phase.
     momentum_scroll_abort: Option<AbortHandle>,
     /// For touch events, stores whether soft keyboard was requested during LeftMouseDown.
@@ -212,6 +231,7 @@ impl WindowState {
             has_pending_drag_drop_timer: false,
             last_touch_purpose: None,
             scroll_velocity: None,
+            ime_marked_text: None,
             momentum_scroll_abort: None,
             #[cfg(target_family = "wasm")]
             pending_soft_keyboard_request: false,
@@ -523,6 +543,7 @@ pub(super) struct EventLoop {
     state: State,
     proxy: EventLoopProxy<CustomEvent>,
     ime_enabled_window_id: Option<WinitWindowId>,
+    ime_position_refresh: ImePositionRefresh,
     /// Whether to downrank non-NVIDIA vulkan adapters. This is set to true when we detect a DRI3
     /// error that occurs when trying to present against a non-NVIDIA Vulkan adapter when the
     /// PRIME Profile is set to "Performance" mode.  It's not fully clear why this error occurs. Our
@@ -552,6 +573,7 @@ impl EventLoop {
             state: Default::default(),
             proxy,
             ime_enabled_window_id: None,
+            ime_position_refresh: ImePositionRefresh::NotNeeded,
             downrank_non_nvidia_vulkan_adapters: false,
             #[cfg(target_family = "wasm")]
             soft_keyboard_manager: None,
@@ -1040,7 +1062,19 @@ impl EventLoop {
         })();
 
         match render_result {
-            Ok(_) => self.callbacks.for_window(window).frame_drawn(),
+            Ok(_) => {
+                self.callbacks.for_window(window).frame_drawn();
+                if self.ime_enabled_window_id.is_some()
+                    && self.ime_position_refresh == ImePositionRefresh::AfterNextFrame
+                {
+                    // IME preedit changes invalidate terminal/editor layouts before
+                    // the new cursor rect exists in the position cache. Refresh the
+                    // platform IME rectangle after the frame has rebuilt the scene so
+                    // fcitx/IBus candidate windows don't anchor to a stale rect.
+                    self.ime_position_refresh = ImePositionRefresh::NotNeeded;
+                    self.update_ime_position();
+                }
+            }
             Err(err) => {
                 log::warn!("Failed to render frame: {err:#}");
                 self.callbacks.for_window(window).frame_failed_to_draw();
@@ -1508,6 +1542,7 @@ impl EventLoop {
 
         if self.ime_enabled_window_id == Some(winit_window_id) {
             self.ime_enabled_window_id = None;
+            self.ime_position_refresh = ImePositionRefresh::NotNeeded;
         }
 
         self.callbacks.window_will_close(window_id)
@@ -1533,6 +1568,9 @@ impl EventLoop {
         match event {
             winit::event::Ime::Enabled => {
                 self.ime_enabled_window_id = Some(winit_window_id);
+                if let Some(window_state) = self.state.windows.get_mut(&winit_window_id) {
+                    window_state.ime_marked_text = None;
+                }
                 self.ui_app
                     .update(|ctx| ctx.report_active_cursor_position_update());
             }
@@ -1553,7 +1591,10 @@ impl EventLoop {
 
                 let mut window_callbacks = self.callbacks.for_window(window.as_ref());
                 if preedit_text.is_empty() {
-                    window_callbacks.dispatch_event(ClearMarkedText);
+                    if window_state.ime_marked_text.take().is_some() {
+                        window_callbacks.dispatch_event(ClearMarkedText);
+                        self.ime_position_refresh = ImePositionRefresh::AfterNextFrame;
+                    }
                     return;
                 }
 
@@ -1568,10 +1609,19 @@ impl EventLoop {
                         )
                     })
                     .unwrap_or(0..0);
-                window_callbacks.dispatch_event(SetMarkedText {
-                    marked_text: preedit_text,
+                let marked_text_state = ImeMarkedTextState {
+                    text: preedit_text,
                     selected_range,
+                };
+                if window_state.ime_marked_text.as_ref() == Some(&marked_text_state) {
+                    return;
+                }
+                window_state.ime_marked_text = Some(marked_text_state.clone());
+                window_callbacks.dispatch_event(SetMarkedText {
+                    marked_text: marked_text_state.text,
+                    selected_range: marked_text_state.selected_range,
                 });
+                self.ime_position_refresh = ImePositionRefresh::AfterNextFrame;
             }
             winit::event::Ime::Commit(chars) => {
                 let Some(window_state) = self.state.windows.get_mut(&winit_window_id) else {
@@ -1588,12 +1638,16 @@ impl EventLoop {
                 // Clear any visible preedit first. Editor-backed inputs handle
                 // ImeCommit atomically, while legacy terminal-grid inputs still
                 // need the explicit clear before inserting committed text.
-                window_callbacks.dispatch_event(ClearMarkedText);
+                if window_state.ime_marked_text.take().is_some() {
+                    window_callbacks.dispatch_event(ClearMarkedText);
+                    self.ime_position_refresh = ImePositionRefresh::AfterNextFrame;
+                }
                 window_callbacks.dispatch_event(ImeCommit { text: chars });
             }
             winit::event::Ime::Disabled => {
                 if self.ime_enabled_window_id == Some(winit_window_id) {
                     self.ime_enabled_window_id = None;
+                    self.ime_position_refresh = ImePositionRefresh::NotNeeded;
                 }
 
                 let Some(window_state) = self.state.windows.get_mut(&winit_window_id) else {
@@ -1606,9 +1660,12 @@ impl EventLoop {
                     return;
                 };
 
-                self.callbacks
-                    .for_window(window.as_ref())
-                    .dispatch_event(ClearMarkedText);
+                if window_state.ime_marked_text.take().is_some() {
+                    self.callbacks
+                        .for_window(window.as_ref())
+                        .dispatch_event(ClearMarkedText);
+                    self.ime_position_refresh = ImePositionRefresh::AfterNextFrame;
+                }
             }
         };
     }

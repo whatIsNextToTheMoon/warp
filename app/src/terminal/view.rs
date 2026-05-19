@@ -7861,20 +7861,22 @@ impl TerminalView {
         ctx: &mut ViewContext<Self>,
     ) {
         if FeatureFlag::ImeMarkedText.is_enabled() {
-            self.model
-                .lock()
-                .set_marked_text(marked_text, selected_range);
-            ctx.report_active_cursor_position_update();
-            ctx.notify();
+            if self.model.lock().set_marked_text(marked_text, selected_range) {
+                ctx.report_active_cursor_position_update();
+                ctx.notify();
+            }
             return;
         }
 
         if self.should_route_ime_to_pty(ctx) {
-            self.model
+            if self
+                .model
                 .lock()
-                .set_pty_ime_marked_text(marked_text, selected_range);
-            ctx.report_active_cursor_position_update();
-            ctx.notify();
+                .set_pty_ime_marked_text(marked_text, selected_range)
+            {
+                ctx.report_active_cursor_position_update();
+                ctx.notify();
+            }
             return;
         }
 
@@ -7899,16 +7901,18 @@ impl TerminalView {
 
     fn clear_marked_text_on_terminal(&mut self, ctx: &mut ViewContext<Self>) {
         if FeatureFlag::ImeMarkedText.is_enabled() {
-            self.model.lock().clear_marked_text();
-            ctx.report_active_cursor_position_update();
-            ctx.notify();
+            if self.model.lock().clear_marked_text() {
+                ctx.report_active_cursor_position_update();
+                ctx.notify();
+            }
             return;
         }
 
         if self.should_route_ime_to_pty(ctx) {
-            self.model.lock().clear_pty_ime_marked_text();
-            ctx.report_active_cursor_position_update();
-            ctx.notify();
+            if self.model.lock().clear_pty_ime_marked_text() {
+                ctx.report_active_cursor_position_update();
+                ctx.notify();
+            }
             return;
         }
 
@@ -7923,17 +7927,19 @@ impl TerminalView {
 
     fn ime_commit_on_terminal(&mut self, text: &str, ctx: &mut ViewContext<Self>) {
         if FeatureFlag::ImeMarkedText.is_enabled() {
-            self.model.lock().clear_marked_text();
-            ctx.report_active_cursor_position_update();
-            ctx.notify();
+            if self.model.lock().clear_marked_text() {
+                ctx.report_active_cursor_position_update();
+                ctx.notify();
+            }
             self.typed_characters_on_terminal(text, ctx);
             return;
         }
 
         if self.should_route_ime_to_pty(ctx) {
-            self.model.lock().clear_pty_ime_marked_text();
-            ctx.report_active_cursor_position_update();
-            ctx.notify();
+            if self.model.lock().clear_pty_ime_marked_text() {
+                ctx.report_active_cursor_position_update();
+                ctx.notify();
+            }
             self.typed_characters_on_terminal(text, ctx);
             return;
         }

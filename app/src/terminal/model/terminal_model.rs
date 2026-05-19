@@ -2359,25 +2359,29 @@ impl TerminalModel {
         delegate!(self.needs_bracketed_paste())
     }
 
-    pub fn set_marked_text(&mut self, marked_text: &str, selected_range: &Range<usize>) {
+    pub fn set_marked_text(&mut self, marked_text: &str, selected_range: &Range<usize>) -> bool {
         if !FeatureFlag::ImeMarkedText.is_enabled() {
-            return;
+            return false;
         }
         delegate!(self.set_marked_text(marked_text, selected_range))
     }
 
-    pub fn clear_marked_text(&mut self) {
+    pub fn clear_marked_text(&mut self) -> bool {
         if !FeatureFlag::ImeMarkedText.is_enabled() {
-            return;
+            return false;
         }
         delegate!(self.clear_marked_text())
     }
 
-    pub fn set_pty_ime_marked_text(&mut self, marked_text: &str, selected_range: &Range<usize>) {
+    pub fn set_pty_ime_marked_text(
+        &mut self,
+        marked_text: &str,
+        selected_range: &Range<usize>,
+    ) -> bool {
         delegate!(self.set_marked_text(marked_text, selected_range))
     }
 
-    pub fn clear_pty_ime_marked_text(&mut self) {
+    pub fn clear_pty_ime_marked_text(&mut self) -> bool {
         delegate!(self.clear_marked_text())
     }
 }

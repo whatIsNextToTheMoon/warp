@@ -3288,22 +3288,22 @@ impl BlockList {
         &mut self,
         marked_text: &str,
         selected_range: &Range<usize>,
-    ) {
+    ) -> bool {
         let active_block = self.active_block_mut();
         if !active_block.is_active_and_long_running() {
             log::warn!("Tried to set marked text on blocklist while no block was active");
-            return;
+            return false;
         }
-        active_block.set_marked_text(marked_text, selected_range);
+        active_block.set_marked_text(marked_text, selected_range)
     }
 
-    pub(in crate::terminal) fn clear_marked_text(&mut self) {
+    pub(in crate::terminal) fn clear_marked_text(&mut self) -> bool {
         let active_block = self.active_block_mut();
         if !active_block.is_active_and_long_running() {
             log::warn!("Tried to clear marked text on blocklist while no block was active");
-            return;
+            return false;
         }
-        active_block.clear_marked_text();
+        active_block.clear_marked_text()
     }
 
     pub fn last_non_hidden_ai_block_handle(&self, app: &AppContext) -> Option<ViewHandle<AIBlock>> {

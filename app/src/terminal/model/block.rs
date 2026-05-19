@@ -2862,21 +2862,25 @@ impl Block {
         self.last_painted_at.borrow_mut().replace(last_painted_at);
     }
 
-    pub(super) fn set_marked_text(&mut self, marked_text: &str, selected_range: &Range<usize>) {
+    pub(super) fn set_marked_text(
+        &mut self,
+        marked_text: &str,
+        selected_range: &Range<usize>,
+    ) -> bool {
         if self.state != BlockState::Executing {
             log::warn!("Tried to set marked text on block when block was not executing");
-            return;
+            return false;
         }
         self.output_grid
-            .set_marked_text(marked_text, selected_range);
+            .set_marked_text(marked_text, selected_range)
     }
 
-    pub(super) fn clear_marked_text(&mut self) {
+    pub(super) fn clear_marked_text(&mut self) -> bool {
         if self.state != BlockState::Executing {
             log::warn!("Tried to clear marked text on block when block was not executing");
-            return;
+            return false;
         }
-        self.output_grid.clear_marked_text();
+        self.output_grid.clear_marked_text()
     }
 
     pub(in crate::terminal) fn output_grid_ime_popup_cursor_origin(

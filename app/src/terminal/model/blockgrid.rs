@@ -697,13 +697,17 @@ impl BlockGrid {
         self.grid_handler.ansi_handler()
     }
 
-    pub(super) fn set_marked_text(&mut self, marked_text: &str, selected_range: &Range<usize>) {
+    pub(super) fn set_marked_text(
+        &mut self,
+        marked_text: &str,
+        selected_range: &Range<usize>,
+    ) -> bool {
         self.grid_handler
-            .set_marked_text(marked_text, selected_range);
+            .set_marked_text(marked_text, selected_range)
     }
 
-    pub(super) fn clear_marked_text(&mut self) {
-        self.grid_handler.clear_marked_text();
+    pub(super) fn clear_marked_text(&mut self) -> bool {
+        self.grid_handler.clear_marked_text()
     }
 
     pub(in crate::terminal) fn cursor_point_for_ime_popup(&self) -> Point {

@@ -2524,12 +2524,16 @@ impl GridHandler {
         self.on_finish_byte_processing(&ansi::ProcessorInput::new(&[]));
     }
 
-    pub fn set_marked_text(&mut self, marked_text: &str, _selected_range: &Range<usize>) {
-        self.marked_text = Some(marked_text.to_string())
+    pub fn set_marked_text(&mut self, marked_text: &str, _selected_range: &Range<usize>) -> bool {
+        if self.marked_text.as_deref() == Some(marked_text) {
+            return false;
+        }
+        self.marked_text = Some(marked_text.to_string());
+        true
     }
 
-    pub fn clear_marked_text(&mut self) {
-        self.marked_text = None;
+    pub fn clear_marked_text(&mut self) -> bool {
+        self.marked_text.take().is_some()
     }
 
     pub fn marked_text(&self) -> Option<&str> {
