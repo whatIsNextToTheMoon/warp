@@ -1228,6 +1228,21 @@ impl EditorModel {
         ctx: &mut ModelContext<Self>,
     ) {
         let marked_text_state = self.marked_text_state(ctx);
+        if let MarkedTextState::Active {
+            selected_range: active_selected_range,
+        } = &marked_text_state
+        {
+            let selected_text_strings = self.selected_text_strings(ctx);
+            if active_selected_range == selected_range
+                && !selected_text_strings.is_empty()
+                && selected_text_strings
+                    .iter()
+                    .all(|selected_text| selected_text == text)
+            {
+                return;
+            }
+        }
+
         // If there was no marked text before, then we should replace each selection with blank text.
         if marked_text_state == MarkedTextState::Inactive {
             self.insert_internal("", None, SelectionInsertion::No, ctx);

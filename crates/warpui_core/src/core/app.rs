@@ -80,6 +80,17 @@ lazy_static! {
     static ref LAST_USER_ACTION_UNIX_TIMESTAMP: AtomicI64 = AtomicI64::new(0);
 }
 
+fn typed_action_log_level(action_debug: &str, default_level: log::Level) -> log::Level {
+    if action_debug.contains("SetMarkedText")
+        || action_debug.contains("ClearMarkedText")
+        || action_debug.contains("ImeCommit")
+    {
+        log::Level::Trace
+    } else {
+        default_level
+    }
+}
+
 #[derive(Clone)]
 pub struct App(Rc<RefCell<AppContext>>);
 
@@ -1470,11 +1481,17 @@ impl AppContext {
         action: &dyn Action,
         log_level: log::Level,
     ) -> bool {
-        log::log!(
-            log_level,
-            "dispatching typed action: {}::{action:?}",
-            action.type_name()
-        );
+        if log::log_enabled!(log_level) {
+            let action_debug = format!("{action:?}");
+            let log_level = typed_action_log_level(&action_debug, log_level);
+            if log::log_enabled!(log_level) {
+                log::log!(
+                    log_level,
+                    "dispatching typed action: {}::{action_debug}",
+                    action.type_name()
+                );
+            }
+        }
 
         let action_type: ActionType = action.into();
         // If there are no handlers registered for the given action, then we can return early
@@ -3536,16 +3553,24 @@ impl AppContext {
         window_id: WindowId,
         presenter: Rc<RefCell<Presenter>>,
     ) -> crate::windowing::EventDispatchResult {
+        let is_passive_event = matches!(
+            &event,
+            Event::MouseMoved { .. } | Event::ScrollWheel { .. }
+        );
+        if !is_passive_event {
+            App::record_last_active_timestamp();
+        }
+
         let log_level = match &event {
             // If the action comes from the MouseMoved or ScrollWheel events,
             // dispatch it at the `trace` log level so it doesn't clutter the
             // logs by default.
-            Event::MouseMoved { .. } | Event::ScrollWheel { .. } => log::Level::Trace,
-            _ => {
-                // Update last user action timestamp for non-hover events
-                App::record_last_active_timestamp();
-                log::Level::Info
-            }
+            Event::MouseMoved { .. }
+            | Event::ScrollWheel { .. }
+            | Event::SetMarkedText { .. }
+            | Event::ClearMarkedText
+            | Event::ImeCommit { .. } => log::Level::Trace,
+            _ => log::Level::Info,
         };
         let dispatch_result = presenter.borrow_mut().dispatch_event(event, self);
 

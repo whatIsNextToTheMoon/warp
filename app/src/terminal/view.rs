@@ -436,7 +436,7 @@ use crate::banner::{
     DismissalType,
 };
 use crate::debounce::debounce;
-use crate::editor::{AutosuggestionType, CrdtOperation, EditorAction};
+use crate::editor::{position_id_for_cursor, AutosuggestionType, CrdtOperation, EditorAction};
 use crate::features::FeatureFlag;
 use crate::pane_group::SplitPaneState;
 use crate::pane_group::{
@@ -7854,6 +7854,31 @@ impl TerminalView {
             && !CLIAgentSessionsModel::as_ref(ctx).is_input_open(self.view_id)
     }
 
+    fn should_anchor_ime_to_input_editor(&self, ctx: &AppContext) -> bool {
+        if FeatureFlag::ImeMarkedText.is_enabled() {
+            return false;
+        }
+
+        let cli_agent_input_open = CLIAgentSessionsModel::as_ref(ctx).is_input_open(self.view_id);
+        if cli_agent_input_open || self.ai_input_model.as_ref(ctx).is_ai_input_enabled() {
+            return true;
+        }
+
+        let model = self.model.lock();
+        let active_block_started = model.block_list().active_block().started();
+        let should_write_to_pty = active_block_started
+            && (self.sessions.as_ref(ctx).has_pending_or_bootstrapped_session()
+                || model.shared_session_status().is_executor());
+
+        !should_write_to_pty
+    }
+
+    fn report_input_editor_ime_cursor_position(&self, ctx: &mut ViewContext<Self>) {
+        if self.should_anchor_ime_to_input_editor(ctx) {
+            ctx.report_active_cursor_position_update();
+        }
+    }
+
     fn set_marked_text_on_terminal(
         &mut self,
         marked_text: &str,
@@ -7896,6 +7921,7 @@ impl TerminalView {
                     );
                 });
             });
+            self.report_input_editor_ime_cursor_position(ctx);
         }
     }
 
@@ -7922,6 +7948,7 @@ impl TerminalView {
                     editor.handle_action(&EditorAction::ClearMarkedText, ctx);
                 });
             });
+            self.report_input_editor_ime_cursor_position(ctx);
         }
     }
 
@@ -7950,6 +7977,7 @@ impl TerminalView {
                     editor.handle_action(&EditorAction::ImeCommit(UserInput::new(text)), ctx);
                 });
             });
+            self.report_input_editor_ime_cursor_position(ctx);
         } else {
             self.typed_characters_on_terminal(text, ctx);
         }
@@ -26841,10 +26869,22 @@ impl View for TerminalView {
     }
 
     fn active_cursor_position(&self, ctx: &ViewContext<Self>) -> Option<CursorInfo> {
-        let cursor_id = self.cursor_position_id();
         let appearance = Appearance::as_ref(ctx);
         let font_size = appearance.monospace_font_size();
 
+        if self.should_anchor_ime_to_input_editor(ctx) {
+            if let Some(input) = self.input.try_as_ref(ctx) {
+                let cursor_id = position_id_for_cursor(input.editor().id());
+                if let Some(position) = ctx.element_position_by_id(cursor_id) {
+                    return Some(CursorInfo {
+                        position,
+                        font_size,
+                    });
+                }
+            }
+        }
+
+        let cursor_id = self.cursor_position_id();
         ctx.element_position_by_id(cursor_id)
             .map(|position| CursorInfo {
                 position,

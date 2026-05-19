@@ -62,6 +62,14 @@ const MULTI_CLICK_INTERVAL: Duration = Duration::from_millis(400);
 /// This timeout ensures all files in a multi-file drag operation are batched together efficiently.
 const DRAG_DROP_DEBOUNCE_TIMEOUT: Duration = Duration::from_millis(50);
 
+/// IME preedit cleanup can become an event storm on Wayland/fcitx when focus
+/// or candidate-window state flickers. Normal typing is far below this limit;
+/// crossing it means the compositor/input-method path is wedged and we should
+/// stop fanning repeated cleanup events through the whole view tree.
+const IME_MARKED_TEXT_STORM_WINDOW: Duration = Duration::from_secs(1);
+const IME_MARKED_TEXT_STORM_LIMIT: usize = 240;
+const IME_MARKED_TEXT_STORM_WARN_INTERVAL: Duration = Duration::from_secs(10);
+
 /// Distance (in logical pixels) before a touch input is considered a drag. Flutter uses 18.
 const MAX_TAP_DISTANCE: f64 = 18.;
 
@@ -167,6 +175,64 @@ enum ImePositionRefresh {
     AfterNextFrame,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ImeMarkedTextEventKind {
+    Set,
+    Clear,
+}
+
+#[derive(Debug, Clone)]
+struct ImeMarkedTextStormGuard {
+    window_started_at: Instant,
+    event_count: usize,
+    last_warning_at: Option<Instant>,
+}
+
+impl ImeMarkedTextStormGuard {
+    fn new(now: Instant) -> Self {
+        Self {
+            window_started_at: now,
+            event_count: 0,
+            last_warning_at: None,
+        }
+    }
+
+    fn reset(&mut self, now: Instant) {
+        self.window_started_at = now;
+        self.event_count = 0;
+        self.last_warning_at = None;
+    }
+
+    fn should_dispatch(&mut self, kind: ImeMarkedTextEventKind, now: Instant) -> bool {
+        if now.duration_since(self.window_started_at) >= IME_MARKED_TEXT_STORM_WINDOW {
+            self.reset(now);
+        }
+
+        self.event_count += 1;
+        if self.event_count <= IME_MARKED_TEXT_STORM_LIMIT {
+            return true;
+        }
+
+        if self
+            .last_warning_at
+            .is_none_or(|last_warning_at| {
+                now.duration_since(last_warning_at) >= IME_MARKED_TEXT_STORM_WARN_INTERVAL
+            })
+        {
+            self.last_warning_at = Some(now);
+            log::warn!(
+                "Suppressing repeated IME marked-text cleanup events after {} events in {:?}",
+                self.event_count,
+                IME_MARKED_TEXT_STORM_WINDOW
+            );
+        }
+
+        // Do not drop Set events: losing the current preedit text is worse than
+        // a redraw. The storm we observed is dominated by ClearMarkedText.
+        !matches!(kind, ImeMarkedTextEventKind::Clear)
+    }
+}
+
 /// The set of state we need to track per-window across frames.
 struct WindowState {
     /// The UI framework's identifier for the window in question (not to be
@@ -208,6 +274,7 @@ struct WindowState {
     /// drop no-op SetMarkedText/ClearMarkedText events before they fan out
     /// through the view tree and flood logs / redraws.
     ime_marked_text: Option<ImeMarkedTextState>,
+    ime_marked_text_storm_guard: ImeMarkedTextStormGuard,
     /// Abort handle for momentum scrolling timer. Present only during the momentum phase.
     momentum_scroll_abort: Option<AbortHandle>,
     /// For touch events, stores whether soft keyboard was requested during LeftMouseDown.
@@ -232,6 +299,7 @@ impl WindowState {
             last_touch_purpose: None,
             scroll_velocity: None,
             ime_marked_text: None,
+            ime_marked_text_storm_guard: ImeMarkedTextStormGuard::new(Instant::now()),
             momentum_scroll_abort: None,
             #[cfg(target_family = "wasm")]
             pending_soft_keyboard_request: false,
@@ -1570,6 +1638,7 @@ impl EventLoop {
                 self.ime_enabled_window_id = Some(winit_window_id);
                 if let Some(window_state) = self.state.windows.get_mut(&winit_window_id) {
                     window_state.ime_marked_text = None;
+                    window_state.ime_marked_text_storm_guard.reset(Instant::now());
                 }
                 self.ui_app
                     .update(|ctx| ctx.report_active_cursor_position_update());
@@ -1591,7 +1660,11 @@ impl EventLoop {
 
                 let mut window_callbacks = self.callbacks.for_window(window.as_ref());
                 if preedit_text.is_empty() {
-                    if window_state.ime_marked_text.take().is_some() {
+                    if window_state.ime_marked_text.take().is_some()
+                        && window_state
+                            .ime_marked_text_storm_guard
+                            .should_dispatch(ImeMarkedTextEventKind::Clear, Instant::now())
+                    {
                         window_callbacks.dispatch_event(ClearMarkedText);
                         self.ime_position_refresh = ImePositionRefresh::AfterNextFrame;
                     }
@@ -1617,11 +1690,16 @@ impl EventLoop {
                     return;
                 }
                 window_state.ime_marked_text = Some(marked_text_state.clone());
-                window_callbacks.dispatch_event(SetMarkedText {
-                    marked_text: marked_text_state.text,
-                    selected_range: marked_text_state.selected_range,
-                });
-                self.ime_position_refresh = ImePositionRefresh::AfterNextFrame;
+                if window_state
+                    .ime_marked_text_storm_guard
+                    .should_dispatch(ImeMarkedTextEventKind::Set, Instant::now())
+                {
+                    window_callbacks.dispatch_event(SetMarkedText {
+                        marked_text: marked_text_state.text,
+                        selected_range: marked_text_state.selected_range,
+                    });
+                    self.ime_position_refresh = ImePositionRefresh::AfterNextFrame;
+                }
             }
             winit::event::Ime::Commit(chars) => {
                 let Some(window_state) = self.state.windows.get_mut(&winit_window_id) else {
@@ -1638,7 +1716,11 @@ impl EventLoop {
                 // Clear any visible preedit first. Editor-backed inputs handle
                 // ImeCommit atomically, while legacy terminal-grid inputs still
                 // need the explicit clear before inserting committed text.
-                if window_state.ime_marked_text.take().is_some() {
+                if window_state.ime_marked_text.take().is_some()
+                    && window_state
+                        .ime_marked_text_storm_guard
+                        .should_dispatch(ImeMarkedTextEventKind::Clear, Instant::now())
+                {
                     window_callbacks.dispatch_event(ClearMarkedText);
                     self.ime_position_refresh = ImePositionRefresh::AfterNextFrame;
                 }
@@ -1660,7 +1742,11 @@ impl EventLoop {
                     return;
                 };
 
-                if window_state.ime_marked_text.take().is_some() {
+                if window_state.ime_marked_text.take().is_some()
+                    && window_state
+                        .ime_marked_text_storm_guard
+                        .should_dispatch(ImeMarkedTextEventKind::Clear, Instant::now())
+                {
                     self.callbacks
                         .for_window(window.as_ref())
                         .dispatch_event(ClearMarkedText);
@@ -1890,15 +1976,16 @@ impl EventLoop {
         let active_cursor_position = window_callbacks.get_active_cursor_position();
         if let Some(active_cursor_position) = active_cursor_position {
             let winit_window = downcast_window(window.as_ref());
-            let position = LogicalPosition::new(
-                active_cursor_position.position.origin_x(),
-                active_cursor_position.position.origin_y()
-                    + (1.2 * active_cursor_position.font_size),
-            );
+            let cursor_rect = active_cursor_position.position;
+            let position =
+                LogicalPosition::new(cursor_rect.origin_x(), cursor_rect.origin_y());
             // Currently the size argument is not supported on X11. We calculate it here anyway.
+            // Wayland compositors/fcitx use it as the cursor rectangle and place the candidate
+            // popup around that area. Passing an already-offset point makes the popup drift and
+            // can cover the inline preedit text in Warp's terminal input.
             let size = LogicalSize::new(
-                active_cursor_position.font_size,
-                active_cursor_position.font_size,
+                cursor_rect.width().max(active_cursor_position.font_size),
+                cursor_rect.height().max(active_cursor_position.font_size),
             );
             // TODO(abhishek): We make sure that the position is different than last time to prevent winit from
             // caching the old position and not properly updating on `WindowMoved` or `WindowResized` events.
