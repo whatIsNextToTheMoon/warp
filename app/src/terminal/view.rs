@@ -12894,7 +12894,8 @@ impl TerminalView {
         self.is_login_shell_bootstrapped = true;
         self.hide_slow_bootstrap_banner(ctx);
 
-        let has_local_byo_ai = UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled()
+        let has_local_byo_ai = (UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled(ctx)
+            || FeatureFlag::SoloUserByok.is_enabled())
             && ApiKeyManager::as_ref(ctx).keys().has_any_key();
 
         if self.auth_state.is_anonymous_or_logged_out()

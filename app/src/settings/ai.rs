@@ -1558,7 +1558,8 @@ impl AISettings {
         let is_anonymous_or_logged_out = AuthStateProvider::as_ref(app)
             .get()
             .is_anonymous_or_logged_out();
-        let has_local_byo_ai = UserWorkspaces::as_ref(app).is_byo_api_key_enabled()
+        let has_local_byo_ai = (UserWorkspaces::as_ref(app).is_byo_api_key_enabled(app)
+            || FeatureFlag::SoloUserByok.is_enabled())
             && ApiKeyManager::as_ref(app).keys().has_any_key();
 
         *self.is_any_ai_enabled

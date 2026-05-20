@@ -11,6 +11,7 @@ use warpui::{
 use crate::{
     ai::{blocklist::error_color, AIRequestUsageModel},
     auth::AuthStateProvider,
+    features::FeatureFlag,
     network::NetworkStatus,
     server::ids::ServerId,
     settings::PrivacySettings,
@@ -139,7 +140,8 @@ impl PromptAlertView {
         let request_usage_model = AIRequestUsageModel::as_ref(app);
         let has_requests_remaining = request_usage_model.has_requests_remaining();
         let auth_state = AuthStateProvider::as_ref(app).get();
-        let has_byo_api_key = UserWorkspaces::as_ref(app).is_byo_api_key_enabled()
+        let has_byo_api_key = (UserWorkspaces::as_ref(app).is_byo_api_key_enabled(app)
+            || FeatureFlag::SoloUserByok.is_enabled())
             && ApiKeyManager::as_ref(app).keys().has_any_key();
 
         // Next, if the user is anonymous, we check if they have reached a certain percentage of requests used.

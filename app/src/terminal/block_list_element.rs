@@ -2645,85 +2645,20 @@ impl BlockListElement {
             *grid_origin
         };
 
-        // Update grid_origin and draw command.
-        let command_grid_properties = Properties::default();
-        block.prompt_and_command_grid().draw(
-            command_origin,
-            element_origin,
-            glyphs,
-            COMMAND_ALPHA,
-            highlighted_url
-                .filter(|url| url.is_in_command_content() && url.block_index == block_index)
-                .map(|url| &url.inner),
-            link_tool_tip
-                .filter(|url| url.is_in_command_content() && url.block_index == block_index)
-                .map(|url| &url.inner),
-            hovered_secret,
-            block_list_find_run
-                .map(|run| run.matches_for_block_grid(block_index, GridType::PromptAndCommand)),
-            block_list_find_run
-                .and_then(|run| run.focused_match())
-                .and_then(|focused_match| match focused_match {
-                    BlockListMatch::CommandBlock(m)
-                        if m.block_index == block_index
-                            && m.grid_type == GridType::PromptAndCommand =>
-                    {
-                        Some(&m.range)
-                    }
-                    _ => None,
-                }),
-            command_grid_properties,
-            block_grid_params,
-            cursor_visible.then(|| block.prompt_and_command_grid().cursor_style().shape),
-            image_metadata,
-            ctx,
-            app,
-        );
-
-        // Only render the cursor in the command grid if the command grid is active and if it's
-        // long running. This is to avoid jitter where a cursor just flickers while the pty is
-        // initializing.
-        if block.is_active_and_long_running()
-            && block.is_command_grid_active()
-            // Check if the "hide cursor" escape sequence is present.
-            && block.is_mode_set(TermMode::SHOW_CURSOR)
-        {
-            block.prompt_and_command_grid().draw_cursor(
-                command_origin,
-                &block_grid_params.grid_render_params,
-                ctx,
-                terminal_view_id,
-                None,
-                block_grid_params
-                    .grid_render_params
-                    .warp_theme
-                    .cursor()
-                    .into(),
-                app,
-            );
-        }
-        let active_command_ime_popup_origin =
-            block.is_active_and_long_running()
-                .then(|| {
-                    block.prompt_and_command_grid().ime_popup_cursor_origin(
-                        command_origin,
-                        block_grid_params.grid_render_params.cell_size,
-                        block_grid_params
-                            .grid_render_params
-                            .size_info
-                            .padding_x_px()
-                            .as_f32(),
-                    )
-                })
-                .flatten();
-
-        // Update grid_origin & draw output
-        *grid_origin += vec2f(
-            0.,
-            cell_size_height
-                * (block.padding_middle() + block.prompt_and_command_grid().len().into_lines())
-                    .as_f64() as f32,
-        );
+        let active_command_ime_popup_origin = block
+            .is_active_and_long_running()
+            .then(|| {
+                block.prompt_and_command_grid().ime_popup_cursor_origin(
+                    command_origin,
+                    block_grid_params.grid_render_params.cell_size,
+                    block_grid_params
+                        .grid_render_params
+                        .size_info
+                        .padding_x_px()
+                        .as_f32(),
+                )
+            })
+            .flatten();
 
         let block_middle_lines =
             block.padding_middle() + block.prompt_and_command_number_of_rows().into_lines();
