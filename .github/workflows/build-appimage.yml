@@ -70,7 +70,7 @@ jobs:
           cache-on-failure: true
 
       - name: Install sccache
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@v2.77.1
         with:
           tool: sccache
 
