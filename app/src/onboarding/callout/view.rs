@@ -15,6 +15,7 @@ pub struct OnboardingKeybindings {
     pub toggle_input_mode: String,
     pub submit_to_local_agent: String,
     pub submit_to_cloud_agent: String,
+    pub return_to_terminal_mode: String,
 }
 
 #[derive(Clone, Debug)]
