@@ -175,6 +175,13 @@ enum ImePositionRefresh {
     AfterNextFrame,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct LastImeCursorPosition {
+    position: (f64, f64),
+    size: (f64, f64),
+    updated_at: Instant,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ImeMarkedTextEventKind {
     Set,
@@ -612,6 +619,7 @@ pub(super) struct EventLoop {
     proxy: EventLoopProxy<CustomEvent>,
     ime_enabled_window_id: Option<WinitWindowId>,
     ime_position_refresh: ImePositionRefresh,
+    last_ime_cursor_position: Option<LastImeCursorPosition>,
     /// Whether to downrank non-NVIDIA vulkan adapters. This is set to true when we detect a DRI3
     /// error that occurs when trying to present against a non-NVIDIA Vulkan adapter when the
     /// PRIME Profile is set to "Performance" mode.  It's not fully clear why this error occurs. Our
@@ -642,6 +650,7 @@ impl EventLoop {
             proxy,
             ime_enabled_window_id: None,
             ime_position_refresh: ImePositionRefresh::NotNeeded,
+            last_ime_cursor_position: None,
             downrank_non_nvidia_vulkan_adapters: false,
             #[cfg(target_family = "wasm")]
             soft_keyboard_manager: None,
@@ -861,7 +870,19 @@ impl EventLoop {
             }
             Event::UserEvent(CustomEvent::ActiveCursorPositionUpdated) => {
                 if self.ime_enabled_window_id.is_some() {
-                    self.update_ime_position();
+                    // Cursor rects are cached while building a frame. Queue the
+                    // platform update until after the next render pass so
+                    // fcitx/IBus do not see a stale anchor during preedit.
+                    self.ime_position_refresh = ImePositionRefresh::AfterNextFrame;
+                    self.ui_app.update(|ctx| {
+                        let Some(window_id) = ctx.windows().active_window() else {
+                            return;
+                        };
+                        let Some(window) = ctx.windows().platform_window(window_id) else {
+                            return;
+                        };
+                        window.request_redraw();
+                    });
                 }
             }
             Event::UserEvent(CustomEvent::AboutToSleep) => {
@@ -1627,6 +1648,7 @@ impl EventLoop {
         if self.ime_enabled_window_id == Some(winit_window_id) {
             self.ime_enabled_window_id = None;
             self.ime_position_refresh = ImePositionRefresh::NotNeeded;
+            self.last_ime_cursor_position = None;
         }
 
         self.callbacks.window_will_close(window_id)
@@ -1652,6 +1674,7 @@ impl EventLoop {
         match event {
             winit::event::Ime::Enabled => {
                 self.ime_enabled_window_id = Some(winit_window_id);
+                self.last_ime_cursor_position = None;
                 if let Some(window_state) = self.state.windows.get_mut(&winit_window_id) {
                     window_state.ime_marked_text = None;
                     window_state.ime_marked_text_storm_guard.reset(Instant::now());
@@ -1746,6 +1769,7 @@ impl EventLoop {
                 if self.ime_enabled_window_id == Some(winit_window_id) {
                     self.ime_enabled_window_id = None;
                     self.ime_position_refresh = ImePositionRefresh::NotNeeded;
+                    self.last_ime_cursor_position = None;
                 }
 
                 let Some(window_state) = self.state.windows.get_mut(&winit_window_id) else {
@@ -1993,20 +2017,38 @@ impl EventLoop {
         if let Some(active_cursor_position) = active_cursor_position {
             let winit_window = downcast_window(window.as_ref());
             let cursor_rect = active_cursor_position.position;
-            let position =
-                LogicalPosition::new(cursor_rect.origin_x(), cursor_rect.origin_y());
+            let position = LogicalPosition::new(
+                cursor_rect.origin_x() as f64,
+                cursor_rect.origin_y() as f64,
+            );
             // Currently the size argument is not supported on X11. We calculate it here anyway.
             // Wayland compositors/fcitx use it as the cursor rectangle and place the candidate
             // popup around that area. Passing an already-offset point makes the popup drift and
             // can cover the inline preedit text in Warp's terminal input.
             let size = LogicalSize::new(
-                cursor_rect.width().max(active_cursor_position.font_size),
-                cursor_rect.height().max(active_cursor_position.font_size),
+                cursor_rect.width().max(active_cursor_position.font_size) as f64,
+                cursor_rect.height().max(active_cursor_position.font_size) as f64,
             );
+            let now = Instant::now();
+            let position_key = (position.x, position.y);
+            let size_key = (size.width, size.height);
+            if self.last_ime_cursor_position.is_some_and(|last| {
+                last.position == position_key
+                    && last.size == size_key
+                    && now.duration_since(last.updated_at) < Duration::from_millis(16)
+            }) {
+                return;
+            }
+
             // TODO(abhishek): We make sure that the position is different than last time to prevent winit from
             // caching the old position and not properly updating on `WindowMoved` or `WindowResized` events.
             winit_window.set_ime_position(LogicalPosition::new(position.x, position.y + 1.), size);
             winit_window.set_ime_position(position, size);
+            self.last_ime_cursor_position = Some(LastImeCursorPosition {
+                position: position_key,
+                size: size_key,
+                updated_at: now,
+            });
         }
     }
 
