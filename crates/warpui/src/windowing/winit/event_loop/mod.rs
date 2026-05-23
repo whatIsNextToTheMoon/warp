@@ -7,51 +7,39 @@ use std::collections::HashMap;
 use std::mem::ManuallyDrop;
 use std::ops::Range;
 
-#[cfg(any(target_os = "linux", target_os = "freebsd"))]
-use crate::notification::RequestPermissionsOutcome;
-
 use futures_util::future::LocalBoxFuture;
 use futures_util::stream::AbortHandle;
 use instant::{Duration, Instant};
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
+#[cfg(target_family = "wasm")]
+use wasm_bindgen::JsCast;
 use winit::dpi::{LogicalPosition, LogicalSize, PhysicalPosition};
-use winit::event::Ime as ImeEvent;
-use winit::event_loop::EventLoopProxy;
+use winit::event::{
+    ElementState, Event, Ime as ImeEvent, MouseButton, StartCause, Touch, TouchPhase, WindowEvent,
+};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoopProxy};
 use winit::keyboard::{self, KeyCode};
 use winit::window::WindowId as WinitWindowId;
-use winit::{
-    event::{ElementState, Event, MouseButton, StartCause, Touch, TouchPhase, WindowEvent},
-    event_loop::{ActiveEventLoop, ControlFlow},
-};
 
+use self::key_events::convert_keyboard_input_event;
+use super::app::ClipboardEvent;
+use super::window::DEFAULT_TITLEBAR_HEIGHT;
+#[cfg(windows)]
+use super::windows::{add_network_connection_listener, WindowsNetworkConnectionPoint};
+use super::CustomEvent;
 use crate::actions::StandardAction;
 use crate::event::ModifiersState;
-use crate::platform::NotificationInfo;
-use crate::platform::OperatingSystem;
-use crate::platform::{
-    self,
-    app::{AppCallbackDispatcher, ApproveTerminateResult},
-    TerminationMode, WindowContext,
-};
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+use crate::notification::RequestPermissionsOutcome;
+use crate::platform::app::{AppCallbackDispatcher, ApproveTerminateResult};
+use crate::platform::{self, NotificationInfo, OperatingSystem, TerminationMode, WindowContext};
 use crate::r#async::Timer;
 use crate::rendering::wgpu::renderer;
 use crate::windowing::winit::app::RequestPermissionsCallback;
 use crate::windowing::winit::window::MIN_WINDOW_SIZE;
 use crate::Event::{ClearMarkedText, ImeCommit, SetMarkedText, TypedCharacters};
 use crate::{AppContext, WindowId};
-
-#[cfg(target_family = "wasm")]
-use wasm_bindgen::JsCast;
-
-use super::app::ClipboardEvent;
-use super::window::DEFAULT_TITLEBAR_HEIGHT;
-use super::CustomEvent;
-
-#[cfg(windows)]
-use super::windows::{add_network_connection_listener, WindowsNetworkConnectionPoint};
-
-use self::key_events::convert_keyboard_input_event;
 
 /// This is the time duration beyond which clicks get treated as separate single clicks instead of
 /// double-click, triple-click, etc.
@@ -2023,11 +2011,18 @@ impl EventLoop {
             );
             // Currently the size argument is not supported on X11. We calculate it here anyway.
             // Wayland compositors/fcitx use it as the cursor rectangle and place the candidate
-            // popup around that area. Passing an already-offset point makes the popup drift and
-            // can cover the inline preedit text in Warp's terminal input.
+            // popup around that area. Passing an already-offset point makes the popup drift.
+            //
+            // Give Wayland/fcitx a taller cursor area instead of moving the anchor point. That
+            // reserves room for inline preedit text, so the candidate window is less likely to
+            // cover what the user is currently typing in terminal/agent inputs.
+            let cursor_area_height = cursor_rect
+                .height()
+                .max(active_cursor_position.font_size)
+                .max(1.);
             let size = LogicalSize::new(
                 cursor_rect.width().max(active_cursor_position.font_size) as f64,
-                cursor_rect.height().max(active_cursor_position.font_size) as f64,
+                (cursor_area_height * 2.) as f64,
             );
             let now = Instant::now();
             let position_key = (position.x, position.y);
@@ -2159,7 +2154,8 @@ impl EventLoop {
     /// synchronously during event processing may not work reliably on iOS Safari.
     #[cfg(target_family = "wasm")]
     fn refocus_canvas() {
-        use wasm_bindgen::{prelude::Closure, JsCast};
+        use wasm_bindgen::prelude::Closure;
+        use wasm_bindgen::JsCast;
 
         // Defer focus to next frame to ensure we're outside the current event processing.
         let callback = Closure::once(Box::new(|| {

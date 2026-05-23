@@ -1,18 +1,20 @@
 //! Manages how we write to and read from our SQLite database for our AI features.
 
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use chrono::{Local, NaiveDateTime, TimeZone};
-use diesel::{prelude::*, result::Error, sqlite::SqliteConnection};
-
+use diesel::prelude::*;
+use diesel::result::Error;
+use diesel::sqlite::SqliteConnection;
 use itertools::Itertools;
-
-use crate::ai::blocklist::{PersistedAIInput, SerializedBlockListItem};
-use crate::terminal::model::block::{SerializedAgentViewVisibility, SerializedBlock};
-use crate::{app_state::PaneUuid, persistence::schema::ai_queries};
 
 use super::model::Block;
 use super::{model, schema};
+use crate::ai::blocklist::{PersistedAIInput, SerializedBlockListItem};
+use crate::app_state::PaneUuid;
+use crate::persistence::schema::ai_queries;
+use crate::terminal::model::block::{SerializedAgentViewVisibility, SerializedBlock};
 
 /// Upper bound on how many terminal blocks we persist per session/pane.
 ///
