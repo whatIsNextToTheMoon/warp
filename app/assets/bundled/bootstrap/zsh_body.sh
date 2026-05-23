@@ -1249,7 +1249,7 @@ esac
         # description to be displayed afterwards
         (( $#__dscr >= $i )) && dscr="${${__dscr[$i]}##$__hits[$i] #}" || dscr=""
 
-        local match="$__hits[$i]$dsuf"
+        local match="$IPREFIX${hpre[-p]}$__hits[$i]$dsuf"
 
         print -n "\e]9280;C"$OSC_PARAM_SEPARATOR$match$OSC_END
         print -n "\e]9280;D?description"$OSC_PARAM_SEPARATOR$dscr$OSC_END

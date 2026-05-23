@@ -61,19 +61,48 @@ enum PtyWrite {
     RunNativeShellCompletions(NativeShellCompletionsState),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NativeShellCompletionsMethod {
+    CompaddOverride,
+    ListChoices,
+}
+
+impl NativeShellCompletionsMethod {
+    fn trigger_byte(self) -> u8 {
+        match self {
+            // ^Y is bound to Warp's compadd override, which emits structured
+            // completions as OSC messages.
+            Self::CompaddOverride => 0x19_u8,
+            // ^X is bound to zsh's list-choices path. It is less structured,
+            // but catches completion functions that don't flow through the
+            // compadd override cleanly.
+            Self::ListChoices => 0x18_u8,
+        }
+    }
+}
+
 enum NativeShellCompletionsState {
     AwaitingPrompt {
         buffer_text: String,
         results_tx: async_channel::Sender<Vec<ShellCompletion>>,
+        method: NativeShellCompletionsMethod,
     },
     AwaitingResults {
+        buffer_text: String,
         results_tx: async_channel::Sender<Vec<ShellCompletion>>,
+        method: NativeShellCompletionsMethod,
     },
 }
 
 impl NativeShellCompletionsState {
     fn is_awaiting_prompt(&self) -> bool {
         matches!(self, Self::AwaitingPrompt { .. })
+    }
+
+    fn method(&self) -> NativeShellCompletionsMethod {
+        match self {
+            Self::AwaitingPrompt { method, .. } | Self::AwaitingResults { method, .. } => *method,
+        }
     }
 }
 
@@ -170,21 +199,47 @@ impl<T: EventLoopSender> PtyController<T> {
                 }
             }
             ModelEvent::CompletionsFinished(data) => {
-                let Some(NativeShellCompletionsState::AwaitingResults { results_tx }) = me.in_flight_native_completions_state.take() else {
+                let Some(NativeShellCompletionsState::AwaitingResults {
+                    buffer_text,
+                    results_tx,
+                    method,
+                }) = me.in_flight_native_completions_state.take() else {
                     log::warn!("Received CompletionsFinished event but didn't have a channel to send results over!");
                     return;
                 };
+
+                if data.is_empty() && method == NativeShellCompletionsMethod::CompaddOverride {
+                    // Some zsh completion functions don't emit anything through
+                    // the compadd override path. Retry once through zsh's native
+                    // list-choices widget before falling back to Warp's generic
+                    // completion sources.
+                    me.pending_writes.push_front(PtyWrite::RunNativeShellCompletions(
+                        NativeShellCompletionsState::AwaitingPrompt {
+                            buffer_text,
+                            results_tx,
+                            method: NativeShellCompletionsMethod::ListChoices,
+                        },
+                    ));
+                    me.execute_next_queued_write(ctx);
+                    return;
+                }
+
                 let _ = block_on(results_tx.send(data.clone()));
             }
             ModelEvent::SendCompletionsPrompt => {
                 let Some(NativeShellCompletionsState::AwaitingPrompt {
                     buffer_text,
                     results_tx,
+                    method,
                 }) = me.in_flight_native_completions_state.take() else {
                     log::warn!("Received SendCompletionsPrompt event but didn't have a prompt to send!");
                     return;
                 };
-                me.in_flight_native_completions_state = Some(NativeShellCompletionsState::AwaitingResults { results_tx });
+                me.in_flight_native_completions_state = Some(NativeShellCompletionsState::AwaitingResults {
+                    buffer_text: buffer_text.clone(),
+                    results_tx,
+                    method,
+                });
 
                 let mut bytes = buffer_text.into_bytes();
                 // We use the EOT character to signal the end of the prompt.
@@ -702,12 +757,13 @@ impl<T: EventLoopSender> PtyController<T> {
                 (command.into_bytes().into(), false, None, true)
             }
             PtyWrite::RunNativeShellCompletions(state) => {
+                let trigger_byte = state.method().trigger_byte();
                 self.in_flight_native_completions_state = Some(state);
 
-                // Send a ^Y control code to trigger the right bindkey.  We
-                // then wait for an OSC-based signal from the shell before we
-                // send the text that needs to be completed.
-                let bytes = vec![0x19_u8];
+                // Send the control code for the selected completion widget.
+                // The shell will answer with an OSC-based prompt request before
+                // we send the text that needs to be completed.
+                let bytes = vec![trigger_byte];
                 (bytes.into(), false, None, false)
             }
         };
@@ -776,6 +832,7 @@ impl<T: EventLoopSender> PtyController<T> {
                 NativeShellCompletionsState::AwaitingPrompt {
                     buffer_text,
                     results_tx,
+                    method: NativeShellCompletionsMethod::CompaddOverride,
                 },
             ));
         self.execute_next_queued_write(ctx);
