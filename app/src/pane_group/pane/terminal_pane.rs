@@ -186,7 +186,7 @@ fn register_legacy_local_lifecycle_subscription(
 /// object to the concrete `local_tty::TerminalManager` just to call the
 /// equivalent inherent method.
 #[cfg(not(target_family = "wasm"))]
-fn host_terminal_shared_session_source_type(
+pub(in crate::pane_group) fn host_terminal_shared_session_source_type(
     parent_terminal_view: &ViewHandle<TerminalView>,
     ctx: &AppContext,
 ) -> Option<SessionSourceType> {
@@ -225,7 +225,7 @@ fn host_terminal_shared_session_source_type(
 /// for the host's viewers to reach it — strictly worse than leaving
 /// children unshared.
 #[cfg(not(target_family = "wasm"))]
-fn inherit_share_for_local_child(
+pub(in crate::pane_group) fn inherit_share_for_local_child(
     host_source_type: Option<&SessionSourceType>,
     child_task_id: AmbientAgentTaskId,
 ) -> IsSharedSessionCreator {
