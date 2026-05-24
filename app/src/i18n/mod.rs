@@ -119,6 +119,17 @@ pub fn init() {
         if let Some(rest) = trimmed.strip_prefix("Failed to export ") {
             return Some(Cow::Owned(format!("导出失败：{rest}")));
         }
+        if let Some(key) = trimmed.strip_suffix(" accepts autosuggestions.") {
+            return Some(Cow::Owned(format!("{key} 接受自动建议。")));
+        }
+        if let Some(key) = trimmed.strip_suffix(" opens completion menu.") {
+            return Some(Cow::Owned(format!("{key} 打开补全菜单。")));
+        }
+        if let Some(rest) = trimmed.strip_prefix("Completions open as you type (or ") {
+            if let Some(key) = rest.strip_suffix(").") {
+                return Some(Cow::Owned(format!("输入时自动打开补全（或按 {key}）。")));
+            }
+        }
 
         if collect_missing {
             record_missing_translation(text, trimmed);

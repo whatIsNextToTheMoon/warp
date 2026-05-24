@@ -20486,6 +20486,12 @@ impl Workspace {
                 .insert(flags::COMPLETIONS_OPEN_WHILE_TYPING_CONTEXT_FLAG);
         }
 
+        if *input_settings.history_open_while_typing.value() {
+            context
+                .set
+                .insert(flags::HISTORY_OPEN_WHILE_TYPING_CONTEXT_FLAG);
+        }
+
         if *input_settings.command_corrections.value() {
             context.set.insert(flags::COMMAND_CORRECTIONS_CONTEXT_FLAG);
         }

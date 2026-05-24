@@ -65,8 +65,9 @@ use crate::settings::{
     ChangelogSettings, CloudPreferencesSettings, CodeSettings, CommandCorrections,
     CompletionsOpenWhileTyping, CopyOnSelect, CtrlTabBehavior, DefaultSessionMode,
     EnableSlashCommandsInTerminal, EnableSshWrapper, ErrorUnderliningEnabled, ExtraMetaKeys,
-    GPUSettings, GlobalHotkeyMode, InputSettings, InputSettingsChangedEvent,
-    LinuxSelectionClipboard, MiddleClickPasteEnabled, MouseScrollMultiplier,
+    GPUSettings, GlobalHotkeyMode, HistoryOpenWhileTyping, InputSettings,
+    InputSettingsChangedEvent, LinuxSelectionClipboard, MiddleClickPasteEnabled,
+    MouseScrollMultiplier,
     OutlineCodebaseSymbolsForAtContextMenu, PreferLowPowerGPU, PreferredGraphicsBackend,
     QuakeModeSettings, ScrollSettings, ScrollSettingsChangedEvent, SelectionSettings,
     ShowAutosuggestionIgnoreButton, ShowChangelogAfterUpdate, ShowTerminalInputMessageBar,
@@ -219,6 +220,19 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
         .is_supported_on_current_platform(
             InputSettings::as_ref(app)
                 .completions_open_while_typing
+                .is_supported_on_current_platform(),
+        ),
+        ToggleSettingActionPair::new(
+            "history while typing",
+            builder(SettingsAction::FeaturesPageToggle(
+                FeaturesPageAction::ToggleHistoryOpenWhileTyping,
+            )),
+            context,
+            flags::HISTORY_OPEN_WHILE_TYPING_CONTEXT_FLAG,
+        )
+        .is_supported_on_current_platform(
+            InputSettings::as_ref(app)
+                .history_open_while_typing
                 .is_supported_on_current_platform(),
         ),
         ToggleSettingActionPair::new(
@@ -585,6 +599,7 @@ pub enum FeaturesPageAction {
     ToggleSnackbar,
     ToggleLinkTooltip,
     ToggleCompletionsOpenWhileTyping,
+    ToggleHistoryOpenWhileTyping,
     ToggleCommandCorrections,
     ToggleErrorUnderlining,
     ToggleSyntaxHighlighting,
@@ -785,6 +800,10 @@ impl FeaturesPageAction {
             Self::ToggleCompletionsOpenWhileTyping => TelemetryEvent::FeaturesPageAction {
                 action: "ToggleCompletionsOpenWhileTyping".to_string(),
                 value: to_string(*input_settings.completions_open_while_typing.value()),
+            },
+            Self::ToggleHistoryOpenWhileTyping => TelemetryEvent::FeaturesPageAction {
+                action: "ToggleHistoryOpenWhileTyping".to_string(),
+                value: to_string(*input_settings.history_open_while_typing.value()),
             },
             Self::ToggleCommandCorrections => TelemetryEvent::FeaturesPageAction {
                 action: "ToggleCommandCorrections".to_string(),
@@ -1642,6 +1661,13 @@ impl TypedActionView for FeaturesPageView {
                         .toggle_and_save_value(ctx));
                 });
             }
+            ToggleHistoryOpenWhileTyping => {
+                InputSettings::handle(ctx).update(ctx, |input_settings, ctx| {
+                    report_if_error!(input_settings
+                        .history_open_while_typing
+                        .toggle_and_save_value(ctx));
+                });
+            }
             ToggleCommandCorrections => {
                 InputSettings::handle(ctx).update(ctx, |input_settings, ctx| {
                     report_if_error!(input_settings
@@ -1983,6 +2009,7 @@ impl FeaturesPageView {
             if matches!(
                 event,
                 InputSettingsChangedEvent::CompletionsOpenWhileTyping { .. }
+                    | InputSettingsChangedEvent::HistoryOpenWhileTyping { .. }
             ) {
                 me.refresh_tab_behavior_dropdown(ctx);
             }
@@ -2647,6 +2674,12 @@ impl FeaturesPageView {
             .is_supported_on_current_platform()
         {
             editor_widgets.push(Box::new(CompletionsMenuWhileTypingWidget::default()));
+        }
+        if input_settings
+            .history_open_while_typing
+            .is_supported_on_current_platform()
+        {
+            editor_widgets.push(Box::new(HistoryMenuWhileTypingWidget::default()));
         }
         if input_settings
             .command_corrections
@@ -5702,6 +5735,7 @@ impl SettingsWidget for SyntaxHighlightingWidget {
 #[derive(Default)]
 struct CompletionsMenuWhileTypingWidget {
     switch_state: SwitchStateHandle,
+    additional_info_link: MouseStateHandle,
 }
 
 impl SettingsWidget for CompletionsMenuWhileTypingWidget {
@@ -5720,7 +5754,12 @@ impl SettingsWidget for CompletionsMenuWhileTypingWidget {
         let ui_builder = appearance.ui_builder();
         render_body_item::<FeaturesPageAction>(
             "Open completions menu as you type".into(),
-            None,
+            Some(AdditionalInfo {
+                mouse_state: self.additional_info_link.clone(),
+                on_click_action: None,
+                secondary_text: None,
+                tooltip_override_text: Some("Tab opens completions when this is off.".into()),
+            }),
             LocalOnlyIconState::for_setting(
                 CompletionsOpenWhileTyping::storage_key(),
                 CompletionsOpenWhileTyping::sync_to_cloud(),
@@ -5742,6 +5781,60 @@ impl SettingsWidget for CompletionsMenuWhileTypingWidget {
                 .build()
                 .on_click(move |ctx, _, _| {
                     ctx.dispatch_typed_action(FeaturesPageAction::ToggleCompletionsOpenWhileTyping);
+                })
+                .finish(),
+            None,
+        )
+    }
+}
+
+#[derive(Default)]
+struct HistoryMenuWhileTypingWidget {
+    switch_state: SwitchStateHandle,
+    additional_info_link: MouseStateHandle,
+}
+
+impl SettingsWidget for HistoryMenuWhileTypingWidget {
+    type View = FeaturesPageView;
+
+    fn search_terms(&self) -> &str {
+        "history menu type typing command history"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let ui_builder = appearance.ui_builder();
+        render_body_item::<FeaturesPageAction>(
+            "Open history menu as you type".into(),
+            Some(AdditionalInfo {
+                mouse_state: self.additional_info_link.clone(),
+                on_click_action: None,
+                secondary_text: None,
+                tooltip_override_text: Some(
+                    "History-as-you-type takes precedence over completions-as-you-type.".into(),
+                ),
+            }),
+            LocalOnlyIconState::for_setting(
+                HistoryOpenWhileTyping::storage_key(),
+                HistoryOpenWhileTyping::sync_to_cloud(),
+                &mut view
+                    .button_mouse_states
+                    .local_only_icon_tooltip_states
+                    .borrow_mut(),
+                app,
+            ),
+            ToggleState::Enabled,
+            appearance,
+            ui_builder
+                .switch(self.switch_state.clone())
+                .check(*InputSettings::as_ref(app).history_open_while_typing.value())
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(FeaturesPageAction::ToggleHistoryOpenWhileTyping);
                 })
                 .finish(),
             None,

@@ -266,7 +266,8 @@ use crate::terminal::buy_credits_banner::{BuyCreditsBanner, BuyCreditsBannerEven
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::cli_agent_sessions::plugin_manager::PluginModalKind;
 use crate::terminal::cli_agent_sessions::{
-    CLIAgentInputState, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
+    CLIAgentInputState, CLIAgentRichInputCloseReason, CLIAgentSessionsModel,
+    CLIAgentSessionsModelEvent,
 };
 use crate::terminal::input::buffer_model::InputBufferModel;
 use crate::terminal::input::cloud_mode_v2_history_menu::CloudModeV2HistoryMenuView;
@@ -726,6 +727,8 @@ pub enum InputSuggestionsMode {
     /// Inline history menu mode for selecting commands and conversations from history.
     InlineHistoryMenu {
         original_input_config: Option<InputConfig>,
+        restore_buffer_on_close: bool,
+        preview_selection: bool,
     },
 
     /// Indexed repos switcher menu mode.
@@ -780,19 +783,48 @@ impl InputSuggestionsMode {
     }
 
     /// Whether this mode should snapshot the input buffer on open and restore it on dismiss.
-    fn should_snapshot_and_restore_buffer(&self) -> bool {
-        // For now this just delegates to whether the current mode is an inline menu,
-        // but in the future we might build this out/add more detail here.
-        self.is_inline_menu()
+    pub(crate) fn should_snapshot_and_restore_buffer(&self) -> bool {
+        match self {
+            // History-as-you-type is a live filter, not a temporary replacement.
+            // Closing it must not restore the buffer to the text that existed
+            // when the menu opened, or Escape would erase typed characters.
+            Self::InlineHistoryMenu {
+                restore_buffer_on_close,
+                ..
+            } => *restore_buffer_on_close,
+            _ => self.is_inline_menu(),
+        }
     }
 
     fn input_config_to_restore(&self) -> Option<InputConfig> {
         match self {
             Self::InlineHistoryMenu {
                 original_input_config,
-            } => *original_input_config,
+                preview_selection,
+                ..
+            } => preview_selection.then_some(*original_input_config).flatten(),
             _ => None,
         }
+    }
+
+    pub(crate) fn is_history_selection_preview_enabled(&self) -> bool {
+        matches!(
+            self,
+            Self::InlineHistoryMenu {
+                preview_selection: true,
+                ..
+            }
+        )
+    }
+
+    pub(crate) fn is_history_while_typing(&self) -> bool {
+        matches!(
+            self,
+            Self::InlineHistoryMenu {
+                preview_selection: false,
+                ..
+            }
+        )
     }
 
     /// Returns the placeholder text for this mode, if it has a custom one.
@@ -1054,6 +1086,10 @@ pub enum Event {
     },
     SubmitCLIAgentInput {
         text: String,
+    },
+    CloseStaleCliAgentRichInput {
+        text: String,
+        reason: CLIAgentRichInputCloseReason,
     },
     OpenAIDocumentPane {
         document_id: AIDocumentId,
@@ -4947,6 +4983,15 @@ impl Input {
                 command,
                 linked_workflow_data,
             } => {
+                if !self
+                    .suggestions_mode_model
+                    .as_ref(ctx)
+                    .mode()
+                    .is_history_selection_preview_enabled()
+                {
+                    return;
+                }
+
                 if let Some((workflow_type, workflow_source)) = linked_workflow_data
                     .as_ref()
                     .and_then(|linked_workflow_data| linked_workflow_data.linked_workflow(ctx))
@@ -4995,6 +5040,15 @@ impl Input {
                 });
             }
             inline_history::InlineHistoryMenuEvent::SelectAIPrompt { query_text } => {
+                if !self
+                    .suggestions_mode_model
+                    .as_ref(ctx)
+                    .mode()
+                    .is_history_selection_preview_enabled()
+                {
+                    return;
+                }
+
                 self.editor.update(ctx, |editor, ctx| {
                     editor.set_buffer_text_ignoring_undo(query_text, ctx);
                 });
@@ -5008,6 +5062,15 @@ impl Input {
                 });
             }
             inline_history::InlineHistoryMenuEvent::SelectConversation => {
+                if !self
+                    .suggestions_mode_model
+                    .as_ref(ctx)
+                    .mode()
+                    .is_history_selection_preview_enabled()
+                {
+                    return;
+                }
+
                 self.editor.update(ctx, |editor, ctx| {
                     editor.set_buffer_text_ignoring_undo("", ctx);
                 });
@@ -5179,6 +5242,19 @@ impl Input {
     }
 
     fn open_inline_history_menu(&mut self, ctx: &mut ViewContext<Self>) {
+        self.open_inline_history_menu_impl(true, true, ctx);
+    }
+
+    fn open_inline_history_menu_while_typing(&mut self, ctx: &mut ViewContext<Self>) {
+        self.open_inline_history_menu_impl(false, false, ctx);
+    }
+
+    fn open_inline_history_menu_impl(
+        &mut self,
+        restore_buffer_on_close: bool,
+        preview_selection: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
         if !FeatureFlag::InlineHistoryMenu.is_enabled() {
             return;
         }
@@ -5197,6 +5273,8 @@ impl Input {
             m.set_mode(
                 InputSuggestionsMode::InlineHistoryMenu {
                     original_input_config: Some(original_input_config),
+                    restore_buffer_on_close,
+                    preview_selection,
                 },
                 ctx,
             );
@@ -5965,6 +6043,11 @@ impl Input {
                 }
                 ctx.notify();
             }
+            InputSettingsChangedEvent::CompletionsOpenWhileTyping { .. }
+            | InputSettingsChangedEvent::HistoryOpenWhileTyping { .. } => {
+                self.maybe_open_suggestions_while_typing(ctx);
+                ctx.notify();
+            }
             _ => {}
         }
     }
@@ -6582,6 +6665,69 @@ impl Input {
         is_bootstrapped && (is_history_queryable || model.shared_session_status().is_executor())
     }
 
+    fn shell_not_ready_reason(&self, ctx: &AppContext) -> Option<DenyExecutionReason> {
+        let model = self.model.lock();
+        let active_block = model.block_list().active_block();
+
+        if !model.block_list().is_bootstrapped() {
+            return Some(DenyExecutionReason::NotBootstrapped);
+        }
+
+        if !model.shared_session_status().is_executor()
+            && active_block
+                .session_id()
+                .is_none_or(|session_id| !History::as_ref(ctx).is_appendable(&session_id))
+        {
+            return Some(DenyExecutionReason::HistoryNotAppendable);
+        }
+
+        None
+    }
+
+    fn show_shell_not_ready_toast(&self, reason: DenyExecutionReason, ctx: &mut ViewContext<Self>) {
+        let message = match reason {
+            DenyExecutionReason::NotBootstrapped => {
+                "Shell is still starting; command was not sent yet."
+            }
+            DenyExecutionReason::HistoryNotAppendable => {
+                "Shell history is not ready; command was not sent yet."
+            }
+            DenyExecutionReason::ExistingActiveCommand => return,
+        };
+
+        self.show_toast(message, ToastFlavor::Error, ctx);
+    }
+
+    fn show_toast(&self, message: &str, flavor: ToastFlavor, ctx: &mut ViewContext<Self>) {
+        ctx.emit(Event::ShowToast {
+            message: message.to_string(),
+            flavor,
+        });
+    }
+
+    fn is_cli_agent_rich_input_session_stale(&self, ctx: &AppContext) -> bool {
+        let Some(session) = CLIAgentSessionsModel::as_ref(ctx).session(self.terminal_view_id)
+        else {
+            return false;
+        };
+
+        if !matches!(session.agent, CLIAgent::Codex) {
+            return false;
+        }
+
+        let active_block_is_long_running = self
+            .model
+            .lock()
+            .block_list()
+            .active_block()
+            .is_active_and_long_running();
+
+        !active_block_is_long_running
+            || self
+                .shell_not_ready_reason(ctx)
+                .is_some_and(|reason| !reason.is_existing_active_command())
+    }
+
     /// Returns enum indicating if we can execute a command in the active session.
     ///
     /// We can only execute a command if:
@@ -6777,6 +6923,8 @@ impl Input {
                         ctx,
                     );
                 });
+            } else if !command.trim().is_empty() {
+                self.show_shell_not_ready_toast(reason, ctx);
             }
 
             log::warn!("Tried to execute command but can_execute_command was false: {reason:?}");
@@ -6927,6 +7075,13 @@ impl Input {
             // been received. Instead, we want the user to be aware
             // that the prompt might not be up to date.
             send_telemetry_from_ctx!(TelemetryEvent::TriedToExecuteBeforePrecmd, ctx);
+            if !command.trim().is_empty() {
+                self.show_toast(
+                    "Shell prompt is not ready; command was not sent yet.",
+                    ToastFlavor::Error,
+                    ctx,
+                );
+            }
             did_execute = false;
         }
 
@@ -8558,6 +8713,10 @@ impl Input {
                 .inline_model_selector_view
                 .as_ref(ctx)
                 .filter_results_by_input(),
+            InputSuggestionsMode::InlineHistoryMenu {
+                restore_buffer_on_close,
+                ..
+            } => *restore_buffer_on_close,
             _ => true,
         }
     }
@@ -9864,6 +10023,12 @@ impl Input {
                         // current word span.
                         let old_buffer_text_original = buffer_text_original.clone();
                         if *trigger == CompletionsTrigger::AsYouType
+                            && self.should_show_history_while_typing(ctx)
+                        {
+                            self.close_input_suggestions(/*should_focus_input=*/ true, ctx);
+                            self.open_inline_history_menu_while_typing(ctx);
+                            self.maybe_generate_autosuggestion(ctx);
+                        } else if *trigger == CompletionsTrigger::AsYouType
                             && (!self.is_classic_completions_enabled(ctx)
                                 || (self.is_classic_completions_enabled(ctx)
                                     && selected_item_differs_from_current_word))
@@ -9974,10 +10139,8 @@ impl Input {
                             self.clear_current_workflow(ctx);
                         }
 
-                        if self.should_show_completions_while_typing(ctx)
-                            && matches!(edit_origin, EditOrigin::UserTyped)
-                        {
-                            self.open_completion_suggestions(CompletionsTrigger::AsYouType, ctx);
+                        if matches!(edit_origin, EditOrigin::UserTyped) {
+                            self.maybe_open_suggestions_while_typing(ctx);
                         }
                     }
                     InputSuggestionsMode::AIContextMenu { .. } => {
@@ -10005,6 +10168,10 @@ impl Input {
                         // User query menu handles its own state
                     }
                     InputSuggestionsMode::InlineHistoryMenu { .. } => {
+                        if self.should_show_history_while_typing(ctx) {
+                            return;
+                        }
+
                         let mismatched = if self.is_cloud_mode_input_v2_composing(ctx) {
                             self.cloud_mode_v2_history_menu_view
                                 .as_ref()
@@ -11302,6 +11469,71 @@ impl Input {
             .value()
     }
 
+    fn is_history_while_typing_turned_on(&self, app: &AppContext) -> bool {
+        *InputSettings::as_ref(app).history_open_while_typing.value()
+    }
+
+    fn should_show_history_while_typing(&self, ctx: &mut ViewContext<Self>) -> bool {
+        let buffer_text = self.editor.as_ref(ctx).buffer_text(ctx);
+
+        self.is_history_while_typing_turned_on(ctx)
+            && FeatureFlag::InlineHistoryMenu.is_enabled()
+            && !self.ai_input_model.as_ref(ctx).is_ai_input_enabled()
+            && self.can_query_history(ctx)
+            && buffer_text.len() >= MIN_BUFFER_LEN_TO_SHOW_COMPLETIONS_WHILE_TYPING
+            && self.is_cursor_in_valid_position_for_completions_while_typing(ctx)
+    }
+
+    fn maybe_open_suggestions_while_typing(&mut self, ctx: &mut ViewContext<Self>) {
+        let query_text = self.editor.as_ref(ctx).buffer_text(ctx);
+        if self.should_show_history_while_typing(ctx) {
+            // If completions are already visible, don't steal focus from an explicit Tab menu.
+            // The history-as-you-type preference only controls automatic popups.
+            if matches!(
+                self.suggestions_mode_model.as_ref(ctx).mode(),
+                InputSuggestionsMode::CompletionSuggestions {
+                    trigger: CompletionsTrigger::Keybinding,
+                    ..
+                }
+            ) {
+                return;
+            }
+
+            if self
+                .suggestions_mode_model
+                .as_ref(ctx)
+                .mode()
+                .is_history_while_typing()
+            {
+                self.inline_history_menu_view.update(ctx, |view, ctx| {
+                    view.update_query_text(query_text, ctx);
+                });
+            } else {
+                self.open_inline_history_menu_while_typing(ctx);
+            }
+            return;
+        }
+
+        if self
+            .suggestions_mode_model
+            .as_ref(ctx)
+            .mode()
+            .is_history_while_typing()
+        {
+            self.close_input_suggestions(/*should_focus_input=*/ true, ctx);
+        }
+
+        if self.should_show_completions_while_typing(ctx) {
+            match self.suggestions_mode_model.as_ref(ctx).mode() {
+                InputSuggestionsMode::CompletionSuggestions {
+                    trigger: CompletionsTrigger::Keybinding,
+                    ..
+                } => {}
+                _ => self.open_completion_suggestions(CompletionsTrigger::AsYouType, ctx),
+            }
+        }
+    }
+
     /// Returns true if an AI context menu should be enabled at the current cursor position based
     /// on the buffer text and surrounding context. This is triggered when the user just typed '@'
     /// in a valid context and the menu is not disabled for other reasons.
@@ -12570,6 +12802,25 @@ impl Input {
     /// handled by the ongoing process corresponding to the active/long running command.
     pub(crate) fn input_enter(&mut self, ctx: &mut ViewContext<Self>) {
         if CLIAgentSessionsModel::as_ref(ctx).is_input_open(self.terminal_view_id) {
+            if self.is_cli_agent_rich_input_session_stale(ctx) {
+                let text = self.editor.as_ref(ctx).buffer_text(ctx);
+                ctx.emit(Event::CloseStaleCliAgentRichInput {
+                    text,
+                    reason: CLIAgentRichInputCloseReason::Other,
+                });
+
+                if let Some(reason) = self.shell_not_ready_reason(ctx) {
+                    self.show_shell_not_ready_toast(reason, ctx);
+                } else {
+                    self.show_toast(
+                        "CLI agent input was stale; command was not sent yet.",
+                        ToastFlavor::Error,
+                        ctx,
+                    );
+                }
+                return;
+            }
+
             // If the @ context menu is open, Enter selects the highlighted item
             // instead of submitting the CLI agent input.
             if matches!(
@@ -14281,9 +14532,7 @@ impl Input {
             if !self.buffer_text(ctx).is_empty() {
                 self.maybe_generate_autosuggestion(ctx);
 
-                if self.should_show_completions_while_typing(ctx) {
-                    self.open_completion_suggestions(CompletionsTrigger::AsYouType, ctx);
-                }
+                self.maybe_open_suggestions_while_typing(ctx);
             }
         }
     }

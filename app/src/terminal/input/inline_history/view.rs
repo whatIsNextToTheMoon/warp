@@ -305,10 +305,22 @@ impl InlineHistoryMenuView {
         };
         let model = menu_view.as_ref(ctx).model().clone();
 
-        ctx.subscribe_to_model(input_suggestions_model, |me, model, event, ctx| {
+        let input_suggestions_model_for_mode = input_suggestions_model.clone();
+        ctx.subscribe_to_model(input_suggestions_model, move |me, model, event, ctx| {
             let InputSuggestionsModeEvent::ModeChanged { .. } = event;
             if model.as_ref(ctx).is_inline_history_menu() {
-                me.open_with_current_buffer(ctx);
+                if input_suggestions_model_for_mode
+                    .as_ref(ctx)
+                    .mode()
+                    .is_history_while_typing()
+                {
+                    me.open_with_current_buffer(ctx);
+                    // Opening the menu and the editor buffer update can arrive in either order.
+                    // Keep one deferred sync armed so a late buffer event can refresh the query.
+                    me.pending_initial_buffer_sync = true;
+                } else {
+                    me.open_with_current_buffer(ctx);
+                }
             }
         });
 
@@ -496,8 +508,7 @@ impl InlineHistoryMenuView {
         self.pending_initial_buffer_sync = true;
     }
 
-    fn open_with_current_buffer(&mut self, ctx: &mut ViewContext<Self>) {
-        let query_text = self.buffer_model.as_ref(ctx).current_value().to_owned();
+    pub fn update_query_text(&mut self, query_text: String, ctx: &mut ViewContext<Self>) {
         let filters = self.model.as_ref(ctx).active_tab_filters();
         self.mixer.update(ctx, |mixer, ctx| {
             mixer.run_query(
@@ -508,6 +519,11 @@ impl InlineHistoryMenuView {
                 ctx,
             );
         });
+    }
+
+    fn open_with_current_buffer(&mut self, ctx: &mut ViewContext<Self>) {
+        let query_text = self.buffer_model.as_ref(ctx).current_value().to_owned();
+        self.update_query_text(query_text, ctx);
     }
 
     fn rerun_query(&self, ctx: &mut ViewContext<Self>) {

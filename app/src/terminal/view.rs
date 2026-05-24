@@ -21036,6 +21036,13 @@ impl TerminalView {
             InputEvent::SubmitCLIAgentInput { text } => {
                 self.submit_cli_agent_rich_input(text.clone(), ctx);
             }
+            InputEvent::CloseStaleCliAgentRichInput { text, reason } => {
+                self.close_cli_agent_rich_input(*reason, ctx);
+                self.input.update(ctx, |input, ctx| {
+                    input.replace_buffer_content(text, ctx);
+                    input.focus_input_box(ctx);
+                });
+            }
             InputEvent::OpenAIDocumentPane {
                 document_id,
                 document_version,
