@@ -51,7 +51,7 @@ use crate::{
             join_link,
             manager::{Manager, ManagerEvent},
             role_change_modal::RoleChangeOpenSource,
-            SharedSessionStatus,
+            SharedSessionSource, SharedSessionStatus,
         },
         view::Event,
         TerminalManager, TerminalView,
@@ -75,6 +75,7 @@ use crate::{
 
 #[cfg(feature = "local_fs")]
 use crate::ai::blocklist::BlocklistAIHistoryEvent;
+use crate::code::buffer_location::LocalOrRemotePath;
 #[cfg(not(target_family = "wasm"))]
 use crate::server::server_api::ServerApiProvider;
 
@@ -179,7 +180,7 @@ fn register_legacy_local_lifecycle_subscription(
     }
 }
 
-/// Returns the `SessionSourceType` the host terminal is sharing as, or
+/// Returns the shared-session source the host terminal is sharing as, or
 /// `None` if it is not currently a shared-session creator. Reads the
 /// underlying `TerminalModel` directly via the host's `TerminalView` so the
 /// dispatch helpers don't need to downcast a `dyn TerminalManager` trait
@@ -189,61 +190,50 @@ fn register_legacy_local_lifecycle_subscription(
 pub(in crate::pane_group) fn host_terminal_shared_session_source_type(
     parent_terminal_view: &ViewHandle<TerminalView>,
     ctx: &AppContext,
-) -> Option<SessionSourceType> {
+) -> Option<SharedSessionSource> {
     let model = parent_terminal_view.as_ref(ctx).model.lock();
     // `start_sharing_session` sets this once the share is active.
-    if let Some(source_type) = model.shared_session_source_type() {
-        return Some(source_type);
+    if let Some(source) = model.shared_session_source() {
+        return Some(source.clone());
     }
-    // Pre-bootstrap: the source type is carried inside
+    // Pre-bootstrap: the source is carried inside
     // `SharedSessionStatus::SharePendingPreBootstrap` (set by the terminal
     // manager constructor when `IsSharedSessionCreator::Yes` is plumbed
     // through).
-    if let SharedSessionStatus::SharePendingPreBootstrap { source_type } =
-        model.shared_session_status()
+    if let SharedSessionStatus::SharePendingPreBootstrap { source } = model.shared_session_status()
     {
-        return Some(source_type.clone());
+        return Some(source.clone());
     }
     None
 }
 
-/// Builds the `IsSharedSessionCreator` value for a child pane being spawned
-/// by `run_agents(local)`. Returns `Yes` (with the child's own `task_id`
-/// stamped onto the source type) iff:
-///   1. `FeatureFlag::OrchestrationViewerPillBar` is enabled, and
-///   2. the host terminal is itself sharing as a
-///      `SessionSourceType::AmbientAgent` (i.e. the host is a cloud
-///      orchestrator worker or a desktop session that was already shared
-///      under an ambient-agent task).
-///
-/// Non-`AmbientAgent` host shares (e.g. a user manually sharing their own
-/// terminal via the share modal) explicitly do NOT cascade to child panes:
-/// the viewer-side pill bar in `shared_session/viewer/terminal_manager.rs`
-/// only materializes for `AmbientAgent` host source types, so auto-sharing
-/// children of a manual share would consume share-server capacity and
-/// publish a child session transcript without producing any pill-bar UI
-/// for the host's viewers to reach it — strictly worse than leaving
-/// children unshared.
+/// Builds the `IsSharedSessionCreator` for a child pane spawned by
+/// `run_agents(local)`. Returns `Yes` (stamped with the child's `task_id`)
+/// only when `OrchestrationViewerPillBar` is enabled and the host carries
+/// an orchestrator `task_id`. The host's variant kind is preserved so
+/// cloud-only UI stays gated on `AmbientAgent`.
 #[cfg(not(target_family = "wasm"))]
 pub(in crate::pane_group) fn inherit_share_for_local_child(
-    host_source_type: Option<&SessionSourceType>,
+    host_source: Option<&SharedSessionSource>,
     child_task_id: AmbientAgentTaskId,
 ) -> IsSharedSessionCreator {
     if !FeatureFlag::OrchestrationViewerPillBar.is_enabled() {
         return IsSharedSessionCreator::No;
     }
-    if matches!(
-        host_source_type,
-        Some(SessionSourceType::AmbientAgent { .. })
-    ) {
-        IsSharedSessionCreator::Yes {
-            source_type: SessionSourceType::AmbientAgent {
-                task_id: Some(child_task_id.to_string()),
-            },
-        }
-    } else {
-        IsSharedSessionCreator::No
+    let Some(host_source) = host_source else {
+        return IsSharedSessionCreator::No;
+    };
+    if host_source.orchestrator_task_id().is_none() {
+        return IsSharedSessionCreator::No;
     }
+    let child_task_id_str = child_task_id.to_string();
+    let source = match &host_source.source_type {
+        SessionSourceType::User => SharedSessionSource::user(Some(child_task_id_str)),
+        SessionSourceType::AmbientAgent { .. } => {
+            SharedSessionSource::ambient_agent(Some(child_task_id_str))
+        }
+    };
+    IsSharedSessionCreator::Yes { source }
 }
 
 impl TerminalPane {
@@ -1205,7 +1195,7 @@ fn handle_terminal_view_event(
             }
             Event::OpenFileInWarp { path, session } => {
                 ctx.emit(pane_group::Event::OpenFileInWarp {
-                    path: path.clone(),
+                    path: LocalOrRemotePath::Local(path.clone()),
                     session: session.clone(),
                 });
             }
@@ -2360,6 +2350,7 @@ fn handle_ai_history_event(
         | BlocklistAIHistoryEvent::ConversationOwnershipTransferred { .. }
         | BlocklistAIHistoryEvent::NewConversationRequestComplete { .. }
         | BlocklistAIHistoryEvent::OrchestrationConfigUpdated { .. }
-        | BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { .. } => (),
+        | BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { .. }
+        | BlocklistAIHistoryEvent::LocalSharedSessionEstablished { .. } => (),
     }
 }

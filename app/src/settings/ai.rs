@@ -1918,6 +1918,11 @@ impl AISettings {
         self.is_any_ai_enabled(app)
     }
 
+    pub fn is_run_agents_permissions_editable(&self, app: &AppContext) -> bool {
+        // TODO: Allow workspace overrides on run-agents permissions.
+        self.is_any_ai_enabled(app)
+    }
+
     pub fn is_mcp_permission_editable(&self, app: &AppContext) -> bool {
         // TODO: Allow workspace overrides on MCP permissions.
         self.is_any_ai_enabled(app)
