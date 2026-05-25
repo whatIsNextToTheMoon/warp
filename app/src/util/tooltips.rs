@@ -10,6 +10,7 @@ use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{AppContext, Element, EventContext, SingletonEntity};
 
 use crate::appearance::Appearance;
+use crate::i18n::ui_text;
 use crate::settings::PrivacySettings;
 use crate::terminal::model::secrets::SecretLevel;
 use crate::ui_components::blended_colors;
@@ -92,7 +93,7 @@ where
             appearance
                 .ui_builder()
                 .tooltip_link(
-                    link.text,
+                    ui_text(&link.text),
                     None,
                     Some(Box::new(move |ctx| {
                         on_click(ctx);
@@ -104,7 +105,7 @@ where
                 .finish(),
         );
 
-        if let Some(detail) = link.detail {
+        if let Some(detail) = link.detail.as_deref().map(ui_text) {
             links.push(
                 appearance
                     .ui_builder()
@@ -135,18 +136,20 @@ where
                 redaction,
                 TooltipRedaction::SecretNotSentToLLMMessaging { .. }
             ) {
-                "This wasn't included in the AI conversation."
+                ui_text("This wasn't included in the AI conversation.")
             } else {
-                "This won't be included in any AI conversations or shared blocks."
+                ui_text("This won't be included in any AI conversations or shared blocks.")
             };
 
             // Generate the appropriate message based on secret level
             let secret_message = match secret_level {
                 Some(SecretLevel::Enterprise) => {
-                    "Pattern matched your organization's secret redaction regex list."
+                    ui_text("Pattern matched your organization's secret redaction regex list.")
                 }
-                Some(SecretLevel::User) => "Pattern matched your secret redaction regex list.",
-                None => "Pattern matched the secret redaction regex list.",
+                Some(SecretLevel::User) => {
+                    ui_text("Pattern matched your secret redaction regex list.")
+                }
+                None => ui_text("Pattern matched the secret redaction regex list."),
             };
 
             tooltip.add_child(

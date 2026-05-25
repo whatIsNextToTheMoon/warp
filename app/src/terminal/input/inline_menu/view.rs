@@ -304,6 +304,7 @@ pub struct InlineMenuView<A: InlineMenuAction, T: 'static + Send + Sync = ()> {
     result_renderers: Vec<QueryResultRenderer<A>>,
     weak_handle: WeakViewHandle<Self>,
     positioner: ModelHandle<InlineMenuPositioner>,
+    input_suggestions_model: ModelHandle<InputSuggestionsModeModel>,
     message_bar: ViewHandle<InlineMenuMessageBar<A, T>>,
     agent_view_controller: ModelHandle<AgentViewController>,
     header_config: InlineMenuHeaderConfig,
@@ -460,6 +461,19 @@ impl<A: InlineMenuAction, T: 'static + Send + Sync> InlineMenuView<A, T> {
                 me.details_pane_target = DetailsPaneTarget::default();
                 if me.mixer.as_ref(ctx).are_results_empty() {
                     me.selected_idx = None;
+                } else if me
+                    .input_suggestions_model
+                    .as_ref(ctx)
+                    .mode()
+                    .is_history_while_typing()
+                {
+                    // The automatic history-as-you-type popup is passive: typing Enter should
+                    // submit the current input, not accept the most recent history item. Users can
+                    // still choose a result explicitly with Up/Down or the mouse.
+                    me.selected_idx = None;
+                    me.model.update(ctx, |model, ctx| {
+                        model.clear_selected_item(ctx);
+                    });
                 } else {
                     // Select the last non-disabled item by default.
                     let default_selected_idx = (0..me.result_renderers.len())
@@ -490,6 +504,7 @@ impl<A: InlineMenuAction, T: 'static + Send + Sync> InlineMenuView<A, T> {
             mixer,
             model: inline_menu_model,
             positioner,
+            input_suggestions_model: input_suggestions_model.clone(),
             message_bar,
             agent_view_controller,
             selected_idx: None,

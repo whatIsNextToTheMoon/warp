@@ -10715,6 +10715,51 @@ impl TerminalView {
         )
     }
 
+    pub(crate) fn active_block_snapshot_for_restore(
+        &self,
+        app: &AppContext,
+    ) -> Option<(Arc<SerializedBlock>, bool)> {
+        let model = self.model.lock();
+        let block_list = model.block_list();
+        let active_block = block_list.active_block();
+        if active_block.is_empty(block_list.agent_view_state()) {
+            return None;
+        }
+
+        let BlockType::User(block_completed) = BlockType::from(active_block) else {
+            return None;
+        };
+
+        let mut serialized_block = (*block_completed.serialized_block).clone();
+        if serialized_block.stylized_command.is_empty()
+            && serialized_block.stylized_output.is_empty()
+        {
+            return None;
+        }
+        if !serialized_block.did_execute && serialized_block.stylized_output.is_empty() {
+            return None;
+        }
+
+        // Session restoration only reloads blocks that have both timestamps. Snapshot an
+        // active command as completed during normal shutdown so the newest visible scrollback
+        // survives closing Warp with the window close button.
+        let now = chrono::Local::now();
+        if serialized_block.start_ts.is_none() {
+            serialized_block.start_ts = Some(now);
+        }
+        if serialized_block.completed_ts.is_none() {
+            serialized_block.completed_ts = Some(now);
+        }
+
+        let is_local = !self.is_block_considered_remote(
+            serialized_block.session_id,
+            Some(&block_completed.command),
+            app,
+        );
+
+        Some((Arc::new(serialized_block), is_local))
+    }
+
     /// Returns true if the block is considered remote.
     ///
     /// Note that we don't know for sure if a block is remote, because we can only detect
@@ -16058,7 +16103,7 @@ impl TerminalView {
                             Some(model.link_at_range(url, RespectObfuscatedSecrets::Yes));
                         url_content
                             .map(|url_content| {
-                                vec![MenuItemFields::new("Copy URL")
+                                vec![MenuItemFields::new(crate::i18n::ui_str("Copy URL"))
                                     .with_on_select_action(TerminalAction::ContextMenu(
                                         ContextMenuAction::CopyUrl { url_content },
                                     ))
@@ -16076,14 +16121,16 @@ impl TerminalView {
                         };
                         path.map(|path| {
                             let mut items = vec![
-                                MenuItemFields::new("Copy path")
+                                MenuItemFields::new(crate::i18n::ui_str("Copy path"))
                                     .with_on_select_action(TerminalAction::ContextMenu(
                                         ContextMenuAction::CopyUrl {
                                             url_content: path.to_string_lossy().into(),
                                         },
                                     ))
                                     .into_item(),
-                                MenuItemFields::new(show_in_file_explorer_menu_item_label)
+                                MenuItemFields::new(crate::i18n::ui_text(
+                                    show_in_file_explorer_menu_item_label,
+                                ))
                                     .with_on_select_action(TerminalAction::ShowInFileExplorer(
                                         path.clone(),
                                     ))
@@ -16092,14 +16139,14 @@ impl TerminalView {
 
                             if is_markdown_file(&path) {
                                 items.push(
-                                    MenuItemFields::new("Open in Warp")
+                                    MenuItemFields::new(crate::i18n::ui_str("Open in Warp"))
                                         .with_on_select_action(TerminalAction::OpenFileInWarp(path))
                                         .into_item(),
                                 );
                                 // Because the default for cmd-click is to open in Warp, we also
                                 // have an open-in-editor option.
                                 items.push(
-                                    MenuItemFields::new("Open in editor")
+                                    MenuItemFields::new(crate::i18n::ui_str("Open in editor"))
                                         .with_on_select_action(TerminalAction::OpenGridLink(
                                             highlighted_link.clone(),
                                         ))

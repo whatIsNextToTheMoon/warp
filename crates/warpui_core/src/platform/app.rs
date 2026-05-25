@@ -29,6 +29,8 @@ pub struct AppCallbacks {
     /// Callback on whether the window will proceed with closing.
     pub on_should_close_window:
         Option<Box<dyn FnMut(WindowId, &mut AppContext) -> ApproveTerminateResult>>,
+    /// Callback just before the framework detaches and snapshots a closing window.
+    pub on_window_before_close: Option<Box<dyn FnMut(WindowId, &mut AppContext)>>,
     /// Callback for when the user clicks "don't show again" on the warning modal.
     pub on_disable_warning_modal: Option<Box<dyn FnMut(&mut AppContext)>>,
     /// Callback on when the internet reachability to a specific host has changed.
@@ -212,6 +214,10 @@ impl AppCallbackDispatcher {
 
     pub fn window_will_close(&mut self, window_id: WindowId) {
         log::info!("{window_id:?} will close");
+        if let Some(callback) = &mut self.callbacks.on_window_before_close {
+            self.ui_app.update(|ctx| callback(window_id, ctx));
+        }
+
         if let Some(callback) = &mut self.callbacks.on_window_will_close {
             self.ui_app.update(|ctx| {
                 let closed_window_data = ctx.handle_window_closed(window_id);

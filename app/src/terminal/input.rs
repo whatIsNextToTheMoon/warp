@@ -11493,6 +11493,24 @@ impl Input {
             && self.is_cursor_in_valid_position_for_completions_while_typing(ctx)
     }
 
+    fn update_history_while_typing_query_text(
+        &mut self,
+        query_text: String,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if self.is_cloud_mode_input_v2_composing(ctx) {
+            if let Some(view) = self.cloud_mode_v2_history_menu_view.clone() {
+                view.update(ctx, |view, ctx| {
+                    view.update_query_text(query_text, ctx);
+                });
+            }
+        } else {
+            self.inline_history_menu_view.update(ctx, |view, ctx| {
+                view.update_query_text(query_text, ctx);
+            });
+        }
+    }
+
     fn maybe_open_suggestions_while_typing(&mut self, ctx: &mut ViewContext<Self>) {
         let query_text = self.editor.as_ref(ctx).buffer_text(ctx);
         if self.should_show_history_while_typing(ctx) {
@@ -11508,26 +11526,15 @@ impl Input {
                 return;
             }
 
-            if self
+            if !self
                 .suggestions_mode_model
                 .as_ref(ctx)
                 .mode()
                 .is_history_while_typing()
             {
-                if self.is_cloud_mode_input_v2_composing(ctx) {
-                    if let Some(view) = self.cloud_mode_v2_history_menu_view.clone() {
-                        view.update(ctx, |view, ctx| {
-                            view.update_query_text(query_text, ctx);
-                        });
-                    }
-                } else {
-                    self.inline_history_menu_view.update(ctx, |view, ctx| {
-                        view.update_query_text(query_text, ctx);
-                    });
-                }
-            } else {
                 self.open_inline_history_menu_while_typing(ctx);
             }
+            self.update_history_while_typing_query_text(query_text, ctx);
             return;
         }
 

@@ -74,6 +74,10 @@ pub fn init_global_actions(app: &mut AppContext) {
     app.add_global_action("workspace:toggle_scroll_reporting", toggle_scroll_reporting);
     app.add_global_action("workspace:toggle_focus_reporting", toggle_focus_reporting);
     app.add_global_action("workspace:save_app", save_app);
+    app.add_global_action(
+        "workspace:persist_active_blocks_for_restore",
+        persist_active_blocks_for_restore,
+    );
     app.add_global_action("workspace:fork_ai_conversation", fork_ai_conversation);
     app.add_global_action(
         "workspace:summarize_ai_conversation",
@@ -120,12 +124,32 @@ fn toggle_focus_reporting(_: &(), ctx: &mut AppContext) {
     });
 }
 
-fn save_app(_: &(), ctx: &mut AppContext) {
-    if !AppExecutionMode::as_ref(ctx).can_save_session() {
+fn should_persist_session(ctx: &AppContext) -> bool {
+    AppExecutionMode::as_ref(ctx).can_save_session()
+        && *GeneralSettings::as_ref(ctx).restore_session
+        && !CrossWindowTabDrag::as_ref(ctx).is_active()
+}
+
+fn persist_active_blocks_for_restore(_: &(), ctx: &mut AppContext) {
+    if !should_persist_session(ctx) {
         return;
     }
 
-    if !*GeneralSettings::as_ref(ctx).restore_session {
+    let window_ids = ctx.window_ids().collect::<Vec<_>>();
+    for window_id in window_ids {
+        let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id) else {
+            continue;
+        };
+        for workspace in workspaces {
+            workspace.update(ctx, |workspace, ctx| {
+                workspace.persist_active_terminal_blocks_for_restore(ctx);
+            });
+        }
+    }
+}
+
+fn save_app(_: &(), ctx: &mut AppContext) {
+    if !should_persist_session(ctx) {
         return;
     }
 
@@ -137,9 +161,8 @@ fn save_app(_: &(), ctx: &mut AppContext) {
     // close callbacks (see `app_callbacks` in `lib.rs`), all of which run
     // during a drag, so we have to short-circuit at this boundary. The
     // first save after the drag finalizes will rewrite the snapshot.
-    if CrossWindowTabDrag::as_ref(ctx).is_active() {
-        return;
-    }
+    // `should_persist_session` performs that guard for both app snapshots and the
+    // active-block shutdown snapshot.
 
     let Some(model_event_sender) = GlobalResourceHandlesProvider::as_ref(ctx)
         .get()
@@ -151,6 +174,13 @@ fn save_app(_: &(), ctx: &mut AppContext) {
 
     // Only compute the app state if we're definitely going to use it.
     let app_state = get_app_state(ctx);
+    if app_state.windows.is_empty() {
+        // A close-window event can be followed by app termination after the window has already
+        // been detached from AppContext. Persisting that empty snapshot would erase the pre-close
+        // session snapshot we just saved, which is exactly how the restored scrollback gets stale.
+        log::info!("Skipping empty session snapshot");
+        return;
+    }
     let event = ModelEvent::Snapshot(app_state);
 
     if let Err(err) = model_event_sender.send(event) {

@@ -1102,6 +1102,23 @@ impl Workspace {
     pub(crate) fn set_suppress_detach_panes_on_window_close(&mut self, value: bool) {
         self.suppress_detach_panes_on_window_close = value;
     }
+
+    pub(crate) fn persist_active_terminal_blocks_for_restore(
+        &mut self,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let pane_groups = self
+            .tabs
+            .iter()
+            .map(|tab| tab.pane_group.clone())
+            .collect_vec();
+        for pane_group in pane_groups {
+            pane_group.update(ctx, |pane_group, ctx| {
+                pane_group.persist_active_terminal_blocks_for_restore(ctx);
+            });
+        }
+    }
+
     fn tab_rename_editor_font_size(ctx: &AppContext, appearance: &Appearance) -> f32 {
         if FeatureFlag::VerticalTabs.is_enabled() && *TabSettings::as_ref(ctx).use_vertical_tabs {
             match *TabSettings::as_ref(ctx)

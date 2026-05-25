@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::mpsc::SyncSender;
+use std::sync::mpsc::{SyncSender, TrySendError};
 use std::sync::Arc;
 
 use itertools::Itertools;
@@ -25,6 +25,7 @@ use uuid::Uuid;
 use warp_cli::agent::Harness;
 use warp_core::command::ExitCode;
 use warp_core::context_flag::ContextFlag;
+use warp_core::execution_mode::AppExecutionMode;
 use warp_terminal::shell::{ShellName, ShellType};
 use warp_util::path::convert_wsl_to_windows_host_path;
 #[cfg(feature = "local_fs")]
@@ -100,7 +101,7 @@ use crate::pane_group::pane::terminal_pane::{
 };
 use crate::pane_group::pane::welcome_pane::WelcomePane;
 use crate::pane_group::pane::ActionOrigin;
-use crate::persistence::ModelEvent;
+use crate::persistence::{BlockCompleted, ModelEvent};
 use crate::quit_warning::UnsavedStateSummary;
 use crate::resource_center::{
     mark_feature_used_and_write_to_user_defaults, Tip, TipAction, TipsCompleted,
@@ -1107,6 +1108,68 @@ impl PaneGroup {
                 None
             }
         })
+    }
+
+    pub(crate) fn persist_active_terminal_blocks_for_restore(
+        &mut self,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !AppExecutionMode::as_ref(ctx).can_save_session()
+            || !*GeneralSettings::as_ref(ctx).restore_session
+        {
+            return;
+        }
+
+        let Some(sender) = self.model_event_sender.clone() else {
+            return;
+        };
+
+        let pane_ids = self.terminal_pane_ids().collect_vec();
+        for pane_id in pane_ids {
+            let Some(session_uuid) = self
+                .terminal_session_by_id(pane_id)
+                .map(|pane| pane.session_uuid())
+            else {
+                continue;
+            };
+            let Some(terminal_view) = self.terminal_view_from_pane_id(pane_id, ctx) else {
+                continue;
+            };
+
+            let Some((block, is_local)) = terminal_view
+                .read(ctx, |view, app| view.active_block_snapshot_for_restore(app))
+            else {
+                continue;
+            };
+
+            let event = ModelEvent::SaveBlock(BlockCompleted {
+                pane_id: session_uuid.clone(),
+                block,
+                is_local,
+            });
+
+            match sender.try_send(event) {
+                Ok(()) => {}
+                Err(TrySendError::Disconnected(_)) => {
+                    log::error!(
+                        "SQLite writer channel disconnected; could not persist active block snapshot"
+                    );
+                }
+                Err(TrySendError::Full(event)) => {
+                    let sender = sender.clone();
+                    let _ = ctx.spawn(
+                        async move { sender.send(event) },
+                        |_, res, _| {
+                            if let Err(err) = res {
+                                log::error!(
+                                    "Error sending active block snapshot event: {err:?}"
+                                );
+                            }
+                        },
+                    );
+                }
+            }
+        }
     }
 
     /// Returns true if this pane group contains any terminal panes.

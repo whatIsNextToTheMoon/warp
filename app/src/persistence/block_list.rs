@@ -180,6 +180,14 @@ pub(super) fn save_block(
 ) -> Result<(), Error> {
     use schema::blocks::dsl::*;
     conn.transaction::<_, Error, _>(|conn| {
+        let block_id_to_replace = block.id.as_str().to_string();
+        diesel::delete(
+            schema::blocks::dsl::blocks
+                .filter(pane_leaf_uuid.eq(pane_id.clone()))
+                .filter(block_id.eq(block_id_to_replace)),
+        )
+        .execute(conn)?;
+
         let saved_blocks_count: i64 = schema::blocks::dsl::blocks
             .filter(pane_leaf_uuid.eq(pane_id.clone()))
             .filter(id.is_not_null())

@@ -9,6 +9,7 @@ use warpui::{AppContext, Element, EventContext};
 
 use super::{TerminalAction, TerminalView};
 use crate::appearance::Appearance;
+use crate::i18n::{ui_str, ui_text};
 use crate::terminal::links::directly_open_link_keybinding_string;
 use crate::terminal::model::{ObfuscateSecrets, Secret};
 use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
@@ -59,7 +60,7 @@ fn open_in_warp_tooltip(
         None
     };
     Some(GridTooltipLink {
-        text: "Open in Warp".to_string(),
+        text: ui_str("Open in Warp"),
         action: TerminalAction::OpenCodeInWarp {
             path,
             layout: *EditorSettings::as_ref(app).open_file_layout.value(),
@@ -78,11 +79,10 @@ fn show_in_file_explorer_tooltip(
     mouse_state: MouseStateHandle,
 ) -> GridTooltipLink {
     let text = if cfg!(target_os = "macos") {
-        "Show in Finder"
+        ui_str("Show in Finder")
     } else {
-        "Show containing folder"
-    }
-    .to_string();
+        ui_str("Show containing folder")
+    };
     GridTooltipLink {
         text,
         action: TerminalAction::ShowInFileExplorer(path),
@@ -130,7 +130,7 @@ impl TerminalView {
 
                         if is_redacted {
                             links.push(GridTooltipLink {
-                                text: "Reveal secret".to_string(),
+                                text: ui_str("Reveal secret"),
                                 action: TerminalAction::ToggleGridSecret {
                                     handle,
                                     show_secret: true,
@@ -140,7 +140,7 @@ impl TerminalView {
                             });
                         } else {
                             links.push(GridTooltipLink {
-                                text: "Hide secret".to_string(),
+                                text: ui_str("Hide secret"),
                                 action: TerminalAction::ToggleGridSecret {
                                     handle,
                                     show_secret: false,
@@ -152,7 +152,7 @@ impl TerminalView {
                     }
 
                     links.push(GridTooltipLink {
-                        text: "Copy secret".to_string(),
+                        text: ui_str("Copy secret"),
                         action: TerminalAction::CopyGridSecret(handle),
                         mouse_state: self.mouse_states.copy_secrets_tooltip.clone(),
                         detail: None,
@@ -172,7 +172,7 @@ impl TerminalView {
 
                         if is_obfuscated {
                             links.push(GridTooltipLink {
-                                text: "Reveal secret".to_string(),
+                                text: ui_str("Reveal secret"),
                                 action: TerminalAction::ToggleRichContentSecret {
                                     rich_content_tooltip_info: tooltip_info.clone(),
                                     show_secret: true,
@@ -182,7 +182,7 @@ impl TerminalView {
                             });
                         } else {
                             links.push(GridTooltipLink {
-                                text: "Hide secret".to_string(),
+                                text: ui_str("Hide secret"),
                                 action: TerminalAction::ToggleRichContentSecret {
                                     rich_content_tooltip_info: tooltip_info.clone(),
                                     show_secret: false,
@@ -194,7 +194,7 @@ impl TerminalView {
                     }
 
                     links.push(GridTooltipLink {
-                        text: "Copy secret".to_string(),
+                        text: ui_str("Copy secret"),
                         action: TerminalAction::CopyRichContentSecret(tooltip_info.clone()),
                         mouse_state: self.mouse_states.copy_secrets_tooltip.clone(),
                         detail: None,
@@ -330,11 +330,11 @@ fn render_tooltip(
     let shared_links = tooltip_links.into_iter().map(|link| {
         let action = link.action;
         TooltipLink {
-            text: link.text,
+            text: ui_text(&link.text),
             on_click: move |ctx: &mut EventContext| {
                 ctx.dispatch_typed_action(action.clone());
             },
-            detail: link.detail,
+            detail: link.detail.as_deref().map(ui_text),
             mouse_state: link.mouse_state,
         }
     });

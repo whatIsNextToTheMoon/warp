@@ -5180,6 +5180,15 @@ fn test_history_while_typing_opens_history_menu_instead_of_completions() {
             ));
             assert_eq!(input.buffer_text(ctx), "g");
             assert!(input.inline_history_menu_view.as_ref(ctx).result_count(ctx) > 0);
+            assert!(
+                input
+                    .inline_history_menu_view
+                    .as_ref(ctx)
+                    .model()
+                    .as_ref(ctx)
+                    .selected_item()
+                    .is_none()
+            );
         });
     });
 }
@@ -5249,6 +5258,15 @@ fn test_history_while_typing_refreshes_after_no_results() {
             ));
             assert_eq!(input.buffer_text(ctx), "g");
             assert!(input.inline_history_menu_view.as_ref(ctx).result_count(ctx) > 0);
+            assert!(
+                input
+                    .inline_history_menu_view
+                    .as_ref(ctx)
+                    .model()
+                    .as_ref(ctx)
+                    .selected_item()
+                    .is_none()
+            );
         });
     });
 }

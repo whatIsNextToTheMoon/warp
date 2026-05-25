@@ -2011,18 +2011,16 @@ impl EventLoop {
             );
             // Currently the size argument is not supported on X11. We calculate it here anyway.
             // Wayland compositors/fcitx use it as the cursor rectangle and place the candidate
-            // popup around that area. Passing an already-offset point makes the popup drift.
-            //
-            // Give Wayland/fcitx a taller cursor area instead of moving the anchor point. That
-            // reserves room for inline preedit text, so the candidate window is less likely to
-            // cover what the user is currently typing in terminal/agent inputs.
+            // popup around that area. Keep the anchor stable: some IMEs sample every
+            // `set_ime_position` call, so sending a temporary offset can make the candidate
+            // window jump or cover the inline preedit text.
             let cursor_area_height = cursor_rect
                 .height()
                 .max(active_cursor_position.font_size)
                 .max(1.);
             let size = LogicalSize::new(
-                cursor_rect.width().max(active_cursor_position.font_size) as f64,
-                (cursor_area_height * 2.) as f64,
+                cursor_rect.width().max(1.) as f64,
+                cursor_area_height as f64,
             );
             let now = Instant::now();
             let position_key = (position.x, position.y);
@@ -2035,9 +2033,6 @@ impl EventLoop {
                 return;
             }
 
-            // TODO(abhishek): We make sure that the position is different than last time to prevent winit from
-            // caching the old position and not properly updating on `WindowMoved` or `WindowResized` events.
-            winit_window.set_ime_position(LogicalPosition::new(position.x, position.y + 1.), size);
             winit_window.set_ime_position(position, size);
             self.last_ime_cursor_position = Some(LastImeCursorPosition {
                 position: position_key,

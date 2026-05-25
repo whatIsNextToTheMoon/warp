@@ -2153,6 +2153,9 @@ pub(crate) fn app_callbacks(is_integration_test: bool) -> warpui::platform::AppC
                 manager.close_notebooks(ctx);
             });
 
+            ctx.dispatch_global_action("workspace:persist_active_blocks_for_restore", &());
+            ctx.dispatch_global_action("workspace:save_app", &());
+
             PersistenceWriter::handle(ctx).update(ctx, |writer, _ctx| {
                 writer.terminate();
             });
@@ -2364,6 +2367,14 @@ pub(crate) fn app_callbacks(is_integration_test: bool) -> warpui::platform::AppC
                 });
             }
 
+            ctx.dispatch_global_action("workspace:save_app", &());
+        })),
+        on_window_before_close: Some(Box::new(move |_window_id, ctx| {
+            if ctx.windows().stage() == ApplicationStage::Terminating {
+                return;
+            }
+
+            ctx.dispatch_global_action("workspace:persist_active_blocks_for_restore", &());
             ctx.dispatch_global_action("workspace:save_app", &());
         })),
         on_window_will_close: Some(Box::new(move |closed_window_data, ctx| {
