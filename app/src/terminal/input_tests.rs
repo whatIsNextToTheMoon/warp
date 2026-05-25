@@ -5166,7 +5166,7 @@ fn test_history_while_typing_opens_history_menu_instead_of_completions() {
 
         input.update(&mut app, |input, ctx| {
             input.clear_buffer_and_reset_undo_stack(ctx);
-            input.user_insert("gi", ctx);
+            input.user_insert("g", ctx);
         });
 
         input.read(&app, |input, ctx| {
@@ -5178,7 +5178,77 @@ fn test_history_while_typing_opens_history_menu_instead_of_completions() {
                     ..
                 }
             ));
-            assert_eq!(input.buffer_text(ctx), "gi");
+            assert_eq!(input.buffer_text(ctx), "g");
+            assert!(input.inline_history_menu_view.as_ref(ctx).result_count(ctx) > 0);
+        });
+    });
+}
+
+#[test]
+fn test_history_while_typing_refreshes_after_no_results() {
+    let _flag = FeatureFlag::InlineHistoryMenu.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(
+            &mut app,
+            Some(vec!["git status".to_string(), "git pull".to_string()]),
+            None,
+        )
+        .await;
+        let input = terminal.read(&app, |view, _| view.input().clone());
+
+        InputSettings::handle(&app).update(&mut app, |input_settings, ctx| {
+            let _ = input_settings
+                .completions_open_while_typing
+                .set_value(true, ctx);
+            let _ = input_settings.history_open_while_typing.set_value(true, ctx);
+        });
+
+        input.update(&mut app, |input, ctx| {
+            input.clear_buffer_and_reset_undo_stack(ctx);
+            input.user_insert("DDDDD", ctx);
+        });
+
+        input.read(&app, |input, ctx| {
+            assert!(matches!(
+                input.suggestions_mode_model.as_ref(ctx).mode(),
+                InputSuggestionsMode::InlineHistoryMenu {
+                    restore_buffer_on_close: false,
+                    preview_selection: false,
+                    ..
+                }
+            ));
+            assert_eq!(input.inline_history_menu_view.as_ref(ctx).result_count(ctx), 0);
+        });
+
+        input.update(&mut app, |input, ctx| {
+            input.clear_buffer_and_reset_undo_stack(ctx);
+        });
+
+        input.read(&app, |input, ctx| {
+            assert!(matches!(
+                input.suggestions_mode_model.as_ref(ctx).mode(),
+                InputSuggestionsMode::Closed
+            ));
+            assert!(input.buffer_text(ctx).is_empty());
+        });
+
+        input.update(&mut app, |input, ctx| {
+            input.user_insert("g", ctx);
+        });
+
+        input.read(&app, |input, ctx| {
+            assert!(matches!(
+                input.suggestions_mode_model.as_ref(ctx).mode(),
+                InputSuggestionsMode::InlineHistoryMenu {
+                    restore_buffer_on_close: false,
+                    preview_selection: false,
+                    ..
+                }
+            ));
+            assert_eq!(input.buffer_text(ctx), "g");
+            assert!(input.inline_history_menu_view.as_ref(ctx).result_count(ctx) > 0);
         });
     });
 }

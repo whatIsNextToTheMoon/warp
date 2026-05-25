@@ -183,6 +183,12 @@ impl CloudModeV2HistoryMenuView {
             .is_some()
     }
 
+    pub fn update_query_text(&mut self, query_text: String, ctx: &mut ViewContext<Self>) {
+        self.mixer.update(ctx, |mixer, ctx| {
+            mixer.run_query(prompts_query(&query_text), ctx);
+        });
+    }
+
     /// Returns the currently selected AI prompt's query text, if any.
     ///
     /// The cloud-mode v2 menu is restricted to `AcceptHistoryItem::AIPrompt`

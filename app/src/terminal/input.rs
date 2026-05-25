@@ -470,6 +470,7 @@ const COMPLETIONS_START_OF_REPLACEMENT_SPAN_POSITION_ID: &str =
 const HISTORY_DETAILS_VIEW_WIDTH_REQUIREMENT: f32 = 1100.;
 
 const MIN_BUFFER_LEN_TO_SHOW_COMPLETIONS_WHILE_TYPING: usize = 2;
+const MIN_BUFFER_LEN_TO_SHOW_HISTORY_WHILE_TYPING: usize = 1;
 const NATIVE_SHELL_COMPLETIONS_TIMEOUT: Duration = Duration::from_secs(3);
 
 fn is_path_like_completion_token(token: &str, path_separators: &[char]) -> bool {
@@ -10139,7 +10140,7 @@ impl Input {
                             self.clear_current_workflow(ctx);
                         }
 
-                        if matches!(edit_origin, EditOrigin::UserTyped) {
+                        if edit_origin.is_user() {
                             self.maybe_open_suggestions_while_typing(ctx);
                         }
                     }
@@ -10168,7 +10169,15 @@ impl Input {
                         // User query menu handles its own state
                     }
                     InputSuggestionsMode::InlineHistoryMenu { .. } => {
-                        if self.should_show_history_while_typing(ctx) {
+                        let is_history_while_typing = self
+                            .suggestions_mode_model
+                            .as_ref(ctx)
+                            .mode()
+                            .is_history_while_typing();
+                        if is_history_while_typing {
+                            if edit_origin.is_user() {
+                                self.maybe_open_suggestions_while_typing(ctx);
+                            }
                             return;
                         }
 
@@ -11480,7 +11489,7 @@ impl Input {
             && FeatureFlag::InlineHistoryMenu.is_enabled()
             && !self.ai_input_model.as_ref(ctx).is_ai_input_enabled()
             && self.can_query_history(ctx)
-            && buffer_text.len() >= MIN_BUFFER_LEN_TO_SHOW_COMPLETIONS_WHILE_TYPING
+            && buffer_text.len() >= MIN_BUFFER_LEN_TO_SHOW_HISTORY_WHILE_TYPING
             && self.is_cursor_in_valid_position_for_completions_while_typing(ctx)
     }
 
@@ -11505,9 +11514,17 @@ impl Input {
                 .mode()
                 .is_history_while_typing()
             {
-                self.inline_history_menu_view.update(ctx, |view, ctx| {
-                    view.update_query_text(query_text, ctx);
-                });
+                if self.is_cloud_mode_input_v2_composing(ctx) {
+                    if let Some(view) = self.cloud_mode_v2_history_menu_view.clone() {
+                        view.update(ctx, |view, ctx| {
+                            view.update_query_text(query_text, ctx);
+                        });
+                    }
+                } else {
+                    self.inline_history_menu_view.update(ctx, |view, ctx| {
+                        view.update_query_text(query_text, ctx);
+                    });
+                }
             } else {
                 self.open_inline_history_menu_while_typing(ctx);
             }
