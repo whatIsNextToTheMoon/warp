@@ -4948,7 +4948,10 @@ impl Input {
                     );
                 });
             }
-            inline_history::InlineHistoryMenuEvent::AcceptCommand { command, .. } => {
+            inline_history::InlineHistoryMenuEvent::AcceptCommand {
+                command,
+                linked_workflow_data,
+            } => {
                 if self
                     .suggestions_mode_model
                     .as_ref(ctx)
@@ -4959,10 +4962,9 @@ impl Input {
                     });
                     ctx.notify();
                 }
-                self.editor.update(ctx, |editor, ctx| {
-                    editor.set_buffer_text(command, ctx);
-                });
-                self.input_enter(ctx);
+
+                self.insert_inline_history_command_into_input(command, linked_workflow_data, ctx);
+                self.focus_input_box(ctx);
             }
             inline_history::InlineHistoryMenuEvent::AcceptAIPrompt { query_text } => {
                 if self
@@ -4975,10 +4977,8 @@ impl Input {
                     });
                     ctx.notify();
                 }
-                self.editor.update(ctx, |editor, ctx| {
-                    editor.set_buffer_text(query_text, ctx);
-                });
-                self.input_enter(ctx);
+                self.insert_inline_history_ai_prompt_into_input(query_text, ctx);
+                self.focus_input_box(ctx);
             }
             inline_history::InlineHistoryMenuEvent::SelectCommand {
                 command,
@@ -4993,52 +4993,7 @@ impl Input {
                     return;
                 }
 
-                if let Some((workflow_type, workflow_source)) = linked_workflow_data
-                    .as_ref()
-                    .and_then(|linked_workflow_data| linked_workflow_data.linked_workflow(ctx))
-                {
-                    // TODO(ben): We should include the chosen env vars in the history
-                    // entry.
-                    let env_vars = workflow_type.as_workflow().default_env_vars();
-                    self.insert_workflow_into_input(
-                        workflow_type,
-                        workflow_source,
-                        WorkflowSelectionSource::UpArrowHistory,
-                        None,
-                        Some(command),
-                        env_vars,
-                        /*should_show_more_info_view=*/ false,
-                        ctx,
-                    );
-                } else {
-                    self.editor.update(ctx, |editor, ctx| {
-                        editor.set_buffer_text_ignoring_undo(command, ctx);
-                    });
-                }
-
-                // In fullscreen agent view, lock to Shell mode so the '!' indicator is
-                // rendered while cycling through shell command history.
-                let is_agent_view_fullscreen =
-                    self.agent_view_controller.as_ref(ctx).is_fullscreen();
-                self.ai_input_model.update(ctx, |ai_input_model, ctx| {
-                    if is_agent_view_fullscreen {
-                        ai_input_model.set_input_config(
-                            InputConfig {
-                                input_type: InputType::Shell,
-                                is_locked: true,
-                            },
-                            false,
-                            Some(InputTypeAutoDetectionSource::FullscreenInlineHistoryCycling),
-                            ctx,
-                        );
-                    } else {
-                        ai_input_model.set_input_type(
-                            InputType::Shell,
-                            Some(InputTypeAutoDetectionSource::HistorySelection),
-                            ctx,
-                        );
-                    }
-                });
+                self.insert_inline_history_command_into_input(command, linked_workflow_data, ctx);
             }
             inline_history::InlineHistoryMenuEvent::SelectAIPrompt { query_text } => {
                 if !self
@@ -5050,17 +5005,7 @@ impl Input {
                     return;
                 }
 
-                self.editor.update(ctx, |editor, ctx| {
-                    editor.set_buffer_text_ignoring_undo(query_text, ctx);
-                });
-
-                self.ai_input_model.update(ctx, |ai_input_model, ctx| {
-                    ai_input_model.set_input_type(
-                        InputType::AI,
-                        Some(InputTypeAutoDetectionSource::HistorySelection),
-                        ctx,
-                    );
-                });
+                self.insert_inline_history_ai_prompt_into_input(query_text, ctx);
             }
             inline_history::InlineHistoryMenuEvent::SelectConversation => {
                 if !self
@@ -5095,6 +5040,77 @@ impl Input {
                 // a no-op; the user dismisses via Escape.
             }
         }
+    }
+
+    fn insert_inline_history_command_into_input(
+        &mut self,
+        command: &str,
+        linked_workflow_data: &Option<super::history::LinkedWorkflowData>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if let Some((workflow_type, workflow_source)) = linked_workflow_data
+            .as_ref()
+            .and_then(|linked_workflow_data| linked_workflow_data.linked_workflow(ctx))
+        {
+            // TODO(ben): We should include the chosen env vars in the history
+            // entry.
+            let env_vars = workflow_type.as_workflow().default_env_vars();
+            self.insert_workflow_into_input(
+                workflow_type,
+                workflow_source,
+                WorkflowSelectionSource::UpArrowHistory,
+                None,
+                Some(command),
+                env_vars,
+                /*should_show_more_info_view=*/ false,
+                ctx,
+            );
+        } else {
+            self.editor.update(ctx, |editor, ctx| {
+                editor.set_buffer_text_ignoring_undo(command, ctx);
+            });
+        }
+
+        // In fullscreen agent view, lock to Shell mode so the '!' indicator is
+        // rendered while cycling through shell command history.
+        let is_agent_view_fullscreen = self.agent_view_controller.as_ref(ctx).is_fullscreen();
+        self.ai_input_model.update(ctx, |ai_input_model, ctx| {
+            if is_agent_view_fullscreen {
+                ai_input_model.set_input_config(
+                    InputConfig {
+                        input_type: InputType::Shell,
+                        is_locked: true,
+                    },
+                    false,
+                    Some(InputTypeAutoDetectionSource::FullscreenInlineHistoryCycling),
+                    ctx,
+                );
+            } else {
+                ai_input_model.set_input_type(
+                    InputType::Shell,
+                    Some(InputTypeAutoDetectionSource::HistorySelection),
+                    ctx,
+                );
+            }
+        });
+    }
+
+    fn insert_inline_history_ai_prompt_into_input(
+        &mut self,
+        query_text: &str,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.editor.update(ctx, |editor, ctx| {
+            editor.set_buffer_text_ignoring_undo(query_text, ctx);
+        });
+
+        self.ai_input_model.update(ctx, |ai_input_model, ctx| {
+            ai_input_model.set_input_type(
+                InputType::AI,
+                Some(InputTypeAutoDetectionSource::HistorySelection),
+                ctx,
+            );
+        });
     }
 
     fn restore_buffer_state(&mut self, buffer_state: &BufferState, ctx: &mut ViewContext<Self>) {
@@ -8202,7 +8218,12 @@ impl Input {
     ) -> bool {
         match self.suggestions_mode_model.as_ref(ctx).mode() {
             InputSuggestionsMode::Closed => false,
-            InputSuggestionsMode::HistoryUp { .. } => true,
+            InputSuggestionsMode::HistoryUp { .. } => {
+                // History suggestions already preview into the input as the user navigates.
+                // Enter keeps the previewed command in the input for review; execution still
+                // requires a second Enter after the menu closes.
+                true
+            }
             InputSuggestionsMode::CompletionSuggestions {
                 replacement_start, ..
             } => {
@@ -12667,6 +12688,14 @@ impl Input {
         {
             self.open_completion_suggestions(CompletionsTrigger::Keybinding, ctx);
         }
+    }
+
+    #[cfg(test)]
+    fn selected_suggestion_text(&self, app: &AppContext) -> Option<String> {
+        self.input_suggestions
+            .as_ref(app)
+            .get_selected_item_text()
+            .map(ToOwned::to_owned)
     }
 
     #[cfg(test)]

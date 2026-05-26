@@ -57,6 +57,7 @@ const DRAG_DROP_DEBOUNCE_TIMEOUT: Duration = Duration::from_millis(50);
 const IME_MARKED_TEXT_STORM_WINDOW: Duration = Duration::from_secs(1);
 const IME_MARKED_TEXT_STORM_LIMIT: usize = 240;
 const IME_MARKED_TEXT_STORM_WARN_INTERVAL: Duration = Duration::from_secs(10);
+const IME_CURSOR_AREA_HEIGHT_MULTIPLIER: f32 = 3.;
 
 /// Distance (in logical pixels) before a touch input is considered a drag. Flutter uses 18.
 const MAX_TAP_DISTANCE: f64 = 18.;
@@ -2013,14 +2014,21 @@ impl EventLoop {
             // Wayland compositors/fcitx use it as the cursor rectangle and place the candidate
             // popup around that area. Keep the anchor stable: some IMEs sample every
             // `set_ime_position` call, so sending a temporary offset can make the candidate
-            // window jump or cover the inline preedit text.
+            // window jump. Give Wayland a taller cursor area below the insertion point so fcitx
+            // has enough reserved space to avoid covering inline preedit text in Codex/PTY input.
             let cursor_area_height = cursor_rect
                 .height()
                 .max(active_cursor_position.font_size)
                 .max(1.);
+            let cursor_area_width = cursor_rect
+                .width()
+                .max(active_cursor_position.font_size)
+                .max(1.);
             let size = LogicalSize::new(
-                cursor_rect.width().max(1.) as f64,
-                cursor_area_height as f64,
+                cursor_area_width as f64,
+                (cursor_area_height * IME_CURSOR_AREA_HEIGHT_MULTIPLIER)
+                    .max(active_cursor_position.font_size * IME_CURSOR_AREA_HEIGHT_MULTIPLIER)
+                    .max(1.) as f64,
             );
             let now = Instant::now();
             let position_key = (position.x, position.y);

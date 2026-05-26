@@ -5272,6 +5272,59 @@ fn test_history_while_typing_refreshes_after_no_results() {
 }
 
 #[test]
+fn test_history_enter_fills_input_without_executing() {
+    let _flag = FeatureFlag::InlineHistoryMenu.override_enabled(false);
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let session_id = SessionId::from(1);
+        let terminal = add_window_with_bootstrapped_terminal(
+            &mut app,
+            Some(vec!["git status".to_string(), "git pull".to_string()]),
+            Some(SessionInfo::new_for_test().with_id(session_id)),
+        )
+        .await;
+        let input = terminal.read(&app, |view, _| view.input().clone());
+
+        input.update(&mut app, |input, ctx| {
+            input.editor_up(ctx);
+        });
+
+        input.read(&app, |input, ctx| {
+            assert_eq!(input.buffer_text(ctx), "git pull");
+            assert_eq!(input.selected_suggestion_text(ctx).as_deref(), Some("git pull"));
+            assert!(matches!(
+                input.suggestions_mode_model.as_ref(ctx).mode(),
+                InputSuggestionsMode::HistoryUp { .. }
+            ));
+        });
+
+        input.update(&mut app, |input, ctx| {
+            input.input_enter(ctx);
+        });
+
+        input.read(&app, |input, ctx| {
+            assert_eq!(input.buffer_text(ctx), "git pull");
+            assert!(matches!(
+                input.suggestions_mode_model.as_ref(ctx).mode(),
+                InputSuggestionsMode::Closed
+            ));
+        });
+        History::handle(&app).read(&app, |history, _ctx| {
+            assert_eq!(
+                history
+                    .commands(session_id)
+                    .unwrap()
+                    .into_iter()
+                    .map(|entry| entry.command.as_str())
+                    .collect_vec(),
+                vec!["git status", "git pull"]
+            );
+        });
+    });
+}
+
+#[test]
 fn test_history_while_typing_keeps_explicit_tab_completions() {
     let _flag = FeatureFlag::InlineHistoryMenu.override_enabled(true);
     App::test((), |mut app| async move {

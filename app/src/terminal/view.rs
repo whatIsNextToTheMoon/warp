@@ -11051,9 +11051,9 @@ impl TerminalView {
                         log::warn!("Unable to play bell: {e:#}");
                     }
                 }
-                // TODO(vorporeal): Remove this once we have a visual bell
-                // indicator in terminal tabs.
-                ctx.request_user_attention();
+                // Do not request window-manager attention for every BEL while the terminal is
+                // active. TUIs such as Codex can emit BEL for navigation misses; turning that
+                // into compositor attention makes the whole terminal visibly flash.
             }
             ModelEvent::Exit { reason } => {
                 if !self.manual_pty_shutdown_requested {
