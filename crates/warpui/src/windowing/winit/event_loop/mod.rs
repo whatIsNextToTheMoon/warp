@@ -57,7 +57,12 @@ const DRAG_DROP_DEBOUNCE_TIMEOUT: Duration = Duration::from_millis(50);
 const IME_MARKED_TEXT_STORM_WINDOW: Duration = Duration::from_secs(1);
 const IME_MARKED_TEXT_STORM_LIMIT: usize = 240;
 const IME_MARKED_TEXT_STORM_WARN_INTERVAL: Duration = Duration::from_secs(10);
-const IME_CURSOR_AREA_HEIGHT_MULTIPLIER: f32 = 3.;
+/// Extra logical pixels around the caret that we expose to Wayland IMEs as the
+/// cursor rectangle. fcitx5 may place its candidate window either above or below
+/// this rectangle; reserving a band around the whole composition line keeps the
+/// popup from covering inline preedit/pinyin text.
+const IME_CURSOR_AREA_VERTICAL_PADDING_LINES: f32 = 2.;
+const IME_CURSOR_AREA_HEIGHT_LINES: f32 = 5.;
 
 /// Distance (in logical pixels) before a touch input is considered a drag. Flutter uses 18.
 const MAX_TAP_DISTANCE: f64 = 18.;
@@ -2006,16 +2011,6 @@ impl EventLoop {
         if let Some(active_cursor_position) = active_cursor_position {
             let winit_window = downcast_window(window.as_ref());
             let cursor_rect = active_cursor_position.position;
-            let position = LogicalPosition::new(
-                cursor_rect.origin_x() as f64,
-                cursor_rect.origin_y() as f64,
-            );
-            // Currently the size argument is not supported on X11. We calculate it here anyway.
-            // Wayland compositors/fcitx use it as the cursor rectangle and place the candidate
-            // popup around that area. Keep the anchor stable: some IMEs sample every
-            // `set_ime_position` call, so sending a temporary offset can make the candidate
-            // window jump. Give Wayland a taller cursor area below the insertion point so fcitx
-            // has enough reserved space to avoid covering inline preedit text in Codex/PTY input.
             let cursor_area_height = cursor_rect
                 .height()
                 .max(active_cursor_position.font_size)
@@ -2024,11 +2019,37 @@ impl EventLoop {
                 .width()
                 .max(active_cursor_position.font_size)
                 .max(1.);
+
+            // Currently the size argument is not supported on X11. We calculate it here anyway.
+            // Wayland compositors/fcitx use it as the cursor rectangle and place the candidate
+            // popup around that area. Keep the x anchor stable, but reserve a taller vertical band
+            // around the insertion point on Wayland. If fcitx decides to place the candidate
+            // window above the cursor rectangle, the upward padding keeps it above the inline
+            // preedit text instead of covering the pinyin in Codex/PTY input. If it places the
+            // window below, the taller rectangle keeps it below the whole composition line,
+            // matching native terminals more closely.
+            let is_wayland = winit_window.windowing_system().is_some_and(|windowing_system| {
+                matches!(windowing_system, crate::windowing::System::Wayland)
+            });
+            let vertical_padding = if is_wayland {
+                (active_cursor_position.font_size * IME_CURSOR_AREA_VERTICAL_PADDING_LINES).max(0.)
+            } else {
+                0.
+            };
+            let cursor_area_y = (cursor_rect.origin_y() - vertical_padding).max(0.);
+            let position = LogicalPosition::new(
+                cursor_rect.origin_x() as f64,
+                cursor_area_y as f64,
+            );
+            let cursor_area_reserved_height = if is_wayland {
+                (active_cursor_position.font_size * IME_CURSOR_AREA_HEIGHT_LINES)
+                    .max(cursor_area_height + vertical_padding)
+            } else {
+                cursor_area_height
+            };
             let size = LogicalSize::new(
                 cursor_area_width as f64,
-                (cursor_area_height * IME_CURSOR_AREA_HEIGHT_MULTIPLIER)
-                    .max(active_cursor_position.font_size * IME_CURSOR_AREA_HEIGHT_MULTIPLIER)
-                    .max(1.) as f64,
+                cursor_area_reserved_height.max(1.) as f64,
             );
             let now = Instant::now();
             let position_key = (position.x, position.y);
