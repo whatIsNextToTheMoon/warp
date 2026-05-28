@@ -2028,9 +2028,20 @@ impl EventLoop {
             // preedit text instead of covering the pinyin in Codex/PTY input. If it places the
             // window below, the taller rectangle keeps it below the whole composition line,
             // matching native terminals more closely.
-            let is_wayland = winit_window.windowing_system().is_some_and(|windowing_system| {
-                matches!(windowing_system, crate::windowing::System::Wayland)
-            });
+            let is_wayland = {
+                #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+                {
+                    super::app::WINDOWING_SYSTEM
+                        .get()
+                        .is_some_and(|windowing_system| {
+                            *windowing_system == super::app::WindowingSystem::Wayland
+                        })
+                }
+                #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+                {
+                    false
+                }
+            };
             let vertical_padding = if is_wayland {
                 (active_cursor_position.font_size * IME_CURSOR_AREA_VERTICAL_PADDING_LINES).max(0.)
             } else {
