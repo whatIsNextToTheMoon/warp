@@ -485,8 +485,7 @@ fn is_path_like_completion_token(token: &str, path_separators: &[char]) -> bool 
         .iter()
         .any(|separator| token.starts_with(&format!("$HOME{separator}")));
     let starts_with_dot_path = path_separators.iter().any(|separator| {
-        token.starts_with(&format!(".{separator}"))
-            || token.starts_with(&format!("..{separator}"))
+        token.starts_with(&format!(".{separator}")) || token.starts_with(&format!("..{separator}"))
     });
     let starts_with_windows_drive = token.len() >= 3
         && token.as_bytes()[1] == b':'
@@ -803,7 +802,9 @@ impl InputSuggestionsMode {
                 original_input_config,
                 preview_selection,
                 ..
-            } => preview_selection.then_some(*original_input_config).flatten(),
+            } => preview_selection
+                .then_some(*original_input_config)
+                .flatten(),
             _ => None,
         }
     }
@@ -4922,6 +4923,32 @@ impl Input {
         }
     }
 
+    fn close_inline_history_menu_without_restoring_buffer(&mut self, ctx: &mut ViewContext<Self>) {
+        if self
+            .suggestions_mode_model
+            .as_ref(ctx)
+            .is_inline_history_menu()
+        {
+            self.suggestions_mode_model.update(ctx, |model, ctx| {
+                model.set_mode(InputSuggestionsMode::Closed, ctx);
+            });
+            ctx.notify();
+        }
+    }
+
+    fn fill_hovered_or_selected_inline_history_item(&mut self, ctx: &mut ViewContext<Self>) {
+        if !self
+            .suggestions_mode_model
+            .as_ref(ctx)
+            .is_inline_history_menu()
+        {
+            return;
+        }
+
+        self.inline_history_menu_view
+            .update(ctx, |view, ctx| view.fill_hovered_or_selected_item(ctx));
+    }
+
     fn handle_inline_history_menu_event(
         &mut self,
         event: &inline_history::InlineHistoryMenuEvent,
@@ -4929,16 +4956,7 @@ impl Input {
     ) {
         match event {
             inline_history::InlineHistoryMenuEvent::NavigateToConversation { conversation_id } => {
-                if self
-                    .suggestions_mode_model
-                    .as_ref(ctx)
-                    .is_inline_history_menu()
-                {
-                    self.suggestions_mode_model.update(ctx, |model, ctx| {
-                        model.set_mode(InputSuggestionsMode::Closed, ctx);
-                    });
-                    ctx.notify();
-                }
+                self.close_inline_history_menu_without_restoring_buffer(ctx);
                 self.clear_buffer_and_reset_undo_stack(ctx);
                 self.agent_view_controller.update(ctx, |controller, ctx| {
                     let _ = controller.try_enter_agent_view(
@@ -4952,31 +4970,27 @@ impl Input {
                 command,
                 linked_workflow_data,
             } => {
-                if self
-                    .suggestions_mode_model
-                    .as_ref(ctx)
-                    .is_inline_history_menu()
-                {
-                    self.suggestions_mode_model.update(ctx, |model, ctx| {
-                        model.set_mode(InputSuggestionsMode::Closed, ctx);
-                    });
-                    ctx.notify();
-                }
-
+                self.close_inline_history_menu_without_restoring_buffer(ctx);
+                self.insert_inline_history_command_into_input(command, linked_workflow_data, ctx);
+                self.focus_input_box(ctx);
+                self.input_enter(ctx);
+            }
+            inline_history::InlineHistoryMenuEvent::AcceptAIPrompt { query_text } => {
+                self.close_inline_history_menu_without_restoring_buffer(ctx);
+                self.insert_inline_history_ai_prompt_into_input(query_text, ctx);
+                self.focus_input_box(ctx);
+                self.input_enter(ctx);
+            }
+            inline_history::InlineHistoryMenuEvent::FillCommand {
+                command,
+                linked_workflow_data,
+            } => {
+                self.close_inline_history_menu_without_restoring_buffer(ctx);
                 self.insert_inline_history_command_into_input(command, linked_workflow_data, ctx);
                 self.focus_input_box(ctx);
             }
-            inline_history::InlineHistoryMenuEvent::AcceptAIPrompt { query_text } => {
-                if self
-                    .suggestions_mode_model
-                    .as_ref(ctx)
-                    .is_inline_history_menu()
-                {
-                    self.suggestions_mode_model.update(ctx, |model, ctx| {
-                        model.set_mode(InputSuggestionsMode::Closed, ctx);
-                    });
-                    ctx.notify();
-                }
+            inline_history::InlineHistoryMenuEvent::FillAIPrompt { query_text } => {
+                self.close_inline_history_menu_without_restoring_buffer(ctx);
                 self.insert_inline_history_ai_prompt_into_input(query_text, ctx);
                 self.focus_input_box(ctx);
             }
@@ -10455,6 +10469,9 @@ impl Input {
             EditorEvent::Navigate(NavigationKey::PageDown) => {
                 self.editor_page_down(ctx);
             }
+            EditorEvent::Navigate(NavigationKey::Left) => {
+                self.fill_hovered_or_selected_inline_history_item(ctx);
+            }
             EditorEvent::Navigate(NavigationKey::Tab) => {
                 self.input_tab(ctx);
             }
@@ -11881,10 +11898,8 @@ impl Input {
                             .with_timeout(NATIVE_SHELL_COMPLETIONS_TIMEOUT)
                             .await
                         {
-                            Ok(Some(results)) => {
-                                native_results_to_suggestions(results)
-                                    .or(warp_suggestions_fut.await)
-                            }
+                            Ok(Some(results)) => native_results_to_suggestions(results)
+                                .or(warp_suggestions_fut.await),
                             _ => warp_suggestions_fut.await,
                         }
                     } else {
@@ -15509,7 +15524,10 @@ impl View for Input {
         let font_size = appearance.monospace_font_size();
 
         ctx.element_position_by_id(cursor_id)
-            .map(|position| CursorInfo { position, font_size })
+            .map(|position| CursorInfo {
+                position,
+                font_size,
+            })
     }
 
     fn on_focus(&mut self, focus_ctx: &FocusContext, ctx: &mut ViewContext<Self>) {

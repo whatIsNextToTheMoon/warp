@@ -6471,8 +6471,20 @@ impl EditorView {
         }
     }
 
+    /// Determine if a leftward navigation command (i.e. `Left`) should be propagated
+    /// to the parent View.
+    fn should_propagate_leftward_navigation(&self, ctx: &mut ViewContext<Self>) -> bool {
+        match self.propagate_horizontal_navigation_keys {
+            PropagateHorizontalNavigationKeys::Always => true,
+            PropagateHorizontalNavigationKeys::Never => false,
+            PropagateHorizontalNavigationKeys::AtBoundary => {
+                self.single_cursor_at_buffer_start(ctx)
+            }
+        }
+    }
+
     /// Determine if a rightward navigation command (i.e. `Right`) should be propagated
-    /// to the parent View
+    /// to the parent View.
     fn should_propagate_rightward_navigation(&self, ctx: &mut ViewContext<Self>) -> bool {
         match self.propagate_horizontal_navigation_keys {
             PropagateHorizontalNavigationKeys::Always => true,
@@ -6530,6 +6542,15 @@ impl EditorView {
             } else {
                 self.move_down(ctx);
             }
+        }
+    }
+
+    pub fn left(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.can_edit(ctx) {
+            if self.should_propagate_leftward_navigation(ctx) {
+                ctx.emit(Event::Navigate(NavigationKey::Left));
+            }
+            self.move_left(/* stop at line start */ false, ctx);
         }
     }
 
@@ -8475,7 +8496,7 @@ impl TypedActionView for EditorView {
             Escape => self.escape(ctx),
             Up => self.up(ctx),
             Down => self.down(ctx),
-            Left => self.move_left(/* stop at line start */ false, ctx),
+            Left => self.left(ctx),
             Right => self.right(ctx),
             Home => self.cursor_home(ctx),
             End => self.cursor_end(ctx),

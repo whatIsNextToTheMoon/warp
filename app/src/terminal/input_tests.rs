@@ -5161,7 +5161,9 @@ fn test_history_while_typing_opens_history_menu_instead_of_completions() {
             let _ = input_settings
                 .completions_open_while_typing
                 .set_value(true, ctx);
-            let _ = input_settings.history_open_while_typing.set_value(true, ctx);
+            let _ = input_settings
+                .history_open_while_typing
+                .set_value(true, ctx);
         });
 
         input.update(&mut app, |input, ctx| {
@@ -5180,14 +5182,16 @@ fn test_history_while_typing_opens_history_menu_instead_of_completions() {
             ));
             assert_eq!(input.buffer_text(ctx), "g");
             assert!(input.inline_history_menu_view.as_ref(ctx).result_count(ctx) > 0);
-            assert!(
+            assert_eq!(
                 input
                     .inline_history_menu_view
                     .as_ref(ctx)
                     .model()
                     .as_ref(ctx)
                     .selected_item()
-                    .is_none()
+                    .and_then(|item| item.buffer_replacement_text().cloned())
+                    .as_deref(),
+                Some("git pull")
             );
         });
     });
@@ -5211,7 +5215,9 @@ fn test_history_while_typing_refreshes_after_no_results() {
             let _ = input_settings
                 .completions_open_while_typing
                 .set_value(true, ctx);
-            let _ = input_settings.history_open_while_typing.set_value(true, ctx);
+            let _ = input_settings
+                .history_open_while_typing
+                .set_value(true, ctx);
         });
 
         input.update(&mut app, |input, ctx| {
@@ -5228,7 +5234,10 @@ fn test_history_while_typing_refreshes_after_no_results() {
                     ..
                 }
             ));
-            assert_eq!(input.inline_history_menu_view.as_ref(ctx).result_count(ctx), 0);
+            assert_eq!(
+                input.inline_history_menu_view.as_ref(ctx).result_count(ctx),
+                0
+            );
         });
 
         input.update(&mut app, |input, ctx| {
@@ -5258,21 +5267,23 @@ fn test_history_while_typing_refreshes_after_no_results() {
             ));
             assert_eq!(input.buffer_text(ctx), "g");
             assert!(input.inline_history_menu_view.as_ref(ctx).result_count(ctx) > 0);
-            assert!(
+            assert_eq!(
                 input
                     .inline_history_menu_view
                     .as_ref(ctx)
                     .model()
                     .as_ref(ctx)
                     .selected_item()
-                    .is_none()
+                    .and_then(|item| item.buffer_replacement_text().cloned())
+                    .as_deref(),
+                Some("git pull")
             );
         });
     });
 }
 
 #[test]
-fn test_history_enter_fills_input_without_executing() {
+fn test_legacy_history_enter_fills_input_without_executing() {
     let _flag = FeatureFlag::InlineHistoryMenu.override_enabled(false);
     App::test((), |mut app| async move {
         initialize_app(&mut app);
@@ -5292,7 +5303,10 @@ fn test_history_enter_fills_input_without_executing() {
 
         input.read(&app, |input, ctx| {
             assert_eq!(input.buffer_text(ctx), "git pull");
-            assert_eq!(input.selected_suggestion_text(ctx).as_deref(), Some("git pull"));
+            assert_eq!(
+                input.selected_suggestion_text(ctx).as_deref(),
+                Some("git pull")
+            );
             assert!(matches!(
                 input.suggestions_mode_model.as_ref(ctx).mode(),
                 InputSuggestionsMode::HistoryUp { .. }
@@ -5342,7 +5356,9 @@ fn test_history_while_typing_keeps_explicit_tab_completions() {
             let _ = input_settings
                 .completions_open_while_typing
                 .set_value(true, ctx);
-            let _ = input_settings.history_open_while_typing.set_value(true, ctx);
+            let _ = input_settings
+                .history_open_while_typing
+                .set_value(true, ctx);
         });
 
         input.update(&mut app, |input, ctx| {

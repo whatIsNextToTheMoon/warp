@@ -461,16 +461,6 @@ impl<A: InlineMenuAction, T: 'static + Send + Sync> InlineMenuView<A, T> {
                 me.details_pane_target = DetailsPaneTarget::default();
                 if me.mixer.as_ref(ctx).are_results_empty() {
                     me.selected_idx = None;
-                } else if me
-                    .input_suggestions_model
-                    .as_ref(ctx)
-                    .mode()
-                    .is_history_while_typing()
-                {
-                    // The automatic history-as-you-type popup is passive: typing Enter should
-                    // submit the current input, not accept the most recent history item. Users can
-                    // still choose a result explicitly with Up/Down or the mouse.
-                    me.selected_idx = None;
                     me.model.update(ctx, |model, ctx| {
                         model.clear_selected_item(ctx);
                     });
@@ -570,6 +560,18 @@ impl<A: InlineMenuAction, T: 'static + Send + Sync> InlineMenuView<A, T> {
             item: selected_result.accept_result(),
             cmd_or_ctrl_shift_enter: cmd_or_ctrl_enter,
         });
+    }
+
+    pub fn hovered_or_selected_item(&self) -> Option<A> {
+        let idx = self.hovered_idx.or(self.selected_idx)?;
+        let selected_result = self
+            .result_renderers
+            .get(idx)
+            .map(|renderer| &renderer.search_result)?;
+        if selected_result.is_disabled() {
+            return None;
+        }
+        Some(selected_result.accept_result())
     }
 
     pub fn select_up(&mut self, ctx: &mut ViewContext<Self>) {

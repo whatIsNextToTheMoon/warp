@@ -359,12 +359,26 @@ impl MessageProvider<Option<&AcceptHistoryItem>> for InlineHistoryMessageProduce
             key: "enter".to_owned(),
             ..Default::default()
         });
+        let left = MessageItem::keystroke(Keystroke {
+            key: "left".to_owned(),
+            ..Default::default()
+        });
         let items = match selected {
             Some(AcceptHistoryItem::Command { .. }) => {
-                vec![enter, MessageItem::text(" to execute")]
+                vec![
+                    enter,
+                    MessageItem::text(" to execute · "),
+                    left,
+                    MessageItem::text(" to fill"),
+                ]
             }
             Some(AcceptHistoryItem::AIPrompt { .. }) => {
-                vec![enter, MessageItem::text(" to send")]
+                vec![
+                    enter,
+                    MessageItem::text(" to send · "),
+                    left,
+                    MessageItem::text(" to fill"),
+                ]
             }
             Some(AcceptHistoryItem::Conversation { title, .. }) => {
                 vec![enter, MessageItem::text(format!(" to open '{title}'"))]

@@ -43,6 +43,13 @@ pub enum InlineHistoryMenuEvent {
     AcceptAIPrompt {
         query_text: String,
     },
+    FillCommand {
+        command: String,
+        linked_workflow_data: Option<LinkedWorkflowData>,
+    },
+    FillAIPrompt {
+        query_text: String,
+    },
     SelectCommand {
         command: String,
         linked_workflow_data: Option<LinkedWorkflowData>,
@@ -502,6 +509,28 @@ impl InlineHistoryMenuView {
     pub fn accept_selected_item(&self, ctx: &mut ViewContext<Self>) {
         self.menu_view
             .update(ctx, |v, ctx| v.accept_selected_item(false, ctx));
+    }
+
+    pub fn fill_hovered_or_selected_item(&self, ctx: &mut ViewContext<Self>) {
+        let item = self
+            .menu_view
+            .read(ctx, |view, _| view.hovered_or_selected_item());
+
+        match item {
+            Some(AcceptHistoryItem::Command {
+                command,
+                linked_workflow_data,
+            }) => {
+                ctx.emit(InlineHistoryMenuEvent::FillCommand {
+                    command,
+                    linked_workflow_data,
+                });
+            }
+            Some(AcceptHistoryItem::AIPrompt { query_text }) => {
+                ctx.emit(InlineHistoryMenuEvent::FillAIPrompt { query_text });
+            }
+            Some(AcceptHistoryItem::Conversation { .. }) | None => {}
+        }
     }
 
     pub fn arm_initial_buffer_sync(&mut self) {
