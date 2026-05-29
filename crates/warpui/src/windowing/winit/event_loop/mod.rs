@@ -57,12 +57,11 @@ const DRAG_DROP_DEBOUNCE_TIMEOUT: Duration = Duration::from_millis(50);
 const IME_MARKED_TEXT_STORM_WINDOW: Duration = Duration::from_secs(1);
 const IME_MARKED_TEXT_STORM_LIMIT: usize = 240;
 const IME_MARKED_TEXT_STORM_WARN_INTERVAL: Duration = Duration::from_secs(10);
-/// Extra logical pixels around the caret that we expose to Wayland IMEs as the
-/// cursor rectangle. fcitx5 may place its candidate window either above or below
-/// this rectangle; reserving a band around the whole composition line keeps the
-/// popup from covering inline preedit/pinyin text.
-const IME_CURSOR_AREA_VERTICAL_PADDING_LINES: f32 = 2.;
-const IME_CURSOR_AREA_HEIGHT_LINES: f32 = 5.;
+/// On Wayland/fcitx5, a tall cursor area around the caret makes the candidate
+/// window drift and can place it directly on top of inline preedit/pinyin text.
+/// Anchor to the line below the painted cursor instead, matching VTE-style
+/// terminals more closely while keeping X11 behavior unchanged.
+const IME_WAYLAND_CURSOR_Y_OFFSET_LINES: f32 = 1.;
 
 /// Distance (in logical pixels) before a touch input is considered a drag. Flutter uses 18.
 const MAX_TAP_DISTANCE: f64 = 18.;
@@ -2022,12 +2021,10 @@ impl EventLoop {
 
             // Currently the size argument is not supported on X11. We calculate it here anyway.
             // Wayland compositors/fcitx use it as the cursor rectangle and place the candidate
-            // popup around that area. Keep the x anchor stable, but reserve a taller vertical band
-            // around the insertion point on Wayland. If fcitx decides to place the candidate
-            // window above the cursor rectangle, the upward padding keeps it above the inline
-            // preedit text instead of covering the pinyin in Codex/PTY input. If it places the
-            // window below, the taller rectangle keeps it below the whole composition line,
-            // matching native terminals more closely.
+            // popup around that area. Keep the X anchor stable and, on Wayland, move the anchor
+            // from the top of Warp's painted cursor to the line below it. A large rectangle around
+            // the cursor looks tempting, but fcitx may choose the rectangle's top edge and cover
+            // the inline preedit text. A tight, lower anchor behaves like VTE terminals.
             let is_wayland = {
                 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
                 {
@@ -2042,25 +2039,20 @@ impl EventLoop {
                     false
                 }
             };
-            let vertical_padding = if is_wayland {
-                (active_cursor_position.font_size * IME_CURSOR_AREA_VERTICAL_PADDING_LINES).max(0.)
+            let cursor_area_y = if is_wayland {
+                cursor_rect.origin_y()
+                    + cursor_area_height
+                        .max(active_cursor_position.font_size * IME_WAYLAND_CURSOR_Y_OFFSET_LINES)
             } else {
-                0.
+                cursor_rect.origin_y()
             };
-            let cursor_area_y = (cursor_rect.origin_y() - vertical_padding).max(0.);
             let position = LogicalPosition::new(
                 cursor_rect.origin_x() as f64,
                 cursor_area_y as f64,
             );
-            let cursor_area_reserved_height = if is_wayland {
-                (active_cursor_position.font_size * IME_CURSOR_AREA_HEIGHT_LINES)
-                    .max(cursor_area_height + vertical_padding)
-            } else {
-                cursor_area_height
-            };
             let size = LogicalSize::new(
                 cursor_area_width as f64,
-                cursor_area_reserved_height.max(1.) as f64,
+                cursor_area_height.max(1.) as f64,
             );
             let now = Instant::now();
             let position_key = (position.x, position.y);

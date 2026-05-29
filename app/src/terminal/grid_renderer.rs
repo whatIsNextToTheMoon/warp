@@ -923,6 +923,16 @@ fn render_cell(
         ctx,
     );
 
+    // Extend the cached background to also cover the WIDE_CHAR_SPACER cell on the right.
+    // Spacer cells are skipped during cell iteration (they are placeholders for the wide
+    // glyph drawn by the leading cell), so without this extension the spacer column would
+    // never paint the leading cell's background. This fixes half-highlighted CJK/emoji
+    // pseudo-cursors from Ink-based TUIs that render the cursor with reverse-video SGR.
+    if cell.flags().intersects(Flags::WIDE_CHAR) && col + 1 < grid.columns() {
+        cached_background_color =
+            cached_background_color.map(|cached| cached.with_end(col + 1, offset_row));
+    }
+
     let glyph_offset = cell_size * vec2f(col as f32, offset_row as f32);
 
     render_cell_glyph(
@@ -1356,6 +1366,14 @@ fn render_grid_with_ligatures<'a>(
                 cell_colors.background_color,
                 ctx,
             );
+
+            // Same wide-char background extension as in `render_cell` above. The ligature
+            // path also skips WIDE_CHAR_SPACER cells, so the leading cell must paint both
+            // columns when it carries a background/reverse-video attribute.
+            if cell.flags().intersects(Flags::WIDE_CHAR) && col + 1 < grid.columns() {
+                cached_background_color =
+                    cached_background_color.map(|cached| cached.with_end(col + 1, offset_row));
+            }
 
             let glyph_offset = cell_size * vec2f(col as f32, offset_row as f32);
             if first_cell_in_link {
