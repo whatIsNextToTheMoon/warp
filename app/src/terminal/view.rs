@@ -648,8 +648,12 @@ lazy_static! {
     /// A list of alt-screen apps that should never use custom-padding in the alt-screen
     /// and should instead match blocklist padding.
     ///
+    /// Some long-running CLI agents briefly enter alternate screen for transient
+    /// pickers/history. Keeping their padding stable also avoids a one-frame blank resize jump.
+    ///
     /// See [`TerminalView::resize_alt_screen_redundantly`] for more details.
-    static ref ALT_SCREEN_APPS_THAT_MUST_MATCH_BLOCKLIST_PADDING: HashSet<&'static str> = HashSet::from(["k9s", "lazygit"]);
+    static ref ALT_SCREEN_APPS_THAT_MUST_MATCH_BLOCKLIST_PADDING: HashSet<&'static str> =
+        HashSet::from(["codex", "k9s", "lazygit"]);
 }
 
 pub const AI_CONTROL_PANEL_MARGIN: f32 = 10.;
@@ -26714,6 +26718,16 @@ impl View for TerminalView {
         };
         let viewport = self.viewport_state(model.block_list(), input_mode, app);
         let is_alt_screen_active = { model.is_alt_screen_active() };
+        let should_render_blocklist_for_empty_codex_alt_screen = if is_alt_screen_active {
+            let active_command = model
+                .block_list()
+                .active_block()
+                .top_level_command(self.sessions.as_ref(app));
+            active_command.as_deref() == Some("codex")
+                && !model.alt_screen().has_visible_content()
+        } else {
+            false
+        };
         // Compute callout positioning early while we have the model lock.
         // For the final Agent Modality callout, always position relative to the input box,
         // even when the zero state is visible.
@@ -26763,7 +26777,9 @@ impl View for TerminalView {
                         || model.is_loading_conversation_transcript()
                     {
                         self.render_viewer_loading(app)
-                    } else if is_alt_screen_active {
+                    } else if is_alt_screen_active
+                        && !should_render_blocklist_for_empty_codex_alt_screen
+                    {
                         did_wrap_terminal_size = true;
                         wrap_in_terminal_size_element(
                             &self.resize_tx,

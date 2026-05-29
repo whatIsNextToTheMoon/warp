@@ -17,6 +17,7 @@ use crate::terminal::model::ansi::{
     Attr, CharsetIndex, ClearMode, CommandFinishedValue, CursorShape, CursorStyle, LineClearMode,
     Mode, PrecmdValue, PreexecValue, StandardCharset, TabulationClearMode,
 };
+use crate::terminal::model::{cell, char_or_str::CharOrStr};
 use crate::terminal::model::grid::grid_handler::{
     FragmentBoundary, GridHandler, Link, PerformResetGridChecks, PossiblePath, TermMode,
 };
@@ -319,6 +320,21 @@ impl AltScreen {
             false, /* force_obfuscated_secrets */
             RespectDisplayedOutput::No,
         )
+    }
+
+    pub fn has_visible_content(&self) -> bool {
+        (0..self.grid_handler.total_rows()).any(|row_idx| {
+            self.grid_handler.row(row_idx).is_some_and(|row| {
+                row[..].iter().any(|grid_cell| match grid_cell.raw_content() {
+                    CharOrStr::Char(c) => {
+                        c != cell::DEFAULT_CHAR && !c.is_ascii_whitespace()
+                    }
+                    CharOrStr::Str(s) => s
+                        .chars()
+                        .any(|c| c != cell::DEFAULT_CHAR && !c.is_ascii_whitespace()),
+                })
+            })
+        })
     }
 
     pub fn needs_bracketed_paste(&self) -> bool {
