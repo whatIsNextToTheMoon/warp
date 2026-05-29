@@ -1,3 +1,4 @@
+use warp_core::ui::color::blend::Blend as _;
 use warp_core::ui::color::contrast::MinimumAllowedContrast;
 use warp_core::ui::color::ContrastingColor;
 use warp_core::ui::theme::color::internal_colors;
@@ -31,11 +32,14 @@ impl Input {
 
         let mut stack = Stack::new().with_constrain_absolute_children();
 
+        let input_background = self.cli_agent_rich_input_background(app);
+
         let input_box = Container::new(
             ConstrainedBox::new(Clipped::new(ChildView::new(&self.editor).finish()).finish())
                 .with_max_height(CLI_AGENT_RICH_INPUT_EDITOR_MAX_HEIGHT)
                 .finish(),
         )
+        .with_background(input_background)
         .with_padding_top(CLI_AGENT_RICH_INPUT_EDITOR_TOP_PADDING)
         .with_padding_right(*TERMINAL_VIEW_PADDING_LEFT)
         .with_padding_bottom(CLI_AGENT_RICH_INPUT_EDITOR_BOTTOM_PADDING)
@@ -98,16 +102,7 @@ impl Input {
             Border::top(1.0).with_border_fill(internal_colors::fg_overlay_2(appearance.theme())),
         );
 
-        // When an alt screen CLI agent (e.g. OpenCode) is running, match
-        // the rich input background to the alt screen so it blends in.
-        {
-            let terminal_model = self.model.lock();
-            if terminal_model.is_alt_screen_active() {
-                if let Some(bg_color) = terminal_model.alt_screen().inferred_bg_color() {
-                    input_container = input_container.with_background(bg_color);
-                }
-            }
-        }
+        input_container = input_container.with_background(input_background);
 
         let drop_target = DropTarget::new(
             input_container.finish(),
@@ -145,6 +140,20 @@ impl Input {
         SavePosition::new(outer_column.finish(), &self.save_position_id()).finish()
     }
 
+    fn cli_agent_rich_input_background(&self, app: &AppContext) -> warp_core::ui::theme::Fill {
+        let appearance = Appearance::as_ref(app);
+        let theme = appearance.theme();
+        let theme_background = theme.background();
+
+        let terminal_model = self.model.lock();
+        terminal_model
+            .is_alt_screen_active()
+            .then(|| terminal_model.alt_screen().inferred_bg_color())
+            .flatten()
+            .map(Into::into)
+            .unwrap_or_else(|| theme_background.blend(&theme.surface_overlay_1()))
+    }
+
     /// Keep the rich input editor's text colors legible when it's rendered on
     /// top of an alt-screen CLI agent's inferred background (e.g. OpenCode),
     /// which does not respect the Warp theme. When no alt-screen-backed CLI
@@ -163,29 +172,21 @@ impl Input {
         let rich_input_open =
             CLIAgentSessionsModel::as_ref(ctx).is_input_open(self.terminal_view_id);
 
-        let alt_screen_bg = if rich_input_open {
-            let terminal_model = self.model.lock();
-            terminal_model
-                .is_alt_screen_active()
-                .then(|| terminal_model.alt_screen().inferred_bg_color())
-                .flatten()
-        } else {
-            None
-        };
-
-        let text_colors = match alt_screen_bg {
-            Some(bg) => TextColors {
+        let text_colors = if rich_input_open {
+            let rich_input_bg = self.cli_agent_rich_input_background(ctx);
+            TextColors {
                 default_color: default_colors
                     .default_color
-                    .on_background(bg.into(), MinimumAllowedContrast::Text),
+                    .on_background(rich_input_bg, MinimumAllowedContrast::Text),
                 disabled_color: default_colors
                     .disabled_color
-                    .on_background(bg.into(), MinimumAllowedContrast::Text),
+                    .on_background(rich_input_bg, MinimumAllowedContrast::Text),
                 hint_color: default_colors
                     .hint_color
-                    .on_background(bg.into(), MinimumAllowedContrast::Text),
-            },
-            None => default_colors,
+                    .on_background(rich_input_bg, MinimumAllowedContrast::Text),
+            }
+        } else {
+            default_colors
         };
 
         self.editor.update(ctx, |editor, ctx| {

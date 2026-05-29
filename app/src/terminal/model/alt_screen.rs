@@ -17,7 +17,6 @@ use crate::terminal::model::ansi::{
     Attr, CharsetIndex, ClearMode, CommandFinishedValue, CursorShape, CursorStyle, LineClearMode,
     Mode, PrecmdValue, PreexecValue, StandardCharset, TabulationClearMode,
 };
-use crate::terminal::model::{cell, char_or_str::CharOrStr};
 use crate::terminal::model::grid::grid_handler::{
     FragmentBoundary, GridHandler, Link, PerformResetGridChecks, PossiblePath, TermMode,
 };
@@ -26,6 +25,7 @@ use crate::terminal::model::index::{Point, Side, VisibleRow};
 use crate::terminal::model::iterm_image::ITermImage;
 use crate::terminal::model::secrets::ObfuscateSecrets;
 use crate::terminal::model::selection::{Selection, SelectionRange};
+use crate::terminal::model::{cell, char_or_str::CharOrStr};
 use crate::terminal::{SizeInfo, SizeUpdate};
 use itertools::Itertools;
 use num_traits::Float as _;
@@ -323,17 +323,27 @@ impl AltScreen {
     }
 
     pub fn has_visible_content(&self) -> bool {
-        (0..self.grid_handler.total_rows()).any(|row_idx| {
-            self.grid_handler.row(row_idx).is_some_and(|row| {
-                row[..].iter().any(|grid_cell| match grid_cell.raw_content() {
-                    CharOrStr::Char(c) => {
-                        c != cell::DEFAULT_CHAR && !c.is_ascii_whitespace()
-                    }
+        (0..self.grid_handler.total_rows()).any(|row_idx| self.row_has_visible_content(row_idx))
+    }
+
+    pub fn has_visible_content_outside_bottom_rows(&self, bottom_rows_to_ignore: usize) -> bool {
+        let rows_to_scan = self
+            .grid_handler
+            .total_rows()
+            .saturating_sub(bottom_rows_to_ignore);
+        (0..rows_to_scan).any(|row_idx| self.row_has_visible_content(row_idx))
+    }
+
+    fn row_has_visible_content(&self, row_idx: usize) -> bool {
+        self.grid_handler.row(row_idx).is_some_and(|row| {
+            row[..]
+                .iter()
+                .any(|grid_cell| match grid_cell.raw_content() {
+                    CharOrStr::Char(c) => c != cell::DEFAULT_CHAR && !c.is_ascii_whitespace(),
                     CharOrStr::Str(s) => s
                         .chars()
                         .any(|c| c != cell::DEFAULT_CHAR && !c.is_ascii_whitespace()),
                 })
-            })
         })
     }
 
