@@ -1,5 +1,6 @@
 use std::borrow::Borrow;
 use std::collections::HashMap;
+use std::env;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::sync::Arc;
@@ -193,6 +194,7 @@ impl LayoutCache {
             };
             for line in text_frame.lines() {
                 for ch in &line.chars_with_missing_glyphs {
+                    log_missing_fallback_request(*ch, text, "TextFrame");
                     text_layout_system.request_fallback_font_for_char(
                         *ch,
                         RequestedFallbackFontSource::TextFrame(key.clone()),
@@ -256,6 +258,7 @@ impl LayoutCache {
                 clip_config: Some(clip_config),
             };
             for ch in &line.chars_with_missing_glyphs {
+                log_missing_fallback_request(*ch, text, "Line");
                 text_layout_system.request_fallback_font_for_char(
                     *ch,
                     RequestedFallbackFontSource::Line(key.clone()),
@@ -265,6 +268,34 @@ impl LayoutCache {
             line
         }
     }
+}
+
+fn log_missing_fallback_request(ch: char, text: &str, source: &'static str) {
+    if !text_layout_debug_enabled() {
+        return;
+    }
+
+    log::warn!(
+        "requesting fallback font: source={source} char={ch:?}/U+{:04X} text_preview={:?}",
+        ch as u32,
+        debug_text_preview(text),
+    );
+}
+
+fn text_layout_debug_enabled() -> bool {
+    matches!(
+        env::var("WARP_DEBUG_TEXT_LAYOUT").as_deref(),
+        Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
+    )
+}
+
+fn debug_text_preview(text: &str) -> String {
+    const MAX_CHARS: usize = 80;
+    let mut preview: String = text.chars().take(MAX_CHARS).collect();
+    if text.chars().count() > MAX_CHARS {
+        preview.push('…');
+    }
+    preview
 }
 
 /// Removes a leading UTF-8 BOM from the text and adjusts the style run offsets accordingly.

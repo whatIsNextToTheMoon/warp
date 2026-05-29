@@ -11,6 +11,7 @@ mod linux;
 mod windows;
 use std::any::Any;
 use std::collections::HashMap;
+use std::env;
 use std::ops::{DerefMut, Range};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -292,12 +293,11 @@ impl Default for TextLayoutSystem {
 
 impl TextLayoutSystem {
     pub fn new() -> Self {
+        let locale = text_layout_locale();
         Self {
             families: Default::default(),
             font_store: RwLock::new(cosmic_text::FontSystem::new_with_locale_and_db(
-                // Locale is needed for font fallback. For now, we hardcode this to "en" to match
-                // our mac implementation https://github.com/warpdotdev/warp-internal/blob/bf33d651a9fcece70df8eac35f89b0393ca5189a/ui/src/platform/mac/fonts.rs#L383.
-                "en".into(),
+                locale,
                 Default::default(),
             )),
             font_id_map: Default::default(),
@@ -639,7 +639,8 @@ impl TextLayoutSystem {
         let mut chars_with_missing_glyphs = vec![];
         let mut last_glyph_offset: usize = 0;
 
-        run_builder.reserve_capacity(layout_line.glyphs.len());
+        let glyph_count = layout_line.glyphs.len();
+        run_builder.reserve_capacity(glyph_count);
         for glyph in layout_line.glyphs {
             // TODO(daprahamian): when we have time, we should investigate pulling
             // caret position data out of font gdef table. Right now, this impl does
@@ -682,6 +683,20 @@ impl TextLayoutSystem {
                 start_offset: last_glyph_offset + 1,
                 last_offset: last_glyph_offset + 1,
             });
+        }
+
+        if !chars_with_missing_glyphs.is_empty() && text_layout_debug_enabled() {
+            let missing = chars_with_missing_glyphs
+                .iter()
+                .copied()
+                .unique()
+                .map(|ch| format!("{ch:?}/U+{:04X}", ch as u32))
+                .join(", ");
+            log::warn!(
+                "text layout missing glyphs: missing=[{missing}] glyphs={} text_preview={:?}",
+                glyph_count,
+                debug_text_preview(text),
+            );
         }
 
         Line {
@@ -764,6 +779,40 @@ impl TextLayoutSystem {
         }
         attrs_list
     }
+}
+
+fn text_layout_locale() -> String {
+    let locale = ["LC_ALL", "LC_CTYPE", "LANG"]
+        .into_iter()
+        .find_map(|key| env::var(key).ok().filter(|value| !value.is_empty()))
+        .map(|value| {
+            let locale = value.split('.').next().unwrap_or(value.as_str());
+            locale.replace('_', "-")
+        })
+        .filter(|value| !matches!(value.as_str(), "" | "C" | "POSIX"))
+        .unwrap_or_else(|| "en".to_string());
+
+    if text_layout_debug_enabled() {
+        log::warn!("text layout locale: {locale}");
+    }
+
+    locale
+}
+
+fn text_layout_debug_enabled() -> bool {
+    matches!(
+        env::var("WARP_DEBUG_TEXT_LAYOUT").as_deref(),
+        Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
+    )
+}
+
+fn debug_text_preview(text: &str) -> String {
+    const MAX_CHARS: usize = 80;
+    let mut preview: String = text.chars().take(MAX_CHARS).collect();
+    if text.chars().count() > MAX_CHARS {
+        preview.push('…');
+    }
+    preview
 }
 
 #[cfg_attr(target_family = "wasm", expect(dead_code))]
