@@ -51,6 +51,10 @@ use warpui::clipboard_utils::get_image_filepaths_from_paths;
 use base64::Engine as _;
 use std::ops::Deref as _;
 
+fn should_debug_codex_alt_screen() -> bool {
+    std::env::var_os("WARP_DEBUG_CODEX_ALT_SCREEN").is_some()
+}
+
 use crate::ai::blocklist::agent_view::fork_from_last_known_good_state_exchange_id;
 use crate::ai::blocklist::agent_view::{
     agent_view_bg_fill, get_agent_view_entry_block_position_id, AgentViewController,
@@ -26747,10 +26751,23 @@ impl View for TerminalView {
                 .block_list()
                 .active_block()
                 .top_level_command(self.sessions.as_ref(app));
-            active_command.as_deref() == Some("codex")
-                && !model.alt_screen().has_visible_content_outside_bottom_rows(
+            let is_codex = active_command.as_deref() == Some("codex");
+            let has_visible_content_outside_bottom_rows =
+                model.alt_screen().has_visible_content_outside_bottom_rows(
                     CODEX_EMPTY_ALT_SCREEN_BOTTOM_ROWS_TO_IGNORE,
-                )
+                );
+            let should_render_blocklist = is_codex && !has_visible_content_outside_bottom_rows;
+            if is_codex && should_debug_codex_alt_screen() {
+                log::warn!(
+                    "codex alt-screen render: active={} render_blocklist={} {}",
+                    is_alt_screen_active,
+                    should_render_blocklist,
+                    model.alt_screen().visible_content_debug_summary(
+                        CODEX_EMPTY_ALT_SCREEN_BOTTOM_ROWS_TO_IGNORE
+                    )
+                );
+            }
+            should_render_blocklist
         } else {
             false
         };
@@ -27325,13 +27342,24 @@ impl View for TerminalView {
                 .block_list()
                 .active_block()
                 .top_level_command(self.sessions.as_ref(app));
+            let is_codex = active_command.as_deref() == Some("codex");
+            let has_visible_content_outside_bottom_rows = model_lock
+                .alt_screen()
+                .has_visible_content_outside_bottom_rows(
+                    CODEX_EMPTY_ALT_SCREEN_BOTTOM_ROWS_TO_IGNORE,
+                );
             let should_keep_blocklist_keybindings_for_empty_codex_alt_screen =
-                active_command.as_deref() == Some("codex")
-                    && !model_lock
-                        .alt_screen()
-                        .has_visible_content_outside_bottom_rows(
-                            CODEX_EMPTY_ALT_SCREEN_BOTTOM_ROWS_TO_IGNORE,
-                        );
+                is_codex && !has_visible_content_outside_bottom_rows;
+
+            if is_codex && should_debug_codex_alt_screen() {
+                log::warn!(
+                    "codex alt-screen keymap: keep_blocklist_keybindings={} {}",
+                    should_keep_blocklist_keybindings_for_empty_codex_alt_screen,
+                    model_lock.alt_screen().visible_content_debug_summary(
+                        CODEX_EMPTY_ALT_SCREEN_BOTTOM_ROWS_TO_IGNORE
+                    )
+                );
+            }
 
             if !should_keep_blocklist_keybindings_for_empty_codex_alt_screen {
                 context.set.insert("AltScreen");

@@ -512,9 +512,12 @@ impl InlineHistoryMenuView {
     }
 
     pub fn fill_hovered_or_selected_item(&self, ctx: &mut ViewContext<Self>) {
-        let item = self
-            .menu_view
-            .read(ctx, |view, _| view.hovered_or_selected_item());
+        let item = self.menu_view.read(ctx, |view, _| {
+            view.hovered_or_selected_item().or_else(|| {
+                view.selected_idx()
+                    .and_then(|_| self.model.as_ref(ctx).selected_item().cloned())
+            })
+        });
 
         match item {
             Some(AcceptHistoryItem::Command {

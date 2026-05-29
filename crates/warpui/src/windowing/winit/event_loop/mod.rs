@@ -63,6 +63,10 @@ const IME_MARKED_TEXT_STORM_WARN_INTERVAL: Duration = Duration::from_secs(10);
 /// terminals more closely while keeping X11 behavior unchanged.
 const IME_WAYLAND_CURSOR_Y_OFFSET_LINES: f32 = 1.;
 
+fn should_debug_ime_position() -> bool {
+    std::env::var_os("WARP_DEBUG_IME_POSITION").is_some()
+}
+
 /// Distance (in logical pixels) before a touch input is considered a drag. Flutter uses 18.
 const MAX_TAP_DISTANCE: f64 = 18.;
 
@@ -213,12 +217,9 @@ impl ImeMarkedTextStormGuard {
             return true;
         }
 
-        if self
-            .last_warning_at
-            .is_none_or(|last_warning_at| {
-                now.duration_since(last_warning_at) >= IME_MARKED_TEXT_STORM_WARN_INTERVAL
-            })
-        {
+        if self.last_warning_at.is_none_or(|last_warning_at| {
+            now.duration_since(last_warning_at) >= IME_MARKED_TEXT_STORM_WARN_INTERVAL
+        }) {
             self.last_warning_at = Some(now);
             log::warn!(
                 "Suppressing repeated IME marked-text cleanup events after {} events in {:?}",
@@ -1670,7 +1671,9 @@ impl EventLoop {
                 self.last_ime_cursor_position = None;
                 if let Some(window_state) = self.state.windows.get_mut(&winit_window_id) {
                     window_state.ime_marked_text = None;
-                    window_state.ime_marked_text_storm_guard.reset(Instant::now());
+                    window_state
+                        .ime_marked_text_storm_guard
+                        .reset(Instant::now());
                 }
                 self.ui_app
                     .update(|ctx| ctx.report_active_cursor_position_update());
@@ -1692,6 +1695,15 @@ impl EventLoop {
 
                 let mut window_callbacks = self.callbacks.for_window(window.as_ref());
                 if preedit_text.is_empty() {
+                    let had_marked_text = window_state.ime_marked_text.is_some();
+                    if should_debug_ime_position() {
+                        log::warn!(
+                            "IME preedit cleared: window={:?} had_marked_text={} refresh={:?}",
+                            winit_window_id,
+                            had_marked_text,
+                            self.ime_position_refresh
+                        );
+                    }
                     if window_state.ime_marked_text.take().is_some()
                         && window_state
                             .ime_marked_text_storm_guard
@@ -1714,6 +1726,17 @@ impl EventLoop {
                         )
                     })
                     .unwrap_or(0..0);
+                if should_debug_ime_position() {
+                    let preview: String = preedit_text.chars().take(32).collect();
+                    log::warn!(
+                        "IME preedit set: window={:?} chars={} selected_range={:?} refresh={:?} preview={:?}",
+                        winit_window_id,
+                        preedit_text.chars().count(),
+                        selected_range,
+                        self.ime_position_refresh,
+                        preview
+                    );
+                }
                 let marked_text_state = ImeMarkedTextState {
                     text: preedit_text,
                     selected_range,
@@ -2046,14 +2069,10 @@ impl EventLoop {
             } else {
                 cursor_rect.origin_y()
             };
-            let position = LogicalPosition::new(
-                cursor_rect.origin_x() as f64,
-                cursor_area_y as f64,
-            );
-            let size = LogicalSize::new(
-                cursor_area_width as f64,
-                cursor_area_height.max(1.) as f64,
-            );
+            let position =
+                LogicalPosition::new(cursor_rect.origin_x() as f64, cursor_area_y as f64);
+            let size =
+                LogicalSize::new(cursor_area_width as f64, cursor_area_height.max(1.) as f64);
             let now = Instant::now();
             let position_key = (position.x, position.y);
             let size_key = (size.width, size.height);
@@ -2062,15 +2081,42 @@ impl EventLoop {
                     && last.size == size_key
                     && now.duration_since(last.updated_at) < Duration::from_millis(16)
             }) {
+                if should_debug_ime_position() {
+                    log::warn!(
+                        "IME position skipped duplicate: wayland={} pos=({:.1},{:.1}) size=({:.1},{:.1})",
+                        is_wayland,
+                        position.x,
+                        position.y,
+                        size.width,
+                        size.height
+                    );
+                }
                 return;
             }
 
+            if should_debug_ime_position() {
+                log::warn!(
+                    "IME position set: wayland={} cursor=({:.1},{:.1},{:.1},{:.1}) pos=({:.1},{:.1}) size=({:.1},{:.1}) font_size={:.1}",
+                    is_wayland,
+                    cursor_rect.origin_x(),
+                    cursor_rect.origin_y(),
+                    cursor_rect.width(),
+                    cursor_rect.height(),
+                    position.x,
+                    position.y,
+                    size.width,
+                    size.height,
+                    active_cursor_position.font_size
+                );
+            }
             winit_window.set_ime_position(position, size);
             self.last_ime_cursor_position = Some(LastImeCursorPosition {
                 position: position_key,
                 size: size_key,
                 updated_at: now,
             });
+        } else if should_debug_ime_position() {
+            log::warn!("IME position skipped: no active cursor position");
         }
     }
 

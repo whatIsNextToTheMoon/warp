@@ -334,6 +334,30 @@ impl AltScreen {
         (0..rows_to_scan).any(|row_idx| self.row_has_visible_content(row_idx))
     }
 
+    pub fn visible_content_debug_summary(&self, bottom_rows_to_ignore: usize) -> String {
+        let total_rows = self.grid_handler.total_rows();
+        let rows_to_scan = total_rows.saturating_sub(bottom_rows_to_ignore);
+        let mut nonempty_total = 0;
+        let mut nonempty_outside_bottom = 0;
+        let mut first_nonempty = None;
+        let mut last_nonempty = None;
+
+        for row_idx in 0..total_rows {
+            if self.row_has_visible_content(row_idx) {
+                nonempty_total += 1;
+                first_nonempty.get_or_insert(row_idx);
+                last_nonempty = Some(row_idx);
+                if row_idx < rows_to_scan {
+                    nonempty_outside_bottom += 1;
+                }
+            }
+        }
+
+        format!(
+            "rows={total_rows} ignored_bottom={bottom_rows_to_ignore} nonempty_total={nonempty_total} nonempty_outside_bottom={nonempty_outside_bottom} first_nonempty={first_nonempty:?} last_nonempty={last_nonempty:?}"
+        )
+    }
+
     fn row_has_visible_content(&self, row_idx: usize) -> bool {
         self.grid_handler.row(row_idx).is_some_and(|row| {
             row[..]
