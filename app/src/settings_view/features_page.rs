@@ -67,13 +67,12 @@ use crate::settings::{
     EnableSlashCommandsInTerminal, EnableSshWrapper, ErrorUnderliningEnabled, ExtraMetaKeys,
     GPUSettings, GlobalHotkeyMode, HistoryOpenWhileTyping, InputSettings,
     InputSettingsChangedEvent, LinuxSelectionClipboard, MiddleClickPasteEnabled,
-    MouseScrollMultiplier,
-    OutlineCodebaseSymbolsForAtContextMenu, PreferLowPowerGPU, PreferredGraphicsBackend,
-    QuakeModeSettings, ScrollSettings, ScrollSettingsChangedEvent, SelectionSettings,
-    ShowAutosuggestionIgnoreButton, ShowChangelogAfterUpdate, ShowTerminalInputMessageBar,
-    SshSettings, SyntaxHighlighting, TabBehavior, UserNativeRedirectPreference, VimModeEnabled,
-    VimStatusBar, VimUnnamedSystemClipboard, DEFAULT_QUAKE_MODE_SIZE_PERCENTAGES,
-    QUAKE_WINDOW_AUTOHIDE_SUPPORTED,
+    MouseScrollMultiplier, OutlineCodebaseSymbolsForAtContextMenu, PreferLowPowerGPU,
+    PreferredGraphicsBackend, QuakeModeSettings, ScrollSettings, ScrollSettingsChangedEvent,
+    SelectionSettings, ShowAutosuggestionIgnoreButton, ShowChangelogAfterUpdate,
+    ShowTerminalInputMessageBar, SshSettings, SyntaxHighlighting, TabBehavior,
+    UserNativeRedirectPreference, VimModeEnabled, VimStatusBar, VimUnnamedSystemClipboard,
+    DEFAULT_QUAKE_MODE_SIZE_PERCENTAGES, QUAKE_WINDOW_AUTOHIDE_SUPPORTED,
 };
 use crate::terminal::alt_screen_reporting::{
     AltScreenReporting, FocusReportingEnabled, MouseReportingEnabled, ScrollReportingEnabled,
@@ -640,6 +639,7 @@ pub enum FeaturesPageAction {
     /// Legacy. To be combined with `ToggleNeedsAttentionNotifications` when desktop notifs are unflagged.
     TogglePasswordPromptNotifications,
     ToggleAgentTaskCompletedNotifications,
+    ToggleFocusedCodexTaskCompletedNotifications,
     ToggleNeedsAttentionNotifications,
     ToggleNotificationSound,
     SetNotificationToastDuration,
@@ -982,6 +982,16 @@ impl FeaturesPageAction {
                         .is_agent_task_completed_enabled,
                 ),
             },
+            Self::ToggleFocusedCodexTaskCompletedNotifications => {
+                TelemetryEvent::FeaturesPageAction {
+                    action: "ToggleFocusedCodexTaskCompletedNotifications".to_string(),
+                    value: to_string(
+                        SessionSettings::as_ref(ctx)
+                            .notifications
+                            .is_focused_codex_task_completed_enabled,
+                    ),
+                }
+            }
             Self::ToggleNeedsAttentionNotifications => TelemetryEvent::FeaturesPageAction {
                 action: "ToggleNeedsAttentionNotifications".to_string(),
                 value: to_string(
@@ -1208,6 +1218,7 @@ struct MouseStateHandles {
     quake_mode_pin_window_check: MouseStateHandle,
     long_running_notifications_checkbox: MouseStateHandle,
     agent_task_completed_notifications_checkbox: MouseStateHandle,
+    focused_codex_task_completed_notifications_checkbox: MouseStateHandle,
     agent_needs_attention_notifications_checkbox: MouseStateHandle,
     agent_in_app_notifications_switch: SwitchStateHandle,
     #[cfg(target_os = "macos")]
@@ -1610,6 +1621,22 @@ impl TypedActionView for FeaturesPageView {
                 SessionSettings::handle(ctx).update(ctx, |settings, ctx| {
                     let new_settings = NotificationsSettings {
                         is_agent_task_completed_enabled,
+                        ..current_settings
+                    };
+                    if let Err(e) = settings.notifications.set_value(new_settings, ctx) {
+                        log::error!("Error persisting notifications setting: {e}");
+                    }
+                });
+                ctx.notify();
+            }
+            ToggleFocusedCodexTaskCompletedNotifications => {
+                let current_settings = SessionSettings::as_ref(ctx).notifications.value().clone();
+                let is_focused_codex_task_completed_enabled =
+                    !current_settings.is_focused_codex_task_completed_enabled;
+
+                SessionSettings::handle(ctx).update(ctx, |settings, ctx| {
+                    let new_settings = NotificationsSettings {
+                        is_focused_codex_task_completed_enabled,
                         ..current_settings
                     };
                     if let Err(e) = settings.notifications.set_value(new_settings, ctx) {
@@ -5121,6 +5148,17 @@ impl SettingsWidget for DesktopNotificationsWidget {
                 ),
                 view.render_long_running_notifications_setting(
                     &session_settings.notifications,
+                    appearance,
+                ),
+                view.render_notification_toggle(
+                    session_settings
+                        .notifications
+                        .is_focused_codex_task_completed_enabled,
+                    "Notify when Codex finishes while Warp is focused",
+                    FeaturesPageAction::ToggleFocusedCodexTaskCompletedNotifications,
+                    view.button_mouse_states
+                        .focused_codex_task_completed_notifications_checkbox
+                        .clone(),
                     appearance,
                 ),
                 view.render_notification_toggle(

@@ -13136,8 +13136,16 @@ impl TerminalView {
             }
         }
 
-        // Desktop notifications — only when navigated away and not in-progress.
-        if !self.is_navigated_away_from_window(ctx)
+        let notification_settings = SessionSettings::as_ref(ctx).notifications.value().clone();
+        let should_notify_focused_codex_completion = matches!(*agent, CLIAgent::Codex)
+            && matches!(status, CLIAgentSessionStatus::Success)
+            && notification_settings.is_focused_codex_task_completed_enabled;
+
+        // Desktop notifications — normally only when navigated away and not
+        // in-progress. Codex can opt into a completion notification even while
+        // Warp is focused, because long-running Codex tasks often finish after
+        // the user has mentally switched context without changing windows.
+        if (!should_notify_focused_codex_completion && !self.is_navigated_away_from_window(ctx))
             || matches!(status, CLIAgentSessionStatus::InProgress)
         {
             return;
@@ -13166,6 +13174,7 @@ impl TerminalView {
             title,
             description,
             Some(NotificationAgentVariant::CLIAgent((*agent).into())),
+            should_notify_focused_codex_completion,
             ctx,
         );
     }
@@ -15658,6 +15667,7 @@ impl TerminalView {
             block_summary.title,
             block_summary.description,
             Some(NotificationAgentVariant::Oz),
+            false,
             ctx,
         );
     }
@@ -15670,6 +15680,7 @@ impl TerminalView {
         title: String,
         description: String,
         agent_variant: Option<NotificationAgentVariant>,
+        force_agent_task_completed_notification: bool,
         ctx: &mut ViewContext<Self>,
     ) {
         let notification_settings = SessionSettings::as_ref(ctx).notifications.value().clone();
@@ -15690,7 +15701,9 @@ impl TerminalView {
             NotificationsMode::Enabled => {
                 let success = matches!(trigger, NotificationsTrigger::AgentTaskCompleted(true));
                 if success {
-                    if !notification_settings.is_agent_task_completed_enabled {
+                    if !force_agent_task_completed_notification
+                        && !notification_settings.is_agent_task_completed_enabled
+                    {
                         return;
                     }
                 } else if !notification_settings.is_needs_attention_enabled {

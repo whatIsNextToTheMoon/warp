@@ -87,6 +87,10 @@ pub struct NotificationsSettings {
 
     #[schemars(description = "Whether to notify when an agent task completes.")]
     pub is_agent_task_completed_enabled: bool,
+    #[schemars(
+        description = "Whether to notify when a Codex task completes even while Warp is focused."
+    )]
+    pub is_focused_codex_task_completed_enabled: bool,
     #[schemars(description = "Whether to notify when a session needs attention.")]
     pub is_needs_attention_enabled: bool,
 
@@ -102,6 +106,7 @@ impl Default for NotificationsSettings {
             long_running_threshold: *DEFAULT_THRESHOLD_FOR_LONG_RUNNING_NOTIFICATION,
             is_password_prompt_enabled: true,
             is_agent_task_completed_enabled: true,
+            is_focused_codex_task_completed_enabled: false,
             is_needs_attention_enabled: true,
             play_notification_sound: true,
         }
