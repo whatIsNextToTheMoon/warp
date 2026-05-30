@@ -59,6 +59,10 @@ fn should_debug_ime_flow() -> bool {
     std::env::var_os("WARP_DEBUG_IME_FLOW").is_some()
 }
 
+fn should_debug_ime_position() -> bool {
+    std::env::var_os("WARP_DEBUG_IME_POSITION").is_some()
+}
+
 fn debug_ime_text_preview(text: &str) -> String {
     const MAX_CHARS: usize = 32;
     let mut preview: String = text.chars().take(MAX_CHARS).collect();
@@ -8431,35 +8435,82 @@ impl TerminalView {
         self.typed_characters_on_terminal(text, ctx);
     }
 
+    fn input_editor_focused(&self, ctx: &AppContext) -> bool {
+        self.input.try_as_ref(ctx).is_some_and(|input| {
+            input
+                .editor()
+                .try_as_ref(ctx)
+                .is_some_and(|editor| editor.is_focused())
+        })
+    }
+
     fn should_route_ime_to_pty(&self, ctx: &mut ViewContext<Self>) -> bool {
         // IME events are not followed by a TypedCharacters fallback, so when a
         // running TUI/CLI (Codex, Claude, Gemini, etc.) owns the active PTY we
         // must commit CJK text to the PTY. The exception is Warp's CLI rich
         // input composer, which is editor-backed and should keep receiving IME.
-        self.should_write_typed_chars_to_pty(ctx)
-            && !CLIAgentSessionsModel::as_ref(ctx).is_input_open(self.view_id)
+        let should_write_to_pty = self.should_write_typed_chars_to_pty(ctx);
+        let cli_agent_input_open = CLIAgentSessionsModel::as_ref(ctx).is_input_open(self.view_id);
+        let route_to_pty = should_write_to_pty && !cli_agent_input_open;
+
+        if should_debug_ime_flow() {
+            log::warn!(
+                "terminal IME route check: route_to_pty={} should_write_to_pty={} cli_agent_input_open={} input_editor_focused={} view_id={:?}",
+                route_to_pty,
+                should_write_to_pty,
+                cli_agent_input_open,
+                self.input_editor_focused(ctx),
+                self.view_id
+            );
+        }
+
+        route_to_pty
     }
 
     fn should_anchor_ime_to_input_editor(&self, ctx: &AppContext) -> bool {
-        if FeatureFlag::ImeMarkedText.is_enabled() {
-            return false;
-        }
-
+        let ime_marked_text_enabled = FeatureFlag::ImeMarkedText.is_enabled();
         let cli_agent_input_open = CLIAgentSessionsModel::as_ref(ctx).is_input_open(self.view_id);
-        if cli_agent_input_open || self.ai_input_model.as_ref(ctx).is_ai_input_enabled() {
-            return true;
-        }
+        let ai_input_enabled = self.ai_input_model.as_ref(ctx).is_ai_input_enabled();
+        let input_editor_focused = self.input_editor_focused(ctx);
 
-        let model = self.model.lock();
-        let active_block_started = model.block_list().active_block().started();
-        let should_write_to_pty = active_block_started
-            && (self
+        let mut active_block_started = false;
+        let mut has_pending_or_bootstrapped_session = false;
+        let mut shared_session_executor = false;
+
+        let result = if ime_marked_text_enabled {
+            false
+        } else if cli_agent_input_open || ai_input_enabled {
+            true
+        } else {
+            let model = self.model.lock();
+            active_block_started = model.block_list().active_block().started();
+            has_pending_or_bootstrapped_session = self
                 .sessions
                 .as_ref(ctx)
-                .has_pending_or_bootstrapped_session()
-                || model.shared_session_status().is_executor());
+                .has_pending_or_bootstrapped_session();
+            shared_session_executor = model.shared_session_status().is_executor();
+            let should_write_to_pty = active_block_started
+                && (has_pending_or_bootstrapped_session || shared_session_executor);
 
-        !should_write_to_pty
+            !should_write_to_pty
+        };
+
+        if should_debug_ime_position() {
+            log::warn!(
+                "terminal IME anchor decision: result={} ime_marked_text={} cli_agent_input_open={} ai_input_enabled={} input_editor_focused={} active_block_started={} has_pending_or_bootstrapped_session={} shared_session_executor={} view_id={:?}",
+                result,
+                ime_marked_text_enabled,
+                cli_agent_input_open,
+                ai_input_enabled,
+                input_editor_focused,
+                active_block_started,
+                has_pending_or_bootstrapped_session,
+                shared_session_executor,
+                self.view_id
+            );
+        }
+
+        result
     }
 
     fn report_input_editor_ime_cursor_position(&self, ctx: &mut ViewContext<Self>) {
@@ -8751,6 +8802,14 @@ impl TerminalView {
     /// The model matches the input recorded here against the actual characters
     /// echoed to the pty to determine what is typeahead.
     fn report_possible_typeahead(&mut self, input: &str) {
+        if should_debug_ime_flow() && input.chars().any(|ch| !ch.is_ascii()) {
+            log::warn!(
+                "terminal typeahead candidate contains non-ascii: chars={} preview={:?}",
+                input.chars().count(),
+                debug_ime_text_preview(input)
+            );
+        }
+
         self.model.lock().push_user_input(input);
     }
 
@@ -27748,20 +27807,57 @@ impl View for TerminalView {
             if let Some(input) = self.input.try_as_ref(ctx) {
                 let cursor_id = position_id_for_cursor(input.editor().id());
                 if let Some(position) = ctx.element_position_by_id(cursor_id) {
+                    if should_debug_ime_position() {
+                        log::warn!(
+                            "terminal IME active cursor source=input-editor cursor_id={} rect=({:.1},{:.1},{:.1},{:.1}) font_size={:.1}",
+                            cursor_id,
+                            position.origin_x(),
+                            position.origin_y(),
+                            position.width(),
+                            position.height(),
+                            font_size
+                        );
+                    }
                     return Some(CursorInfo {
                         position,
                         font_size,
                     });
+                } else if should_debug_ime_position() {
+                    log::warn!(
+                        "terminal IME active cursor source=input-editor missing cursor_id={}",
+                        cursor_id
+                    );
                 }
+            } else if should_debug_ime_position() {
+                log::warn!("terminal IME active cursor source=input-editor missing input view");
             }
         }
 
         let cursor_id = self.cursor_position_id();
-        ctx.element_position_by_id(cursor_id)
-            .map(|position| CursorInfo {
-                position,
-                font_size,
-            })
+        let position = ctx.element_position_by_id(&cursor_id);
+        if should_debug_ime_position() {
+            if let Some(position) = position {
+                log::warn!(
+                    "terminal IME active cursor source=terminal-grid cursor_id={} rect=({:.1},{:.1},{:.1},{:.1}) font_size={:.1}",
+                    cursor_id,
+                    position.origin_x(),
+                    position.origin_y(),
+                    position.width(),
+                    position.height(),
+                    font_size
+                );
+            } else {
+                log::warn!(
+                    "terminal IME active cursor source=terminal-grid missing cursor_id={}",
+                    cursor_id
+                );
+            }
+        }
+
+        position.map(|position| CursorInfo {
+            position,
+            font_size,
+        })
     }
 
     fn self_or_child_interacted_with(&self, _ctx: &mut ViewContext<Self>) {
