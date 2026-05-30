@@ -66,6 +66,33 @@ pub struct AltScreen {
     event_proxy: ChannelEventListener,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VisibleContentSummary {
+    pub total_rows: usize,
+    pub ignored_bottom_rows: usize,
+    pub nonempty_total: usize,
+    pub nonempty_outside_bottom: usize,
+    pub first_nonempty: Option<usize>,
+    pub last_nonempty: Option<usize>,
+}
+
+impl VisibleContentSummary {
+    pub fn debug_summary(&self) -> String {
+        let Self {
+            total_rows,
+            ignored_bottom_rows,
+            nonempty_total,
+            nonempty_outside_bottom,
+            first_nonempty,
+            last_nonempty,
+        } = self;
+
+        format!(
+            "rows={total_rows} ignored_bottom={ignored_bottom_rows} nonempty_total={nonempty_total} nonempty_outside_bottom={nonempty_outside_bottom} first_nonempty={first_nonempty:?} last_nonempty={last_nonempty:?}"
+        )
+    }
+}
+
 impl AltScreen {
     pub fn new(
         size_info: SizeInfo,
@@ -326,15 +353,7 @@ impl AltScreen {
         (0..self.grid_handler.total_rows()).any(|row_idx| self.row_has_visible_content(row_idx))
     }
 
-    pub fn has_visible_content_outside_bottom_rows(&self, bottom_rows_to_ignore: usize) -> bool {
-        let rows_to_scan = self
-            .grid_handler
-            .total_rows()
-            .saturating_sub(bottom_rows_to_ignore);
-        (0..rows_to_scan).any(|row_idx| self.row_has_visible_content(row_idx))
-    }
-
-    pub fn visible_content_debug_summary(&self, bottom_rows_to_ignore: usize) -> String {
+    pub fn visible_content_summary(&self, bottom_rows_to_ignore: usize) -> VisibleContentSummary {
         let total_rows = self.grid_handler.total_rows();
         let rows_to_scan = total_rows.saturating_sub(bottom_rows_to_ignore);
         let mut nonempty_total = 0;
@@ -353,9 +372,19 @@ impl AltScreen {
             }
         }
 
-        format!(
-            "rows={total_rows} ignored_bottom={bottom_rows_to_ignore} nonempty_total={nonempty_total} nonempty_outside_bottom={nonempty_outside_bottom} first_nonempty={first_nonempty:?} last_nonempty={last_nonempty:?}"
-        )
+        VisibleContentSummary {
+            total_rows,
+            ignored_bottom_rows: bottom_rows_to_ignore,
+            nonempty_total,
+            nonempty_outside_bottom,
+            first_nonempty,
+            last_nonempty,
+        }
+    }
+
+    pub fn visible_content_debug_summary(&self, bottom_rows_to_ignore: usize) -> String {
+        self.visible_content_summary(bottom_rows_to_ignore)
+            .debug_summary()
     }
 
     fn row_has_visible_content(&self, row_idx: usize) -> bool {

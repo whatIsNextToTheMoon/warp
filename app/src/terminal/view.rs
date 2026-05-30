@@ -671,6 +671,12 @@ pub const EXECUTE_PENDING_COMMAND_DELAY: Duration = Duration::from_millis(100);
 
 pub const WARP_PROMPT_HEIGHT_LINES: f32 = 0.9;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CodexAltScreenDisplayMode {
+    BlockList,
+    AltScreen,
+}
+
 const SCROLLBAR_WIDTH: ScrollbarWidth = ScrollbarWidth::Auto;
 
 /// Width of the bookmark indicator
@@ -682,7 +688,9 @@ const BOOKMARK_MIN_GAP: f32 = 4.;
 /// Height of a bookmark indicator
 const BOOKMARK_INDICATOR_HEIGHT: f32 = 4.;
 
-const CODEX_EMPTY_ALT_SCREEN_BOTTOM_ROWS_TO_IGNORE: usize = 3;
+const CODEX_EMPTY_ALT_SCREEN_BOTTOM_ROWS_TO_IGNORE: usize = 6;
+const CODEX_ALT_SCREEN_MIN_STABLE_VISIBLE_ROWS: usize = 2;
+const CODEX_ALT_SCREEN_TRANSIENT_GRACE_PERIOD: Duration = Duration::from_millis(350);
 
 const BRACKETED_PASTE_PREFIX: &str = "\x1b[200~";
 const BRACKETED_PASTE_SUFFIX: &str = "\x1b[201~";
@@ -2581,6 +2589,8 @@ pub struct TerminalView {
     last_hover_fragment_boundary: Option<WithinModel<FragmentBoundary>>,
 
     bootstrap_start: Option<Instant>,
+    codex_alt_screen_entered_at: Option<Instant>,
+    codex_alt_screen_display_mode: CodexAltScreenDisplayMode,
     is_login_shell_bootstrapped: bool,
     /// Set when a pending command is submitted to the shell. Cleared on the
     /// next `AfterBlockCompleted`, at which point `Event::PendingCommandCompleted`
@@ -4238,6 +4248,8 @@ impl TerminalView {
             highlighted_link: HighlightedLinkOption::default(),
             last_hover_fragment_boundary: None,
             bootstrap_start: None,
+            codex_alt_screen_entered_at: None,
+            codex_alt_screen_display_mode: CodexAltScreenDisplayMode::BlockList,
             is_login_shell_bootstrapped: false,
             awaiting_pending_command_completion: false,
             pending_command_queue: Default::default(),
@@ -7576,6 +7588,96 @@ impl TerminalView {
         true
     }
 
+    fn is_active_command_codex(&self, model: &TerminalModel, app: &AppContext) -> bool {
+        model
+            .block_list()
+            .active_block()
+            .top_level_command(self.sessions.as_ref(app))
+            .as_deref()
+            == Some("codex")
+    }
+
+    fn should_keep_blocklist_for_codex_alt_screen(
+        &self,
+        model: &TerminalModel,
+        app: &AppContext,
+        reason: &str,
+    ) -> bool {
+        if !model.is_alt_screen_active() || !self.is_active_command_codex(model, app) {
+            return false;
+        }
+
+        let visible_content = model
+            .alt_screen()
+            .visible_content_summary(CODEX_EMPTY_ALT_SCREEN_BOTTOM_ROWS_TO_IGNORE);
+        let is_in_transient_grace_period = self
+            .codex_alt_screen_entered_at
+            .is_some_and(|entered| entered.elapsed() < CODEX_ALT_SCREEN_TRANSIENT_GRACE_PERIOD);
+        let should_keep_blocklist =
+            self.codex_alt_screen_display_mode == CodexAltScreenDisplayMode::BlockList;
+
+        if should_debug_codex_alt_screen() {
+            log::warn!(
+                "codex alt-screen {reason}: keep_blocklist={} display_mode={:?} transient_grace={} elapsed_ms={:?} {}",
+                should_keep_blocklist,
+                self.codex_alt_screen_display_mode,
+                is_in_transient_grace_period,
+                self.codex_alt_screen_entered_at
+                    .map(|entered| entered.elapsed().as_millis()),
+                visible_content.debug_summary()
+            );
+        }
+
+        should_keep_blocklist
+    }
+
+    fn update_codex_alt_screen_display_mode(
+        &mut self,
+        model: &TerminalModel,
+        ctx: &mut ViewContext<Self>,
+        reason: &str,
+    ) {
+        if !model.is_alt_screen_active() || !self.is_active_command_codex(model, ctx) {
+            self.codex_alt_screen_entered_at = None;
+            self.codex_alt_screen_display_mode = CodexAltScreenDisplayMode::BlockList;
+            return;
+        }
+
+        let visible_content = model
+            .alt_screen()
+            .visible_content_summary(CODEX_EMPTY_ALT_SCREEN_BOTTOM_ROWS_TO_IGNORE);
+        let has_stable_alt_screen_content =
+            visible_content.nonempty_outside_bottom >= CODEX_ALT_SCREEN_MIN_STABLE_VISIBLE_ROWS;
+        let is_in_transient_grace_period = self
+            .codex_alt_screen_entered_at
+            .is_some_and(|entered| entered.elapsed() < CODEX_ALT_SCREEN_TRANSIENT_GRACE_PERIOD);
+        let next_display_mode = if has_stable_alt_screen_content && !is_in_transient_grace_period {
+            CodexAltScreenDisplayMode::AltScreen
+        } else {
+            CodexAltScreenDisplayMode::BlockList
+        };
+
+        if should_debug_codex_alt_screen() {
+            log::warn!(
+                "codex alt-screen display update: reason={} old={:?} next={:?} stable_content={} transient_grace={} elapsed_ms={:?} {}",
+                reason,
+                self.codex_alt_screen_display_mode,
+                next_display_mode,
+                has_stable_alt_screen_content,
+                is_in_transient_grace_period,
+                self.codex_alt_screen_entered_at
+                    .map(|entered| entered.elapsed().as_millis()),
+                visible_content.debug_summary()
+            );
+        }
+
+        let changed = self.codex_alt_screen_display_mode != next_display_mode;
+        self.codex_alt_screen_display_mode = next_display_mode;
+        if changed {
+            ctx.notify();
+        }
+    }
+
     fn should_render_legacy_ambient_agent_loading_footer(
         &self,
         model: &TerminalModel,
@@ -8818,6 +8920,13 @@ impl TerminalView {
         });
 
         // Need to re-render both the alt screen and the blocklist on keypresses.
+        {
+            let model_arc = Arc::clone(&self.model);
+            let model = model_arc.lock();
+            if model.is_alt_screen_active() && self.is_active_command_codex(&model, ctx) {
+                self.update_codex_alt_screen_display_mode(&model, ctx, "terminal-wakeup");
+            }
+        }
         ctx.notify();
     }
 
@@ -12079,6 +12188,56 @@ impl TerminalView {
                 });
             }
             ModelEvent::TerminalModeSwapped(mode) => {
+                {
+                    let model_arc = Arc::clone(&self.model);
+                    let model = model_arc.lock();
+                    if self.is_active_command_codex(&model, ctx)
+                        && matches!(mode, TerminalMode::AltScreen)
+                    {
+                        self.codex_alt_screen_entered_at = Some(Instant::now());
+                        self.update_codex_alt_screen_display_mode(
+                            &model,
+                            ctx,
+                            "mode-swapped-immediate",
+                        );
+                        let _ = ctx.spawn(
+                            async {
+                                Timer::after(CODEX_ALT_SCREEN_TRANSIENT_GRACE_PERIOD).await;
+                            },
+                            |me, _, ctx| {
+                                let model_arc = Arc::clone(&me.model);
+                                let model = model_arc.lock();
+                                me.update_codex_alt_screen_display_mode(
+                                    &model,
+                                    ctx,
+                                    "grace-period-expired",
+                                );
+                            },
+                        );
+
+                        if should_debug_codex_alt_screen() {
+                            log::warn!(
+                                "codex alt-screen mode swap: mode={} {}",
+                                match &mode {
+                                    TerminalMode::AltScreen => "alt-screen",
+                                    TerminalMode::BlockList => "blocklist",
+                                },
+                                model.alt_screen().visible_content_debug_summary(
+                                    CODEX_EMPTY_ALT_SCREEN_BOTTOM_ROWS_TO_IGNORE
+                                )
+                            );
+                        }
+                    } else if self.is_active_command_codex(&model, ctx)
+                        && matches!(mode, TerminalMode::BlockList)
+                    {
+                        self.codex_alt_screen_entered_at = None;
+                        self.codex_alt_screen_display_mode = CodexAltScreenDisplayMode::BlockList;
+                    } else {
+                        self.codex_alt_screen_entered_at = None;
+                        self.codex_alt_screen_display_mode = CodexAltScreenDisplayMode::BlockList;
+                    }
+                }
+
                 #[cfg(feature = "local_tty")]
                 {
                     let active_command = self
@@ -26746,31 +26905,8 @@ impl View for TerminalView {
         };
         let viewport = self.viewport_state(model.block_list(), input_mode, app);
         let is_alt_screen_active = { model.is_alt_screen_active() };
-        let should_render_blocklist_for_empty_codex_alt_screen = if is_alt_screen_active {
-            let active_command = model
-                .block_list()
-                .active_block()
-                .top_level_command(self.sessions.as_ref(app));
-            let is_codex = active_command.as_deref() == Some("codex");
-            let has_visible_content_outside_bottom_rows =
-                model.alt_screen().has_visible_content_outside_bottom_rows(
-                    CODEX_EMPTY_ALT_SCREEN_BOTTOM_ROWS_TO_IGNORE,
-                );
-            let should_render_blocklist = is_codex && !has_visible_content_outside_bottom_rows;
-            if is_codex && should_debug_codex_alt_screen() {
-                log::warn!(
-                    "codex alt-screen render: active={} render_blocklist={} {}",
-                    is_alt_screen_active,
-                    should_render_blocklist,
-                    model.alt_screen().visible_content_debug_summary(
-                        CODEX_EMPTY_ALT_SCREEN_BOTTOM_ROWS_TO_IGNORE
-                    )
-                );
-            }
-            should_render_blocklist
-        } else {
-            false
-        };
+        let should_render_blocklist_for_empty_codex_alt_screen =
+            self.should_keep_blocklist_for_codex_alt_screen(&model, app, "render");
         // Compute callout positioning early while we have the model lock.
         // For the final Agent Modality callout, always position relative to the input box,
         // even when the zero state is visible.
@@ -27338,28 +27474,8 @@ impl View for TerminalView {
         }
 
         if model_lock.is_alt_screen_active() {
-            let active_command = model_lock
-                .block_list()
-                .active_block()
-                .top_level_command(self.sessions.as_ref(app));
-            let is_codex = active_command.as_deref() == Some("codex");
-            let has_visible_content_outside_bottom_rows = model_lock
-                .alt_screen()
-                .has_visible_content_outside_bottom_rows(
-                    CODEX_EMPTY_ALT_SCREEN_BOTTOM_ROWS_TO_IGNORE,
-                );
             let should_keep_blocklist_keybindings_for_empty_codex_alt_screen =
-                is_codex && !has_visible_content_outside_bottom_rows;
-
-            if is_codex && should_debug_codex_alt_screen() {
-                log::warn!(
-                    "codex alt-screen keymap: keep_blocklist_keybindings={} {}",
-                    should_keep_blocklist_keybindings_for_empty_codex_alt_screen,
-                    model_lock.alt_screen().visible_content_debug_summary(
-                        CODEX_EMPTY_ALT_SCREEN_BOTTOM_ROWS_TO_IGNORE
-                    )
-                );
-            }
+                self.should_keep_blocklist_for_codex_alt_screen(&model_lock, app, "keymap");
 
             if !should_keep_blocklist_keybindings_for_empty_codex_alt_screen {
                 context.set.insert("AltScreen");
