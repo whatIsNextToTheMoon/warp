@@ -27806,7 +27806,7 @@ impl View for TerminalView {
         if self.should_anchor_ime_to_input_editor(ctx) {
             if let Some(input) = self.input.try_as_ref(ctx) {
                 let cursor_id = position_id_for_cursor(input.editor().id());
-                if let Some(position) = ctx.element_position_by_id(cursor_id) {
+                if let Some(position) = ctx.element_position_by_id(&cursor_id) {
                     if should_debug_ime_position() {
                         log::warn!(
                             "terminal IME active cursor source=input-editor cursor_id={} rect=({:.1},{:.1},{:.1},{:.1}) font_size={:.1}",

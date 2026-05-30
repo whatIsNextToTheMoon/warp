@@ -1120,7 +1120,7 @@ impl BlockList {
     }
 
     fn first_rich_content_index(&self, view_id: EntityId) -> Option<TotalIndex> {
-        let mut cursor = self.block_heights.cursor::<TotalIndex, ()>();
+        let mut cursor = self.block_heights.cursor::<(), TotalIndex>();
         while let Some(item) = cursor.item() {
             if let BlockHeightItem::RichContent(rich_content) = item {
                 if rich_content.view_id == view_id {
