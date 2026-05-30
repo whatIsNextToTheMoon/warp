@@ -782,7 +782,7 @@ impl TextLayoutSystem {
 }
 
 fn text_layout_locale() -> String {
-    let locale = ["LC_ALL", "LC_CTYPE", "LANG"]
+    let locale = ["WARP_UI_LOCALE", "LC_ALL", "LC_CTYPE", "LANG"]
         .into_iter()
         .find_map(|key| env::var(key).ok().filter(|value| !value.is_empty()))
         .map(|value| {

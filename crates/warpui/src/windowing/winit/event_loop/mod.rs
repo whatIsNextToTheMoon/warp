@@ -67,6 +67,19 @@ fn should_debug_ime_position() -> bool {
     std::env::var_os("WARP_DEBUG_IME_POSITION").is_some()
 }
 
+fn should_debug_ime_flow() -> bool {
+    std::env::var_os("WARP_DEBUG_IME_FLOW").is_some()
+}
+
+fn debug_ime_text_preview(text: &str) -> String {
+    const MAX_CHARS: usize = 32;
+    let mut preview: String = text.chars().take(MAX_CHARS).collect();
+    if text.chars().count() > MAX_CHARS {
+        preview.push('…');
+    }
+    preview
+}
+
 /// Distance (in logical pixels) before a touch input is considered a drag. Flutter uses 18.
 const MAX_TAP_DISTANCE: f64 = 18.;
 
@@ -1768,17 +1781,26 @@ impl EventLoop {
                 };
 
                 let mut window_callbacks = self.callbacks.for_window(window.as_ref());
-                // Clear any visible preedit first. Editor-backed inputs handle
-                // ImeCommit atomically, while legacy terminal-grid inputs still
-                // need the explicit clear before inserting committed text.
-                if window_state.ime_marked_text.take().is_some()
-                    && window_state
-                        .ime_marked_text_storm_guard
-                        .should_dispatch(ImeMarkedTextEventKind::Clear, Instant::now())
-                {
-                    window_callbacks.dispatch_event(ClearMarkedText);
+                let had_marked_text = window_state.ime_marked_text.take().is_some();
+                if had_marked_text {
                     self.ime_position_refresh = ImePositionRefresh::AfterNextFrame;
                 }
+                if should_debug_ime_flow() || should_debug_ime_position() {
+                    log::warn!(
+                        "IME commit: window={:?} chars={} had_marked_text={} refresh={:?} preview={:?}",
+                        winit_window_id,
+                        chars.chars().count(),
+                        had_marked_text,
+                        self.ime_position_refresh,
+                        debug_ime_text_preview(&chars)
+                    );
+                }
+                // Keep commit atomic. Dispatching ClearMarkedText immediately
+                // before ImeCommit can be delivered to a different focused
+                // target when CLI agents briefly flip alt-screen/focus state,
+                // which shows up as one-composition IME lag in Codex. Editor
+                // and terminal handlers already clear their preedit state as
+                // part of ImeCommit.
                 window_callbacks.dispatch_event(ImeCommit { text: chars });
             }
             winit::event::Ime::Disabled => {

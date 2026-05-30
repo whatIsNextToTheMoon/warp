@@ -55,6 +55,19 @@ fn should_debug_codex_alt_screen() -> bool {
     std::env::var_os("WARP_DEBUG_CODEX_ALT_SCREEN").is_some()
 }
 
+fn should_debug_ime_flow() -> bool {
+    std::env::var_os("WARP_DEBUG_IME_FLOW").is_some()
+}
+
+fn debug_ime_text_preview(text: &str) -> String {
+    const MAX_CHARS: usize = 32;
+    let mut preview: String = text.chars().take(MAX_CHARS).collect();
+    if text.chars().count() > MAX_CHARS {
+        preview.push('…');
+    }
+    preview
+}
+
 use crate::ai::blocklist::agent_view::fork_from_last_known_good_state_exchange_id;
 use crate::ai::blocklist::agent_view::{
     agent_view_bg_fill, get_agent_view_entry_block_position_id, AgentViewController,
@@ -690,7 +703,11 @@ const BOOKMARK_INDICATOR_HEIGHT: f32 = 4.;
 
 const CODEX_EMPTY_ALT_SCREEN_BOTTOM_ROWS_TO_IGNORE: usize = 6;
 const CODEX_ALT_SCREEN_MIN_STABLE_VISIBLE_ROWS: usize = 2;
-const CODEX_ALT_SCREEN_TRANSIENT_GRACE_PERIOD: Duration = Duration::from_millis(350);
+// Codex briefly enters alternate screen for transient history/picker redraws
+// (Ctrl+T / double Esc). On slow redraw paths that transient can last close
+// to a second; keep rendering the block list long enough to avoid a blank
+// full-window flash, then allow real alt-screen content through.
+const CODEX_ALT_SCREEN_TRANSIENT_GRACE_PERIOD: Duration = Duration::from_millis(1500);
 
 const BRACKETED_PASTE_PREFIX: &str = "\x1b[200~";
 const BRACKETED_PASTE_SUFFIX: &str = "\x1b[201~";
@@ -7648,10 +7665,18 @@ impl TerminalView {
             .visible_content_summary(CODEX_EMPTY_ALT_SCREEN_BOTTOM_ROWS_TO_IGNORE);
         let has_stable_alt_screen_content =
             visible_content.nonempty_outside_bottom >= CODEX_ALT_SCREEN_MIN_STABLE_VISIBLE_ROWS;
+        // If Codex paints only the very bottom input/footer rows, rendering the
+        // alt-screen would blank the transcript for one frame. Keep the block
+        // list until there is real content above that footer area.
+        let has_only_footer_content =
+            visible_content.nonempty_total > 0 && visible_content.nonempty_outside_bottom == 0;
         let is_in_transient_grace_period = self
             .codex_alt_screen_entered_at
             .is_some_and(|entered| entered.elapsed() < CODEX_ALT_SCREEN_TRANSIENT_GRACE_PERIOD);
-        let next_display_mode = if has_stable_alt_screen_content && !is_in_transient_grace_period {
+        let next_display_mode = if has_stable_alt_screen_content
+            && !has_only_footer_content
+            && !is_in_transient_grace_period
+        {
             CodexAltScreenDisplayMode::AltScreen
         } else {
             CodexAltScreenDisplayMode::BlockList
@@ -7659,11 +7684,12 @@ impl TerminalView {
 
         if should_debug_codex_alt_screen() {
             log::warn!(
-                "codex alt-screen display update: reason={} old={:?} next={:?} stable_content={} transient_grace={} elapsed_ms={:?} {}",
+                "codex alt-screen display update: reason={} old={:?} next={:?} stable_content={} footer_only={} transient_grace={} elapsed_ms={:?} {}",
                 reason,
                 self.codex_alt_screen_display_mode,
                 next_display_mode,
                 has_stable_alt_screen_content,
+                has_only_footer_content,
                 is_in_transient_grace_period,
                 self.codex_alt_screen_entered_at
                     .map(|entered| entered.elapsed().as_millis()),
@@ -8449,6 +8475,14 @@ impl TerminalView {
         ctx: &mut ViewContext<Self>,
     ) {
         if FeatureFlag::ImeMarkedText.is_enabled() {
+            if should_debug_ime_flow() {
+                log::warn!(
+                    "terminal IME preedit route=terminal-model chars={} selected_range={:?} preview={:?}",
+                    marked_text.chars().count(),
+                    selected_range,
+                    debug_ime_text_preview(marked_text)
+                );
+            }
             if self
                 .model
                 .lock()
@@ -8460,7 +8494,18 @@ impl TerminalView {
             return;
         }
 
-        if self.should_route_ime_to_pty(ctx) {
+        let route_to_pty = self.should_route_ime_to_pty(ctx);
+        if should_debug_ime_flow() {
+            log::warn!(
+                "terminal IME preedit route={} chars={} selected_range={:?} preview={:?}",
+                if route_to_pty { "pty" } else { "input-editor" },
+                marked_text.chars().count(),
+                selected_range,
+                debug_ime_text_preview(marked_text)
+            );
+        }
+
+        if route_to_pty {
             if self
                 .model
                 .lock()
@@ -8494,6 +8539,9 @@ impl TerminalView {
 
     fn clear_marked_text_on_terminal(&mut self, ctx: &mut ViewContext<Self>) {
         if FeatureFlag::ImeMarkedText.is_enabled() {
+            if should_debug_ime_flow() {
+                log::warn!("terminal IME clear route=terminal-model");
+            }
             if self.model.lock().clear_marked_text() {
                 ctx.report_active_cursor_position_update();
                 ctx.notify();
@@ -8501,7 +8549,15 @@ impl TerminalView {
             return;
         }
 
-        if self.should_route_ime_to_pty(ctx) {
+        let route_to_pty = self.should_route_ime_to_pty(ctx);
+        if should_debug_ime_flow() {
+            log::warn!(
+                "terminal IME clear route={}",
+                if route_to_pty { "pty" } else { "input-editor" }
+            );
+        }
+
+        if route_to_pty {
             if self.model.lock().clear_pty_ime_marked_text() {
                 ctx.report_active_cursor_position_update();
                 ctx.notify();
@@ -8521,6 +8577,13 @@ impl TerminalView {
 
     fn ime_commit_on_terminal(&mut self, text: &str, ctx: &mut ViewContext<Self>) {
         if FeatureFlag::ImeMarkedText.is_enabled() {
+            if should_debug_ime_flow() {
+                log::warn!(
+                    "terminal IME commit route=terminal-model chars={} preview={:?}",
+                    text.chars().count(),
+                    debug_ime_text_preview(text)
+                );
+            }
             if self.model.lock().clear_marked_text() {
                 ctx.report_active_cursor_position_update();
                 ctx.notify();
@@ -8529,7 +8592,17 @@ impl TerminalView {
             return;
         }
 
-        if self.should_route_ime_to_pty(ctx) {
+        let route_to_pty = self.should_route_ime_to_pty(ctx);
+        if should_debug_ime_flow() {
+            log::warn!(
+                "terminal IME commit route={} chars={} preview={:?}",
+                if route_to_pty { "pty" } else { "input-editor" },
+                text.chars().count(),
+                debug_ime_text_preview(text)
+            );
+        }
+
+        if route_to_pty {
             if self.model.lock().clear_pty_ime_marked_text() {
                 ctx.report_active_cursor_position_update();
                 ctx.notify();

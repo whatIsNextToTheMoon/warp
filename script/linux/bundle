@@ -178,7 +178,9 @@ elif [[ $RELEASE_CHANNEL = "oss" ]]; then
   APP_NAME="WarpOss"
   # The OSS channel does not ship Sentry, so drop the crash_reporting feature
   # (which would otherwise pull in the Sentry SDK as a dependency).
-  FEATURES="release_bundle"
+  # Keep kitty_images enabled so terminal clients such as Codex can detect
+  # Warp's image protocol support for features like pets.
+  FEATURES="release_bundle,kitty_images"
 fi
 
 # Artifact-specific binary naming
