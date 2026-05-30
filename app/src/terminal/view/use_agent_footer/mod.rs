@@ -47,7 +47,9 @@ use warpui::{
     ViewContext, ViewHandle,
 };
 
-use super::{RichContentInsertionPosition, TerminalAction, TerminalView};
+use super::{
+    should_debug_codex_alt_screen, RichContentInsertionPosition, TerminalAction, TerminalView,
+};
 use crate::ai::blocklist::agent_view::agent_view_bg_fill;
 use crate::ai::blocklist::block::cli_controller::CLISubagentEvent;
 use crate::cmd_or_ctrl_shift;
@@ -551,12 +553,22 @@ impl TerminalView {
 
     pub(super) fn hide_use_agent_footer_in_blocklist(&mut self, ctx: &mut ViewContext<Self>) {
         let use_agent_footer_id = self.use_agent_footer.id();
+        let rich_content_count_before = self.rich_content_views.len();
         self.model
             .lock()
             .block_list_mut()
             .remove_all_rich_content(use_agent_footer_id);
         self.rich_content_views
             .retain(|rich_content| rich_content.view_id() != use_agent_footer_id);
+        if should_debug_codex_alt_screen()
+            && rich_content_count_before != self.rich_content_views.len()
+        {
+            log::warn!(
+                "codex alt-screen footer cleanup: removed={} remaining={}",
+                rich_content_count_before - self.rich_content_views.len(),
+                self.rich_content_views.len()
+            );
+        }
         ctx.notify();
     }
 

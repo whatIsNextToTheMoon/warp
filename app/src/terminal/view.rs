@@ -51,7 +51,7 @@ use warpui::clipboard_utils::get_image_filepaths_from_paths;
 use base64::Engine as _;
 use std::ops::Deref as _;
 
-fn should_debug_codex_alt_screen() -> bool {
+pub(super) fn should_debug_codex_alt_screen() -> bool {
     std::env::var_os("WARP_DEBUG_CODEX_ALT_SCREEN").is_some()
 }
 
@@ -7609,13 +7609,26 @@ impl TerminalView {
         true
     }
 
-    fn is_active_command_codex(&self, model: &TerminalModel, app: &AppContext) -> bool {
-        model
+    fn active_command_codex_state(
+        &self,
+        model: &TerminalModel,
+        app: &AppContext,
+    ) -> (bool, Option<String>, Option<CLIAgent>) {
+        let cli_agent = CLIAgentSessionsModel::as_ref(app)
+            .session(self.view_id)
+            .map(|session| session.agent);
+        let active_command = model
             .block_list()
             .active_block()
-            .top_level_command(self.sessions.as_ref(app))
-            .as_deref()
-            == Some("codex")
+            .top_level_command(self.sessions.as_ref(app));
+        let is_codex = matches!(cli_agent, Some(CLIAgent::Codex))
+            || active_command.as_deref() == Some("codex");
+
+        (is_codex, active_command, cli_agent)
+    }
+
+    fn is_active_command_codex(&self, model: &TerminalModel, app: &AppContext) -> bool {
+        self.active_command_codex_state(model, app).0
     }
 
     fn should_keep_blocklist_for_codex_alt_screen(
@@ -7638,13 +7651,16 @@ impl TerminalView {
             self.codex_alt_screen_display_mode == CodexAltScreenDisplayMode::BlockList;
 
         if should_debug_codex_alt_screen() {
+            let (_, active_command, cli_agent) = self.active_command_codex_state(model, app);
             log::warn!(
-                "codex alt-screen {reason}: keep_blocklist={} display_mode={:?} transient_grace={} elapsed_ms={:?} {}",
+                "codex alt-screen {reason}: keep_blocklist={} display_mode={:?} transient_grace={} elapsed_ms={:?} active_command={:?} cli_agent={:?} {}",
                 should_keep_blocklist,
                 self.codex_alt_screen_display_mode,
                 is_in_transient_grace_period,
                 self.codex_alt_screen_entered_at
                     .map(|entered| entered.elapsed().as_millis()),
+                active_command,
+                cli_agent,
                 visible_content.debug_summary()
             );
         }
@@ -7687,8 +7703,9 @@ impl TerminalView {
         };
 
         if should_debug_codex_alt_screen() {
+            let (_, active_command, cli_agent) = self.active_command_codex_state(model, ctx);
             log::warn!(
-                "codex alt-screen display update: reason={} old={:?} next={:?} stable_content={} footer_only={} transient_grace={} elapsed_ms={:?} {}",
+                "codex alt-screen display update: reason={} old={:?} next={:?} stable_content={} footer_only={} transient_grace={} elapsed_ms={:?} active_command={:?} cli_agent={:?} {}",
                 reason,
                 self.codex_alt_screen_display_mode,
                 next_display_mode,
@@ -7697,6 +7714,8 @@ impl TerminalView {
                 is_in_transient_grace_period,
                 self.codex_alt_screen_entered_at
                     .map(|entered| entered.elapsed().as_millis()),
+                active_command,
+                cli_agent,
                 visible_content.debug_summary()
             );
         }
@@ -11651,6 +11670,18 @@ impl TerminalView {
                                         );
                                     }
 
+                                    {
+                                        let model_arc = Arc::clone(&me.model);
+                                        let model = model_arc.lock();
+                                        if model.is_alt_screen_active() {
+                                            me.update_codex_alt_screen_display_mode(
+                                                &model,
+                                                ctx,
+                                                "cli-agent-detected",
+                                            );
+                                        }
+                                    }
+
                                     me.maybe_show_use_agent_footer_in_blocklist(ctx);
                                     me.maybe_auto_open_cli_agent_rich_input(ctx);
                                     me.input.update(ctx, |input, ctx| {
@@ -12348,12 +12379,16 @@ impl TerminalView {
                         );
 
                         if should_debug_codex_alt_screen() {
+                            let (_, active_command, cli_agent) =
+                                self.active_command_codex_state(&model, ctx);
                             log::warn!(
-                                "codex alt-screen mode swap: mode={} {}",
+                                "codex alt-screen mode swap: mode={} active_command={:?} cli_agent={:?} {}",
                                 match &mode {
                                     TerminalMode::AltScreen => "alt-screen",
                                     TerminalMode::BlockList => "blocklist",
                                 },
+                                active_command,
+                                cli_agent,
                                 model.alt_screen().visible_content_debug_summary(
                                     CODEX_EMPTY_ALT_SCREEN_BOTTOM_ROWS_TO_IGNORE
                                 )
