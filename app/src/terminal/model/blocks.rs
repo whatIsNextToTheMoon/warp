@@ -1119,6 +1119,32 @@ impl BlockList {
         }
     }
 
+    fn first_rich_content_index(&self, view_id: EntityId) -> Option<TotalIndex> {
+        let mut cursor = self.block_heights.cursor::<TotalIndex, ()>();
+        while let Some(item) = cursor.item() {
+            if let BlockHeightItem::RichContent(rich_content) = item {
+                if rich_content.view_id == view_id {
+                    return Some(*cursor.start());
+                }
+            }
+            cursor.next();
+        }
+        None
+    }
+
+    pub fn remove_all_rich_content(&mut self, view_id: EntityId) {
+        self.dirty_rich_content_items.remove(&view_id);
+        if self.pinned_to_bottom == Some(view_id) {
+            self.pinned_to_bottom = None;
+        }
+
+        while let Some(index) = self.first_rich_content_index(view_id) {
+            self.removable_blocklist_item_positions
+                .insert(RemovableBlocklistItem::RichContent(view_id), index);
+            self.remove_item_from_blocklist(RemovableBlocklistItem::RichContent(view_id));
+        }
+    }
+
     pub fn update_agent_view_conversation_id_for_rich_content(
         &mut self,
         rich_content_view_id: EntityId,

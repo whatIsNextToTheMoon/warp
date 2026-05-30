@@ -1398,6 +1398,45 @@ fn test_remove_rich_content_block() {
 }
 
 #[test]
+fn test_remove_all_rich_content_blocks_with_same_view_id() {
+    let mut block_list =
+        new_bootstrapped_block_list(None, None, ChannelEventListener::new_for_test());
+
+    insert_block(&mut block_list, "cmd", "output");
+
+    let view_id = EntityId::new();
+    block_list.append_rich_content(RichContentItem::new_for_test(None, view_id, None), false);
+    block_list.append_rich_content(RichContentItem::new_for_test(None, view_id, None), false);
+
+    assert_eq!(
+        block_list
+            .block_heights
+            .items()
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item,
+                    BlockHeightItem::RichContent(rich_content) if rich_content.view_id == view_id
+                )
+            })
+            .count(),
+        2
+    );
+
+    block_list.remove_all_rich_content(view_id);
+
+    assert!(!block_list.block_heights.items().iter().any(|item| {
+        matches!(
+            item,
+            BlockHeightItem::RichContent(rich_content) if rich_content.view_id == view_id
+        )
+    }));
+    assert!(!block_list
+        .removable_blocklist_item_positions
+        .contains_key(&RemovableBlocklistItem::RichContent(view_id)));
+}
+
+#[test]
 fn test_conversation_scoped_rich_content_hidden_outside_fullscreen_agent_view() {
     FeatureFlag::AgentView.set_enabled(true);
     let mut block_list =

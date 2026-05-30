@@ -46,6 +46,7 @@ use crate::search::ai_context_menu::view::AIContextMenu;
 use crate::settings::InputSettings;
 use crate::settings::{AISettings, AISettingsChangedEvent};
 use crate::settings_view::SettingsSection;
+use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::input::MenuPositioningProvider;
 use crate::terminal::keys::TerminalKeybindings;
 use crate::terminal::model::block::BlockMetadata;
@@ -794,6 +795,9 @@ impl View for UniversalDeveloperInputButtonBar {
     fn render(&self, app: &AppContext) -> Box<dyn warpui::Element> {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
+        let has_cli_agent_session = CLIAgentSessionsModel::as_ref(app)
+            .session(self.terminal_view_id)
+            .is_some();
         #[cfg(feature = "voice_input")]
         let is_voice_input_enabled = AISettings::as_ref(app).is_voice_input_enabled(app);
 
@@ -817,13 +821,17 @@ impl View for UniversalDeveloperInputButtonBar {
             let mut buttons = Flex::row()
                 .with_main_axis_size(MainAxisSize::Max)
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_main_axis_alignment(MainAxisAlignment::Start)
-                .with_child(
-                    Container::new(ChildView::new(&self.segmented_control).finish())
-                        .with_padding_right(4.0)
-                        .finish(),
-                );
-            buttons = buttons.with_child(create_divider());
+                .with_main_axis_alignment(MainAxisAlignment::Start);
+
+            if !has_cli_agent_session {
+                buttons = buttons
+                    .with_child(
+                        Container::new(ChildView::new(&self.segmented_control).finish())
+                            .with_padding_right(4.0)
+                            .finish(),
+                    )
+                    .with_child(create_divider());
+            }
 
             buttons = buttons.with_child(ChildView::new(&self.slash_command_button).finish());
 

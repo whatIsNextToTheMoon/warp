@@ -550,9 +550,13 @@ impl TerminalView {
     }
 
     pub(super) fn hide_use_agent_footer_in_blocklist(&mut self, ctx: &mut ViewContext<Self>) {
-        let mut model = self.model.lock();
-        let block_list = model.block_list_mut();
-        block_list.remove_rich_content(self.use_agent_footer.id());
+        let use_agent_footer_id = self.use_agent_footer.id();
+        self.model
+            .lock()
+            .block_list_mut()
+            .remove_all_rich_content(use_agent_footer_id);
+        self.rich_content_views
+            .retain(|rich_content| rich_content.view_id() != use_agent_footer_id);
         ctx.notify();
     }
 
