@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::mpsc::{SyncSender, TrySendError};
+use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
 
 use itertools::Itertools;
@@ -1125,6 +1125,11 @@ impl PaneGroup {
         };
 
         let pane_ids = self.terminal_pane_ids().collect_vec();
+        let candidate_panes = pane_ids.len();
+        let mut persisted_blocks = 0usize;
+        let mut skipped_empty_blocks = 0usize;
+        let mut missing_terminal_views = 0usize;
+
         for pane_id in pane_ids {
             let Some(session_uuid) = self
                 .terminal_session_by_id(pane_id)
@@ -1133,12 +1138,14 @@ impl PaneGroup {
                 continue;
             };
             let Some(terminal_view) = self.terminal_view_from_pane_id(pane_id, ctx) else {
+                missing_terminal_views += 1;
                 continue;
             };
 
-            let Some((block, is_local)) = terminal_view
-                .read(ctx, |view, app| view.active_block_snapshot_for_restore(app))
+            let Some((block, is_local)) =
+                terminal_view.read(ctx, |view, app| view.active_block_snapshot_for_restore(app))
             else {
+                skipped_empty_blocks += 1;
                 continue;
             };
 
@@ -1148,28 +1155,27 @@ impl PaneGroup {
                 is_local,
             });
 
-            match sender.try_send(event) {
-                Ok(()) => {}
-                Err(TrySendError::Disconnected(_)) => {
-                    log::error!(
-                        "SQLite writer channel disconnected; could not persist active block snapshot"
-                    );
+            // This path is called from window/app shutdown callbacks before the SQLite
+            // writer is terminated. Use blocking send here instead of `try_send` + async
+            // fallback so the newest active block is definitely queued before shutdown
+            // proceeds and the writer drains its channel.
+            match sender.send(event) {
+                Ok(()) => {
+                    persisted_blocks += 1;
                 }
-                Err(TrySendError::Full(event)) => {
-                    let sender = sender.clone();
-                    let _ = ctx.spawn(
-                        async move { sender.send(event) },
-                        |_, res, _| {
-                            if let Err(err) = res {
-                                log::error!(
-                                    "Error sending active block snapshot event: {err:?}"
-                                );
-                            }
-                        },
+                Err(err) => {
+                    log::error!(
+                        "SQLite writer channel disconnected; could not persist active block snapshot: {err:?}"
                     );
                 }
             }
         }
+
+        log::info!(
+            "Queued {persisted_blocks} active terminal block snapshot(s) for session restore \
+             ({candidate_panes} candidate pane(s), {skipped_empty_blocks} empty/skipped, \
+             {missing_terminal_views} missing view(s))"
+        );
     }
 
     /// Returns true if this pane group contains any terminal panes.
