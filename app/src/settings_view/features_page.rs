@@ -1633,9 +1633,19 @@ impl TypedActionView for FeaturesPageView {
                 let current_settings = SessionSettings::as_ref(ctx).notifications.value().clone();
                 let is_focused_codex_task_completed_enabled =
                     !current_settings.is_focused_codex_task_completed_enabled;
+                let mode = if is_focused_codex_task_completed_enabled {
+                    // This per-Codex switch is only useful when desktop notifications are
+                    // actually enabled. Turn the parent notification mode on as part of
+                    // enabling the focused Codex completion notification so the user
+                    // doesn't end up with a checked sub-setting that can never fire.
+                    NotificationsMode::Enabled
+                } else {
+                    current_settings.mode
+                };
 
                 SessionSettings::handle(ctx).update(ctx, |settings, ctx| {
                     let new_settings = NotificationsSettings {
+                        mode,
                         is_focused_codex_task_completed_enabled,
                         ..current_settings
                     };
