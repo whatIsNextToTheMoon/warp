@@ -1267,6 +1267,21 @@ define_settings_group!(AISettings, settings: [
         toml_path: "agents.third_party.should_render_cli_agent_toolbar",
         description: "Whether to show the CLI agent footer for coding agent commands.",
     }
+
+    // When enabled, a user-typed `codex` command runs like any other terminal program:
+    // no CLI agent session, Codex footer, rich input auto-management, proactive listener,
+    // or Codex-specific alt-screen workaround. Warp-launched Codex harness sessions still
+    // use the integrated path.
+    treat_manual_codex_as_plain_terminal: TreatManualCodexAsPlainTerminal {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "agents.third_party.codex.treat_manual_codex_as_plain_terminal",
+        description: "Whether manually launched Codex should run as a plain terminal program instead of using Warp's Codex integration.",
+    }
+
     // When enabled and a CLI agent session has a plugin listener, rich input
     // auto-closes when the session enters a Blocked state (the agent requires
     // direct keyboard interaction) and auto-opens when it leaves Blocked.

@@ -155,7 +155,8 @@ impl TerminalView {
         let ai_settings = AISettings::handle(ctx);
         ctx.subscribe_to_model(&ai_settings, |me, _, event, ctx| match event {
             AISettingsChangedEvent::IsAnyAIEnabled { .. }
-            | AISettingsChangedEvent::ShouldRenderCLIAgentToolbar { .. } => {
+            | AISettingsChangedEvent::ShouldRenderCLIAgentToolbar { .. }
+            | AISettingsChangedEvent::TreatManualCodexAsPlainTerminal { .. } => {
                 me.maybe_show_use_agent_footer_in_blocklist(ctx);
             }
             AISettingsChangedEvent::ShouldRenderUseAgentToolbarForUserCommands { .. } => {
@@ -396,12 +397,22 @@ impl TerminalView {
         });
 
         if let Some(agent) = detected {
+            if matches!(agent, CLIAgent::Codex)
+                && self.should_treat_manual_codex_as_plain_terminal(ctx)
+            {
+                return None;
+            }
             return Some((agent, None));
         }
 
-        CompiledCommandsForCodingAgentToolbar::matched_agent(ctx, &command).map(|agent| {
+        CompiledCommandsForCodingAgentToolbar::matched_agent(ctx, &command).and_then(|agent| {
+            if matches!(agent, CLIAgent::Codex)
+                && self.should_treat_manual_codex_as_plain_terminal(ctx)
+            {
+                return None;
+            }
             let prefix = command.split_whitespace().next().map(str::to_owned);
-            (agent, prefix)
+            Some((agent, prefix))
         })
     }
 

@@ -7609,6 +7609,11 @@ impl TerminalView {
         true
     }
 
+    pub(super) fn should_treat_manual_codex_as_plain_terminal(&self, app: &AppContext) -> bool {
+        *AISettings::as_ref(app).treat_manual_codex_as_plain_terminal
+            && self.ambient_agent_view_model.is_none()
+    }
+
     fn active_command_codex_state(
         &self,
         model: &TerminalModel,
@@ -7621,8 +7626,11 @@ impl TerminalView {
             .block_list()
             .active_block()
             .top_level_command(self.sessions.as_ref(app));
+        let manual_codex_should_be_plain_terminal =
+            self.should_treat_manual_codex_as_plain_terminal(app) && cli_agent.is_none();
         let is_codex = matches!(cli_agent, Some(CLIAgent::Codex))
-            || active_command.as_deref() == Some("codex");
+            || (!manual_codex_should_be_plain_terminal
+                && active_command.as_deref() == Some("codex"));
 
         (is_codex, active_command, cli_agent)
     }

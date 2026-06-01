@@ -1290,6 +1290,7 @@
   "Rules enhance the agent by providing structured guidelines that help maintain consistency, enforce best practices, and adapt to specific workflows, including codebases or broader tasks.": "规则通过提供结构化指南来增强代理能力：帮助保持一致性、落实最佳实践，并适配特定工作流（包括代码库或更广泛的任务）。",
   "Rules help the Warp Agent follow your conventions, whether for codebases or specific workflows.": "规则可帮助 Warp 代理遵循你的约定，无论是针对代码库还是特定工作流。",
   "Run": "运行",
+  "Run manually launched Codex as a plain terminal": "将手动启动的 Codex 作为普通终端程序运行",
   "Run Selected Commands": "运行所选命令",
   "Run your agent task in an isolated cloud environment.": "在隔离的云环境中运行你的代理任务。",
   "Runs": "运行",

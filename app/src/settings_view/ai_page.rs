@@ -83,8 +83,8 @@ use crate::settings::{
     NaturalLanguageAutosuggestionsEnabled, RuleSuggestionsEnabled,
     SharedBlockTitleGenerationEnabled, ShouldRenderCLIAgentToolbar,
     ShouldRenderUseAgentToolbarForUserCommands, ShouldShowOzUpdatesInZeroState, ShowAgentTips,
-    ShowConversationHistory, ShowHintText, ThinkingDisplayMode, VoiceInputEnabled,
-    WarpDriveContextEnabled,
+    ShowConversationHistory, ShowHintText, ThinkingDisplayMode, TreatManualCodexAsPlainTerminal,
+    VoiceInputEnabled, WarpDriveContextEnabled,
 };
 use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent};
 use crate::terminal::CLIAgent;
@@ -2677,6 +2677,7 @@ pub enum AISettingsPageAction {
     ToggleAutoToggleRichInput,
     ToggleAutoOpenRichInputOnCLIAgentStart,
     ToggleAutoDismissRichInputAfterSubmit,
+    ToggleTreatManualCodexAsPlainTerminal,
     SetCLIAgentForCommand {
         pattern: String,
         agent: Option<CLIAgent>,
@@ -2951,6 +2952,14 @@ impl TypedActionView for AISettingsPageView {
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
                     report_if_error!(settings
                         .auto_dismiss_rich_input_after_submit
+                        .toggle_and_save_value(ctx));
+                });
+                ctx.notify();
+            }
+            AISettingsPageAction::ToggleTreatManualCodexAsPlainTerminal => {
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings
+                        .treat_manual_codex_as_plain_terminal
                         .toggle_and_save_value(ctx));
                 });
                 ctx.notify();
@@ -3705,9 +3714,8 @@ impl SettingsWidget for GlobalAIWidget {
         let is_anonymous = AuthStateProvider::as_ref(app)
             .get()
             .is_anonymous_or_logged_out();
-        let can_use_local_byok =
-            UserWorkspaces::as_ref(app).is_byo_api_key_enabled(app)
-                || FeatureFlag::SoloUserByok.is_enabled();
+        let can_use_local_byok = UserWorkspaces::as_ref(app).is_byo_api_key_enabled(app)
+            || FeatureFlag::SoloUserByok.is_enabled();
         let should_show_signup_cta = is_anonymous && !can_use_local_byok;
 
         let mut row = Flex::row()
@@ -6249,13 +6257,14 @@ struct CLIAgentWidget {
     auto_toggle_rich_input_info_tooltip: MouseStateHandle,
     auto_open_rich_input_on_cli_agent_start_toggle: SwitchStateHandle,
     auto_dismiss_rich_input_toggle: SwitchStateHandle,
+    treat_manual_codex_as_plain_terminal_toggle: SwitchStateHandle,
 }
 
 impl SettingsWidget for CLIAgentWidget {
     type View = AISettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "third party cli coding agent claude codex gemini toolbar footer layout chip chips rearrange re-arrange bar command regex auto show rich input dismiss"
+        "third party cli coding agent claude codex gemini toolbar footer layout chip chips rearrange re-arrange bar command regex auto show rich input dismiss plain terminal"
     }
 
     fn render(
@@ -6302,6 +6311,17 @@ impl SettingsWidget for CLIAgentWidget {
 
         let is_footer_enabled = *ai_settings.should_render_cli_agent_footer;
 
+        let manual_codex_plain_terminal_toggle =
+            render_ai_setting_toggle::<TreatManualCodexAsPlainTerminal>(
+                "Run manually launched Codex as a plain terminal",
+                AISettingsPageAction::ToggleTreatManualCodexAsPlainTerminal,
+                *ai_settings.treat_manual_codex_as_plain_terminal,
+                true,
+                self.treat_manual_codex_as_plain_terminal_toggle.clone(),
+                &view.local_only_icon_tooltip_states,
+                app,
+            );
+
         let mut column = Flex::column()
             .with_child(
                 build_sub_header(
@@ -6319,7 +6339,8 @@ impl SettingsWidget for CLIAgentWidget {
                     .with_margin_bottom(styles::DESCRIPTION_MARGIN_BOTTOM)
                     .with_margin_right(styles::TOGGLE_WIDTH_MARGIN)
                     .finish(),
-            );
+            )
+            .with_child(manual_codex_plain_terminal_toggle);
 
         if is_footer_enabled {
             use super::settings_page::AdditionalInfo;
@@ -6990,8 +7011,7 @@ impl ApiKeysWidget {
                         let _is_any_ai_enabled =
                             AISettings::handle(ctx).as_ref(ctx).is_any_ai_enabled(ctx);
                         let is_byo_enabled = workspace.as_ref(ctx).is_byo_api_key_enabled(ctx);
-                        let is_enabled =
-                            is_byo_enabled || FeatureFlag::SoloUserByok.is_enabled();
+                        let is_enabled = is_byo_enabled || FeatureFlag::SoloUserByok.is_enabled();
                         let has_key = !editor_clone.as_ref(ctx).is_empty(ctx);
 
                         // If BYO is disabled, clear the API key from the editor and storage
@@ -7540,7 +7560,6 @@ impl SettingsWidget for ApiKeysWidget {
 
         column.finish()
     }
-
 }
 
 struct AwsBedrockWidget {
