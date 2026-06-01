@@ -33,7 +33,7 @@ use std::path::{Path, PathBuf};
 #[cfg(target_os = "macos")]
 use std::process;
 use std::sync::{mpsc, Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 #[cfg(target_os = "macos")]
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -511,6 +511,7 @@ const MAX_FONT_SIZE: f32 = 25.0;
 
 /// The increment for increasing/decreasing the font size.
 const FONT_SIZE_INCREMENT: f32 = 1.0;
+const CTRL_SCROLL_ZOOM_THROTTLE: Duration = Duration::from_millis(100);
 
 pub const TAB_BAR_HEIGHT: f32 = 34.;
 /// Height for all panel headers (tab bar, warp drive, resource center, theme chooser, etc.).
@@ -1088,6 +1089,7 @@ pub struct Workspace {
     /// orchestration cards' "New API key…" flow. Cloud mode renders the
     /// FTUX view inline and does not use this.
     create_auth_secret_modal: Option<ViewHandle<Modal<AuthSecretFtuxView>>>,
+    last_ctrl_scroll_zoom_action_at: Option<Instant>,
 }
 
 impl Workspace {
@@ -3223,6 +3225,7 @@ impl Workspace {
                 Self::build_remove_tab_config_confirmation_dialog(ctx),
             handoff_environment_creation_modal: None,
             create_auth_secret_modal: None,
+            last_ctrl_scroll_zoom_action_at: None,
         };
 
         ws.configure_new_workspace(workspace_setting, ctx);
@@ -16766,6 +16769,33 @@ impl Workspace {
         self.adjust_terminal_font_size(FONT_SIZE_INCREMENT, ctx);
     }
 
+    fn handle_ctrl_scroll_zoom_or_font_size(
+        &mut self,
+        increase: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let now = Instant::now();
+        if self
+            .last_ctrl_scroll_zoom_action_at
+            .is_some_and(|last_action| now.duration_since(last_action) < CTRL_SCROLL_ZOOM_THROTTLE)
+        {
+            return;
+        }
+        self.last_ctrl_scroll_zoom_action_at = Some(now);
+
+        if FeatureFlag::UIZoom.is_enabled() {
+            if increase {
+                self.increase_zoom(ctx);
+            } else {
+                self.decrease_zoom(ctx);
+            }
+        } else if increase {
+            self.increase_font_size(ctx);
+        } else {
+            self.decrease_font_size(ctx);
+        }
+    }
+
     fn decrease_font_size(&mut self, ctx: &mut ViewContext<Self>) {
         self.adjust_terminal_font_size(-FONT_SIZE_INCREMENT, ctx);
     }
@@ -21448,6 +21478,9 @@ impl TypedActionView for Workspace {
             ShowThemeChooser(mode) => self.show_theme_chooser(Some(*mode), ctx),
             ShowThemeChooserForActiveTheme => self.show_theme_chooser_for_active_theme(ctx),
             IncreaseFontSize => self.increase_font_size(ctx),
+            CtrlScrollZoomOrFontSize { increase } => {
+                self.handle_ctrl_scroll_zoom_or_font_size(*increase, ctx)
+            }
             DecreaseFontSize => self.decrease_font_size(ctx),
             ResetFontSize => self.reset_font_size(ctx),
             IncreaseZoom => self.increase_zoom(ctx),
@@ -24496,23 +24529,37 @@ impl View for Workspace {
 
         #[cfg(any(windows, target_os = "linux"))]
         {
+            let mut last_ctrl_scroll_zoom_dispatch_at = self.last_ctrl_scroll_zoom_action_at;
             event_handler =
                 event_handler.on_scroll_wheel(move |ctx, _app, delta, modifiers_state| {
                     if !modifiers_state.ctrl {
                         return DispatchEventResult::PropagateToParent;
                     }
 
-                    // If the control key is being held, scrolling should scale the zoom level or font size
-                    if FeatureFlag::UIZoom.is_enabled() {
-                        if delta.y() > 0.0 {
-                            ctx.dispatch_typed_action(WorkspaceAction::IncreaseZoom);
-                        } else if delta.y() < 0.0 {
-                            ctx.dispatch_typed_action(WorkspaceAction::DecreaseZoom);
-                        }
-                    } else if delta.y() > 0.0 {
-                        ctx.dispatch_typed_action(WorkspaceAction::IncreaseFontSize);
+                    // If the control key is being held, scrolling should scale the zoom level or font size.
+                    // High-resolution wheels/touchpads can emit many small scroll events per gesture;
+                    // throttle the actual settings mutation so a single gesture does not trigger a
+                    // full workspace relayout for every raw wheel event.
+                    if delta.y() == 0.0 {
+                        return DispatchEventResult::StopPropagation;
+                    }
+
+                    let now = Instant::now();
+                    if last_ctrl_scroll_zoom_dispatch_at.is_some_and(|last_action| {
+                        now.duration_since(last_action) < CTRL_SCROLL_ZOOM_THROTTLE
+                    }) {
+                        return DispatchEventResult::StopPropagation;
+                    }
+                    last_ctrl_scroll_zoom_dispatch_at = Some(now);
+
+                    if delta.y() > 0.0 {
+                        ctx.dispatch_typed_action(WorkspaceAction::CtrlScrollZoomOrFontSize {
+                            increase: true,
+                        });
                     } else if delta.y() < 0.0 {
-                        ctx.dispatch_typed_action(WorkspaceAction::DecreaseFontSize);
+                        ctx.dispatch_typed_action(WorkspaceAction::CtrlScrollZoomOrFontSize {
+                            increase: false,
+                        });
                     }
                     DispatchEventResult::StopPropagation
                 });

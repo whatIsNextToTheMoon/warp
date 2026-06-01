@@ -188,6 +188,9 @@ pub enum WorkspaceAction {
     ShowThemeChooserForActiveTheme,
     IncreaseFontSize,
     DecreaseFontSize,
+    CtrlScrollZoomOrFontSize {
+        increase: bool,
+    },
     ResetFontSize,
     IncreaseZoom,
     DecreaseZoom,
@@ -929,6 +932,7 @@ impl WorkspaceAction {
             | RunAISuggestedCommand { .. }
             | RunCommand { .. }
             | InsertInInput { .. }
+            | CtrlScrollZoomOrFontSize { .. }
             | InsertForkSlashCommand
             | QueuePromptForConversation { .. }
             | AttemptLoginGatedAIUpgrade

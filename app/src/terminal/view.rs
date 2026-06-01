@@ -27154,7 +27154,11 @@ impl View for TerminalView {
 
                     column.add_child(Shrinkable::new(1., output_area).finish());
 
+                    // During transient Codex alt-screen redraws (Ctrl+T / double Esc), we keep
+                    // rendering the block list. The block list may already include the CLI agent
+                    // footer as rich content, so don't also append the alt-screen footer copy.
                     if model.is_alt_screen_active()
+                        && !should_render_blocklist_for_empty_codex_alt_screen
                         && self.should_render_use_agent_footer(&model, app)
                     {
                         column.add_child(ChildView::new(&self.use_agent_footer).finish());
