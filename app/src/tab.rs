@@ -1324,10 +1324,18 @@ impl<'a> TabComponent<'a> {
     ) -> Box<dyn Element> {
         let theme = self.appearance.theme();
         let is_active = self.is_active_tab();
+        // During a drag the tab is repainted very frequently. Avoid the
+        // custom color/gradient path for the live tab being dragged; the
+        // floating drag ghost keeps the visual identity.
+        let custom_tab_background = if is_tab_dragging && !self.for_drag_ghost {
+            None
+        } else {
+            self.styles.background
+        };
 
         let (background_color, border_fill) = if FeatureFlag::NewTabStyling.is_enabled() {
             // If there is a custom tab background, we overlay it with varying opacities.
-            let bg = if let Some(custom_background) = self.styles.background {
+            let bg = if let Some(custom_background) = custom_tab_background {
                 let base_opacity = if is_active {
                     60
                 } else if is_hovered {
@@ -1367,7 +1375,7 @@ impl<'a> TabComponent<'a> {
                 WARP_2_TAB_COLOR_OPACITY
             };
 
-            let bg = if let Some(custom_background) = self.styles.background {
+            let bg = if let Some(custom_background) = custom_tab_background {
                 match custom_background {
                     ThemeFill::Solid(color) => coloru_with_opacity(color, tab_opacity).into(),
                     ThemeFill::VerticalGradient(gradient) => {
@@ -1442,7 +1450,7 @@ impl<'a> TabComponent<'a> {
         )
         .finish();
 
-        let close_button_background = if let Some(custom_background) = self.styles.background {
+        let close_button_background = if let Some(custom_background) = custom_tab_background {
             match custom_background {
                 ThemeFill::Solid(color) => {
                     Fill::Solid(coloru_with_opacity(color, TAB_CLOSE_BUTTON_OPACITY))

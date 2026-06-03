@@ -35,6 +35,7 @@ const SWITCH_TO_PS1_ESCAPE_SEQUENCE: &[u8] = &[escape_sequences::C0::ESC, b'p'];
 /// Used to let the shell know we are switching to the Warp prompt via a bindkey \ew. This will
 /// unset the PS1 to ensure we don't have a double prompt (PS1 and Warp prompt).
 const SWITCH_TO_WARP_PROMPT_ESCAPE_SEQUENCE: &[u8] = &[escape_sequences::C0::ESC, b'w'];
+const NATIVE_SHELL_COMPLETIONS_PROMPT_TIMEOUT_MS: u64 = 1500;
 
 /// Represents a single call to write bytes to the PTY asynchronously.
 enum PtyWrite {
@@ -104,6 +105,18 @@ impl NativeShellCompletionsState {
             Self::AwaitingPrompt { method, .. } | Self::AwaitingResults { method, .. } => *method,
         }
     }
+
+    fn cancel(self, reason: &str) {
+        let results_tx = match self {
+            Self::AwaitingPrompt { results_tx, .. } | Self::AwaitingResults { results_tx, .. } => {
+                results_tx
+            }
+        };
+
+        if let Err(err) = results_tx.try_send(Vec::new()) {
+            log::debug!("Unable to cancel native shell completions for {reason}: {err:?}");
+        }
+    }
 }
 
 enum TmuxControlMode {
@@ -134,6 +147,7 @@ pub struct PtyController<T: EventLoopSender> {
     bootstrap_file: Option<TempBootstrapFile>,
     tmux_control_mode: Option<TmuxControlMode>,
     in_flight_native_completions_state: Option<NativeShellCompletionsState>,
+    native_shell_completions_request_id: u64,
 }
 
 impl<T: EventLoopSender> PtyController<T> {
@@ -314,6 +328,7 @@ impl<T: EventLoopSender> PtyController<T> {
             bootstrap_file: None,
             tmux_control_mode: None,
             in_flight_native_completions_state: None,
+            native_shell_completions_request_id: 0,
         }
     }
 
@@ -758,7 +773,35 @@ impl<T: EventLoopSender> PtyController<T> {
             }
             PtyWrite::RunNativeShellCompletions(state) => {
                 let trigger_byte = state.method().trigger_byte();
+                let should_watch_for_prompt = state.is_awaiting_prompt();
+                self.native_shell_completions_request_id =
+                    self.native_shell_completions_request_id.wrapping_add(1);
+                let request_id = self.native_shell_completions_request_id;
                 self.in_flight_native_completions_state = Some(state);
+
+                if should_watch_for_prompt {
+                    ctx.spawn(
+                        warpui::r#async::Timer::after(std::time::Duration::from_millis(
+                            NATIVE_SHELL_COMPLETIONS_PROMPT_TIMEOUT_MS,
+                        )),
+                        move |me, _, ctx| {
+                            let should_cancel = me.native_shell_completions_request_id == request_id
+                                && me
+                                    .in_flight_native_completions_state
+                                    .as_ref()
+                                    .is_some_and(NativeShellCompletionsState::is_awaiting_prompt);
+                            if should_cancel {
+                                if let Some(state) = me.in_flight_native_completions_state.take() {
+                                    log::warn!(
+                                        "Timed out waiting for native shell completions prompt; cancelling request"
+                                    );
+                                    state.cancel("native shell completions prompt timeout");
+                                }
+                                me.execute_next_queued_write(ctx);
+                            }
+                        },
+                    );
+                }
 
                 // Send the control code for the selected completion widget.
                 // The shell will answer with an OSC-based prompt request before

@@ -768,6 +768,26 @@ fn test_unset_bracketed_paste_mode_on_command_finished() {
 }
 
 #[test]
+fn test_unexpected_end_in_band_command_output_exits_alt_screen() {
+    let mut terminal: TerminalModel = TerminalModel::mock(None, None);
+
+    terminal.enter_alt_screen(true);
+    terminal.end_in_band_command_output(true);
+
+    assert!(!terminal.alt_screen_active);
+}
+
+#[test]
+fn test_unexpected_end_in_band_command_output_unsets_bracketed_paste() {
+    let mut terminal: TerminalModel = TerminalModel::mock(None, None);
+
+    terminal.set_mode(Mode::BracketedPaste);
+    terminal.end_in_band_command_output(true);
+
+    assert!(!terminal.is_term_mode_set(TermMode::BRACKETED_PASTE));
+}
+
+#[test]
 fn test_alt_screen_selection_tracks_scroll() {
     let mut terminal: TerminalModel = TerminalModel::mock(None, None);
     terminal.enter_alt_screen(true);

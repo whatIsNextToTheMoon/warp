@@ -5270,6 +5270,10 @@ impl Workspace {
             .color_for_directory(cwd_path)
             .and_then(|c| c.ansi_color());
 
+        if tab.default_directory_color == color {
+            return;
+        }
+
         tab.default_directory_color = color;
         ctx.notify();
     }

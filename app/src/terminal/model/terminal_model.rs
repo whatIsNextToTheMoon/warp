@@ -3112,7 +3112,6 @@ impl ansi::Handler for TerminalModel {
         };
     }
 
-    #[cfg_attr(not(windows), allow(unused_variables))]
     fn end_in_band_command_output(&mut self, from_osc_sequence: bool) {
         match &mut self.is_receiving_in_band_command_output {
             IsReceivingInBandCommandOutput::Yes { output } => {
@@ -3138,8 +3137,40 @@ impl ansi::Handler for TerminalModel {
                 };
                 self.is_receiving_in_band_command_output = IsReceivingInBandCommandOutput::No;
             }
-            IsReceivingInBandCommandOutput::No => {
+            IsReceivingInBandCommandOutput::No if from_osc_sequence => {
                 log::warn!("Received 'end_in_band_command_output' while not expecting to read in-band command output.");
+
+                // Recovery path for stuck terminal presentation state. Some
+                // TUI programs can emit an end marker without a matching start
+                // marker during teardown, leaving Warp in alternate-screen or
+                // bracketed-paste mode. Mirror the narrow recovery performed
+                // by `command_finished`, but do not synthesize lifecycle
+                // events because the shell state is genuinely unknown here.
+                let was_alt_screen_active = self.alt_screen_active;
+                let had_bracketed_paste = self.alt_screen.is_mode_set(TermMode::BRACKETED_PASTE)
+                    || self
+                        .block_list
+                        .active_block()
+                        .is_mode_set(TermMode::BRACKETED_PASTE);
+
+                if had_bracketed_paste {
+                    self.unset_mode(Mode::BracketedPaste);
+                }
+                if was_alt_screen_active {
+                    self.exit_alt_screen(true);
+                }
+
+                if was_alt_screen_active || had_bracketed_paste {
+                    log::warn!(
+                        "Recovered terminal presentation state after unexpected in-band command output end marker: alt_screen_active={was_alt_screen_active} bracketed_paste={had_bracketed_paste}"
+                    );
+                }
+            }
+            IsReceivingInBandCommandOutput::No => {
+                // `PtyController::write_command` deliberately calls this as a
+                // no-op before writing user commands, so only OSC-delivered
+                // end markers should be treated as suspicious.
+                log::debug!("Ignoring non-OSC end_in_band_command_output while not receiving in-band command output.");
             }
         }
 
