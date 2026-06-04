@@ -471,7 +471,6 @@ use crate::banner::{
     Banner, BannerAction, BannerEvent, BannerState, BannerTextButton, BannerTextContent,
     DismissalType,
 };
-use crate::debounce::debounce;
 use crate::editor::{position_id_for_cursor, AutosuggestionType, CrdtOperation, EditorAction};
 use crate::features::FeatureFlag;
 use crate::pane_group::SplitPaneState;
@@ -548,6 +547,7 @@ use crate::terminal::{
 };
 use crate::view_components::find::{Event as FindEvent, Find, FindDirection, FindWithinBlockState};
 use settings::{Setting, ToggleableSetting};
+use warp_core::r#async::debounce;
 use warp_core::semantic_selection::SemanticSelection;
 use warpui::text::SelectionType;
 
@@ -755,6 +755,7 @@ pub const NOTIFICATIONS_TROUBLESHOOT_URL: &str =
     "https://docs.warp.dev/terminal/more-features/notifications#troubleshooting-notifications";
 
 const DEBOUNCE_PERIOD: Duration = Duration::from_millis(40);
+const FIND_QUERY_DEBOUNCE_PERIOD: Duration = Duration::from_millis(1000);
 
 /// Key used in user defaults to save whether the user has seen the banner.
 pub const ALIAS_EXPANSION_BANNER_SEEN_KEY: &str = "AliasExpansionBannerSeen";
@@ -2608,6 +2609,8 @@ pub struct TerminalView {
     resize_tx: Sender<Vector2F>,
 
     find_link_tx: Sender<FindLinkArg>,
+    find_update_debounce_tx: Sender<(u64, FindOptions)>,
+    find_update_generation: u64,
 
     /// Highlighted link (could be url or file path) on the screen.
     highlighted_link: HighlightedLinkOption,
@@ -3670,6 +3673,7 @@ impl TerminalView {
 
         let (resize_tx, resize_rx) = async_channel::unbounded();
         let (find_link_tx, find_link_rx) = async_channel::unbounded();
+        let (find_update_debounce_tx, find_update_debounce_rx) = async_channel::unbounded();
         ctx.subscribe_to_model(&model_events_handle, |me, _, event, ctx| {
             me.handle_terminal_event(event, ctx);
         });
@@ -3730,6 +3734,12 @@ impl TerminalView {
         let _ = ctx.spawn_stream_local(
             debounce(DEBOUNCE_PERIOD, find_link_rx),
             Self::handle_find_link,
+            |_, _| {}, /* on_done */
+        );
+
+        let _ = ctx.spawn_stream_local(
+            debounce(FIND_QUERY_DEBOUNCE_PERIOD, find_update_debounce_rx),
+            Self::handle_debounced_find_update,
             |_, _| {}, /* on_done */
         );
 
@@ -4266,6 +4276,8 @@ impl TerminalView {
             find_bar,
             resize_tx,
             find_link_tx,
+            find_update_debounce_tx,
+            find_update_generation: 0,
             highlighted_link: HighlightedLinkOption::default(),
             last_hover_fragment_boundary: None,
             bootstrap_start: None,
@@ -19867,18 +19879,15 @@ impl TerminalView {
             find_model.set_is_find_bar_open(true);
         });
 
-        let options = self
-            .find_model
-            .as_ref(ctx)
-            .active_find_options()
-            .cloned()
-            .unwrap_or_default();
-        // Start find using the previous query.
-        self.run_find(options, ctx);
+        let options = self.find_options_from_find_bar(ctx);
+        // Avoid immediately scanning the entire scrollback when the find bar opens with a
+        // restored or selected query. Large one-character queries can be extremely expensive.
+        self.schedule_or_run_find(options, ctx);
         self.focus_find_bar(ctx);
     }
 
     fn close_find_bar(&mut self, ctx: &mut ViewContext<Self>) {
+        self.next_find_update_generation();
         self.find_model.update(ctx, |find_model, ctx| {
             find_model.set_is_find_bar_open(false);
             // Notify rich-content child views (e.g. AI blocks) to repaint and
@@ -19900,36 +19909,30 @@ impl TerminalView {
         if self.find_model.as_ref(ctx).is_find_bar_open()
             && !self.model.lock().is_alt_screen_active()
         {
-            let mut find_options = self
+            let current_blocks_to_include_in_results = self
                 .find_model
                 .as_ref(ctx)
                 .active_find_options()
-                .cloned()
-                .unwrap_or_default();
-
+                .and_then(|options| options.blocks_to_include_in_results.as_ref());
             let new_blocks_to_include_in_results = matches!(
                 self.find_bar.as_ref(ctx).display_find_within_block,
                 FindWithinBlockState::Enabled
             )
             .then(|| self.selected_blocks.block_indices().collect_vec());
 
-            if find_options.blocks_to_include_in_results.as_ref()
-                != new_blocks_to_include_in_results.as_ref()
-            {
+            if current_blocks_to_include_in_results != new_blocks_to_include_in_results.as_ref() {
                 self.find_bar.update(ctx, |view, ctx| {
                     if new_blocks_to_include_in_results.is_none() {
                         // If there aren't any selected blocks, turn off find in block
                         view.display_find_within_block = FindWithinBlockState::Disabled;
                     }
-
-                    find_options = find_options
-                        .with_blocks_to_include_in_results(new_blocks_to_include_in_results);
-
-                    self.find_model.update(ctx, |find_model, ctx| {
-                        find_model.run_find(find_options, ctx)
-                    });
                     ctx.notify();
                 });
+
+                let find_options = self
+                    .find_options_from_find_bar(ctx)
+                    .with_blocks_to_include_in_results(new_blocks_to_include_in_results);
+                self.run_find_immediately(find_options, ctx);
             }
         }
     }
@@ -19945,6 +19948,63 @@ impl TerminalView {
         } else {
             self.update_find_selection(ctx);
         }
+    }
+
+    fn find_options_from_find_bar(&self, ctx: &AppContext) -> FindOptions {
+        let query = self.find_bar.as_ref(ctx).query_text(ctx);
+        let options = self
+            .find_model
+            .as_ref(ctx)
+            .active_find_options()
+            .cloned()
+            .unwrap_or_default();
+
+        if query.is_empty() {
+            options
+        } else {
+            options.with_query(Some(query))
+        }
+    }
+
+    fn next_find_update_generation(&mut self) -> u64 {
+        self.find_update_generation = self.find_update_generation.wrapping_add(1);
+        self.find_update_generation
+    }
+
+    fn should_debounce_find_options(options: &FindOptions) -> bool {
+        options
+            .query
+            .as_ref()
+            .is_some_and(|query| !query.trim().is_empty())
+    }
+
+    fn schedule_or_run_find(&mut self, options: FindOptions, ctx: &mut ViewContext<Self>) {
+        if Self::should_debounce_find_options(&options) {
+            let generation = self.next_find_update_generation();
+            let _ = self.find_update_debounce_tx.try_send((generation, options));
+            return;
+        }
+
+        self.run_find_immediately(options, ctx);
+    }
+
+    fn run_find_immediately(&mut self, options: FindOptions, ctx: &mut ViewContext<Self>) {
+        self.next_find_update_generation();
+        self.run_find(options, ctx);
+    }
+
+    fn handle_debounced_find_update(
+        &mut self,
+        (generation, options): (u64, FindOptions),
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if generation != self.find_update_generation
+            || !self.find_model.as_ref(ctx).is_find_bar_open()
+        {
+            return;
+        }
+
+        self.run_find(options, ctx);
     }
 
     /// Starts finding the matches for the given query string from the most recent block.
@@ -19969,6 +20029,11 @@ impl TerminalView {
     }
 
     fn goto_next_find_match(&mut self, direction: &FindDirection, ctx: &mut ViewContext<Self>) {
+        let options = self.find_options_from_find_bar(ctx);
+        if Self::should_debounce_find_options(&options) {
+            self.run_find_immediately(options, ctx);
+        }
+
         self.find_model.update(ctx, |find_model, ctx| {
             find_model.focus_next_find_match(*direction, ctx);
         });
@@ -21987,35 +22052,23 @@ impl TerminalView {
             }
             FindEvent::Update { query } => {
                 let options = self
-                    .find_model
-                    .as_ref(ctx)
-                    .active_find_options()
-                    .cloned()
-                    .unwrap_or_default()
+                    .find_options_from_find_bar(ctx)
                     .with_query(query.clone());
-                self.run_find(options, ctx)
+                self.schedule_or_run_find(options, ctx)
             }
             FindEvent::NextMatch { direction } => self.goto_next_find_match(direction, ctx),
             FindEvent::ToggleFindInBlock { value } => self.toggle_find_within_block(ctx, *value),
             FindEvent::ToggleCaseSensitivity { is_case_sensitive } => {
                 let options = self
-                    .find_model
-                    .as_ref(ctx)
-                    .active_find_options()
-                    .cloned()
-                    .unwrap_or_default()
+                    .find_options_from_find_bar(ctx)
                     .with_is_case_sensitive(*is_case_sensitive);
-                self.run_find(options, ctx)
+                self.run_find_immediately(options, ctx)
             }
             FindEvent::ToggleRegexSearch { is_regex_enabled } => {
                 let options = self
-                    .find_model
-                    .as_ref(ctx)
-                    .active_find_options()
-                    .cloned()
-                    .unwrap_or_default()
+                    .find_options_from_find_bar(ctx)
                     .with_is_regex_enabled(*is_regex_enabled);
-                self.run_find(options, ctx)
+                self.run_find_immediately(options, ctx)
             }
         }
     }

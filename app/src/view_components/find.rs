@@ -202,7 +202,7 @@ impl<T: FindModel + Entity<Event = FindEvent> + 'static> Find<T> {
         self.editor.as_ref(ctx).is_focused()
     }
 
-    fn editor_text(&self, ctx: &AppContext) -> String {
+    pub fn query_text(&self, ctx: &AppContext) -> String {
         self.editor.as_ref(ctx).buffer_text(ctx)
     }
 
@@ -216,7 +216,7 @@ impl<T: FindModel + Entity<Event = FindEvent> + 'static> Find<T> {
     fn handle_editor_event(&mut self, event: &EditorEvent, ctx: &mut ViewContext<Self>) {
         match event {
             EditorEvent::Edited(_) => {
-                let query = self.editor_text(ctx);
+                let query = self.query_text(ctx);
                 ctx.emit(Event::Update {
                     // If the query is empty, don't search for an empty string - set the query to
                     // `None`.
