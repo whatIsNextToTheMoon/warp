@@ -10,7 +10,7 @@ use chrono::Local;
 use parking_lot::FairMutex;
 use session_sharing_protocol::common::CLIAgentSessionState;
 use warp_cli::agent::Harness;
-use warp_terminal::model::escape_sequences::{BRACKETED_PASTE_END, BRACKETED_PASTE_START};
+use warp_terminal::model::escape_sequences::{BRACKETED_PASTE_END, BRACKETED_PASTE_START, C0};
 use warpui::notification::UserNotification;
 use warpui::platform::WindowStyle;
 use warpui::{App, Presenter, ReadModel, WindowInvalidation};
@@ -51,7 +51,7 @@ use crate::terminal::alt_screen::should_intercept_mouse;
 use crate::terminal::block_list_element::{SnackbarPoint, SnackbarTranslationMode};
 use crate::terminal::block_list_viewport::{ClampingMode, ScrollLines};
 use crate::terminal::cli_agent_sessions::event::{
-    CLIAgentEvent, CLIAgentEventPayload, CLIAgentEventType,
+    CLIAgentEvent, CLIAgentEventPayload, CLIAgentEventSource, CLIAgentEventType,
 };
 use crate::terminal::cli_agent_sessions::listener::CLIAgentSessionListener;
 use crate::terminal::cli_agent_sessions::{
@@ -422,6 +422,7 @@ fn submit_cli_agent_rich_input_restores_unlocked_input_config() {
                         plugin_version: None,
                         draft_text: None,
                         custom_command_prefix: None,
+                        received_rich_notification: false,
                     },
                     ctx,
                 );
@@ -488,6 +489,7 @@ fn unregister_cli_agent_session_restores_unlocked_input_config() {
                         plugin_version: None,
                         draft_text: None,
                         custom_command_prefix: None,
+                        received_rich_notification: false,
                     },
                     ctx,
                 );
@@ -1209,7 +1211,7 @@ fn cloud_mode_v1_agent_prefixed_query_spawns_cloud_agent() {
             let request = ambient_model
                 .request()
                 .expect("enter should submit through the cloud agent spawn path");
-            assert_eq!(request.prompt, "/agent fix the tests");
+            assert_eq!(request.prompt.as_deref(), Some("/agent fix the tests"));
             assert_eq!(request.mode, UserQueryMode::Normal);
             assert!(input.as_ref(ctx).buffer_text(ctx).is_empty());
         });
@@ -1254,7 +1256,7 @@ fn cloud_mode_v2_agent_prefixed_query_spawns_cloud_agent() {
             let request = ambient_model
                 .request()
                 .expect("enter should submit through the cloud agent spawn path");
-            assert_eq!(request.prompt, "/agent fix the tests");
+            assert_eq!(request.prompt.as_deref(), Some("/agent fix the tests"));
             assert_eq!(request.mode, UserQueryMode::Normal);
             assert!(input.as_ref(ctx).buffer_text(ctx).is_empty());
         });
@@ -1609,7 +1611,7 @@ fn cloud_mode_dispatched_agent_inserts_queued_user_query() {
                 .update(ctx, |model, ctx| {
                     model.spawn_agent_with_request(
                         SpawnAgentRequest {
-                            prompt: "write the tests".to_string(),
+                            prompt: Some("write the tests".to_string()),
                             mode: UserQueryMode::Normal,
                             config: None,
                             title: None,
@@ -1624,6 +1626,7 @@ fn cloud_mode_dispatched_agent_inserts_queued_user_query() {
                             conversation_id: None,
                             initial_snapshot_token: None,
                             snapshot_disabled: None,
+                            orchestration_handoff: None,
                         },
                         ctx,
                     );
@@ -5128,6 +5131,7 @@ fn submit_rich_input_and_collect_pty_writes(
                     plugin_version: None,
                     draft_text: None,
                     custom_command_prefix: None,
+                    received_rich_notification: false,
                 },
                 ctx,
             );
@@ -5166,6 +5170,7 @@ fn open_cli_agent_rich_input_for_agent_with_window_id(
                     plugin_version: None,
                     draft_text: None,
                     custom_command_prefix: None,
+                    received_rich_notification: false,
                 },
                 ctx,
             );
@@ -5488,6 +5493,7 @@ fn drag_drop_image_in_cli_agent_long_running_command_pastes_via_clipboard() {
                         plugin_version: None,
                         draft_text: None,
                         custom_command_prefix: None,
+                        received_rich_notification: false,
                     },
                     ctx,
                 );
@@ -5530,6 +5536,93 @@ fn drag_drop_image_in_cli_agent_long_running_command_pastes_via_clipboard() {
 }
 
 #[test]
+fn paste_raw_image_clipboard_in_cli_agent_sends_correct_bytes() {
+    fn run_for_agent(agent: CLIAgent) {
+        App::test((), move |mut app| async move {
+            initialize_app_for_terminal_view(&mut app);
+            let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+
+            let terminal = add_window_with_terminal(&mut app, None);
+
+            let pty_writes: Rc<RefCell<Vec<Vec<u8>>>> = Rc::new(RefCell::new(Vec::new()));
+            let writes = pty_writes.clone();
+            app.update(|ctx| {
+                ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                    if let Event::WriteBytesToPty { bytes } = event {
+                        writes.borrow_mut().push(bytes.to_vec());
+                    }
+                });
+            });
+
+            terminal.update(&mut app, |view, ctx| {
+                CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions, ctx| {
+                    sessions.set_session(
+                        view.view_id,
+                        CLIAgentSession {
+                            agent,
+                            status: CLIAgentSessionStatus::InProgress,
+                            session_context: CLIAgentSessionContext::default(),
+                            input_state: CLIAgentInputState::Closed,
+                            should_auto_toggle_input: false,
+                            listener: None,
+                            remote_host: None,
+                            plugin_version: None,
+                            draft_text: None,
+                            custom_command_prefix: None,
+                            received_rich_notification: false,
+                        },
+                        ctx,
+                    );
+                });
+
+                {
+                    let mut model = view.model.lock();
+                    model.simulate_long_running_block(agent.command_prefix(), "");
+                    model.set_mode(ansi::Mode::BracketedPaste);
+                }
+
+                // Write image-only data to the clipboard (no text, no paths).
+                ctx.clipboard().write(ClipboardContent {
+                    images: Some(vec![warpui::clipboard::ImageData {
+                        data: vec![0x89, 0x50, 0x4E, 0x47], // PNG magic bytes
+                        mime_type: "image/png".to_string(),
+                        filename: None,
+                    }]),
+                    ..Default::default()
+                });
+
+                view.handle_action(&TerminalAction::Paste, ctx);
+            });
+
+            let writes = pty_writes.borrow();
+            assert_eq!(
+                writes.len(),
+                1,
+                "expected 1 PTY write, got {}",
+                writes.len()
+            );
+
+            if cfg!(windows) {
+                if agent == CLIAgent::Claude {
+                    assert_eq!(writes[0], vec![C0::ESC, b'v']);
+                } else {
+                    let mut expected = Vec::new();
+                    expected.extend_from_slice(BRACKETED_PASTE_START);
+                    expected.extend_from_slice(BRACKETED_PASTE_END);
+                    assert_eq!(writes[0], expected);
+                }
+            } else {
+                assert_eq!(writes[0], vec![C0::SYN]);
+            }
+        })
+    }
+
+    run_for_agent(CLIAgent::Claude);
+    run_for_agent(CLIAgent::OpenCode);
+    run_for_agent(CLIAgent::Codex);
+}
+
+#[test]
 fn submit_without_auto_dismiss_keeps_rich_input_open() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
@@ -5554,6 +5647,7 @@ fn submit_without_auto_dismiss_keeps_rich_input_open() {
                         plugin_version: None,
                         draft_text: None,
                         custom_command_prefix: None,
+                        received_rich_notification: false,
                     },
                     ctx,
                 );
@@ -5616,6 +5710,7 @@ fn submit_with_plugin_and_auto_toggle_keeps_rich_input_open() {
                         plugin_version: Some("1.0.0".to_owned()),
                         draft_text: None,
                         custom_command_prefix: None,
+                        received_rich_notification: true,
                     },
                     ctx,
                 );
@@ -5670,6 +5765,7 @@ fn submit_with_plugin_but_auto_toggle_off_respects_auto_dismiss() {
                         plugin_version: Some("1.0.0".to_owned()),
                         draft_text: None,
                         custom_command_prefix: None,
+                        received_rich_notification: false,
                     },
                     ctx,
                 );
@@ -5724,6 +5820,7 @@ fn status_blocked_auto_closes_rich_input() {
                         plugin_version: Some("1.0.0".to_owned()),
                         draft_text: None,
                         custom_command_prefix: None,
+                        received_rich_notification: false,
                     },
                     ctx,
                 );
@@ -5737,6 +5834,7 @@ fn status_blocked_auto_closes_rich_input() {
                 sessions.update_from_event(
                     view.view_id,
                     &CLIAgentEvent {
+                        source: CLIAgentEventSource::RichPlugin,
                         v: 1,
                         agent: CLIAgent::Claude,
                         event: CLIAgentEventType::PermissionRequest,
@@ -5799,6 +5897,7 @@ fn status_in_progress_auto_opens_rich_input_after_blocked() {
                         plugin_version: Some("1.0.0".to_owned()),
                         draft_text: None,
                         custom_command_prefix: None,
+                        received_rich_notification: false,
                     },
                     ctx,
                 );
@@ -5810,6 +5909,7 @@ fn status_in_progress_auto_opens_rich_input_after_blocked() {
                 sessions.update_from_event(
                     view.view_id,
                     &CLIAgentEvent {
+                        source: CLIAgentEventSource::RichPlugin,
                         v: 1,
                         agent: CLIAgent::Claude,
                         event: CLIAgentEventType::PermissionRequest,
@@ -5837,6 +5937,7 @@ fn status_in_progress_auto_opens_rich_input_after_blocked() {
                 sessions.update_from_event(
                     view.view_id,
                     &CLIAgentEvent {
+                        source: CLIAgentEventSource::RichPlugin,
                         v: 1,
                         agent: CLIAgent::Claude,
                         event: CLIAgentEventType::PermissionReplied,
@@ -5895,6 +5996,7 @@ fn codex_status_change_does_not_auto_open_rich_input() {
                         plugin_version: None,
                         draft_text: None,
                         custom_command_prefix: None,
+                        received_rich_notification: false,
                     },
                     ctx,
                 );
@@ -5908,6 +6010,7 @@ fn codex_status_change_does_not_auto_open_rich_input() {
                 sessions.update_from_event(
                     view.view_id,
                     &CLIAgentEvent {
+                        source: CLIAgentEventSource::CodexOsc9Fallback,
                         v: 1,
                         agent: CLIAgent::Codex,
                         event: CLIAgentEventType::Stop,
@@ -5975,6 +6078,7 @@ fn cli_session_status_updates_active_child_conversation() {
                         plugin_version: None,
                         draft_text: None,
                         custom_command_prefix: None,
+                        received_rich_notification: false,
                     },
                     ctx,
                 );
@@ -5995,6 +6099,7 @@ fn cli_session_status_updates_active_child_conversation() {
                 sessions.update_from_event(
                     view.view_id,
                     &CLIAgentEvent {
+                        source: CLIAgentEventSource::RichPlugin,
                         v: 1,
                         agent: CLIAgent::Claude,
                         event: CLIAgentEventType::PermissionRequest,
@@ -6028,6 +6133,7 @@ fn cli_session_status_updates_active_child_conversation() {
                 sessions.update_from_event(
                     view.view_id,
                     &CLIAgentEvent {
+                        source: CLIAgentEventSource::RichPlugin,
                         v: 1,
                         agent: CLIAgent::Claude,
                         event: CLIAgentEventType::PermissionReplied,
@@ -6053,6 +6159,7 @@ fn cli_session_status_updates_active_child_conversation() {
                 sessions.update_from_event(
                     view.view_id,
                     &CLIAgentEvent {
+                        source: CLIAgentEventSource::RichPlugin,
                         v: 1,
                         agent: CLIAgent::Claude,
                         event: CLIAgentEventType::Stop,
@@ -6116,6 +6223,7 @@ fn cli_session_status_updates_single_child_conversation_without_agent_view() {
                         plugin_version: None,
                         draft_text: None,
                         custom_command_prefix: None,
+                        received_rich_notification: false,
                     },
                     ctx,
                 );
@@ -6136,6 +6244,7 @@ fn cli_session_status_updates_single_child_conversation_without_agent_view() {
                 sessions.update_from_event(
                     view.view_id,
                     &CLIAgentEvent {
+                        source: CLIAgentEventSource::RichPlugin,
                         v: 1,
                         agent: CLIAgent::Claude,
                         event: CLIAgentEventType::Stop,
@@ -6193,6 +6302,7 @@ fn manual_dismiss_disables_auto_toggle_for_session() {
                         plugin_version: Some("1.0.0".to_owned()),
                         draft_text: None,
                         custom_command_prefix: None,
+                        received_rich_notification: false,
                     },
                     ctx,
                 );
@@ -6219,6 +6329,7 @@ fn manual_dismiss_disables_auto_toggle_for_session() {
                 sessions.update_from_event(
                     view.view_id,
                     &CLIAgentEvent {
+                        source: CLIAgentEventSource::RichPlugin,
                         v: 1,
                         agent: CLIAgent::Claude,
                         event: CLIAgentEventType::PermissionRequest,
@@ -6237,6 +6348,7 @@ fn manual_dismiss_disables_auto_toggle_for_session() {
                 sessions.update_from_event(
                     view.view_id,
                     &CLIAgentEvent {
+                        source: CLIAgentEventSource::RichPlugin,
                         v: 1,
                         agent: CLIAgent::Claude,
                         event: CLIAgentEventType::PermissionReplied,
@@ -6606,5 +6718,136 @@ fn linear_deeplink_via_default_entrypoint_does_not_auto_submit_in_fullscreen() {
                 Some(ENTER_AGAIN_TO_SEND_MESSAGE_ID),
             );
         });
+    })
+}
+
+/// Regression test for https://github.com/warpdotdev/warp/issues/11212.
+///
+/// Closing the find bar must immediately clear find highlights on AI blocks.
+/// AI blocks are separate child views, so unless `close_find_bar` clears find
+/// state they keep stale highlights until the pane is refocused.
+#[test]
+fn close_find_bar_clears_ai_block_find_highlights() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        // Create an AI block whose user query contains a searchable term.
+        terminal.update(&mut app, |view, ctx| {
+            append_exchange_and_handle_event(
+                view,
+                AIAgentInput::UserQuery {
+                    query: "highlight the needle here".to_owned(),
+                    context: Default::default(),
+                    static_query_type: None,
+                    referenced_attachments: Default::default(),
+                    user_query_mode: UserQueryMode::Normal,
+                    running_command: None,
+                    intended_agent: None,
+                },
+                ctx,
+            );
+        });
+
+        let ai_block = terminal.read(&app, |view, _| {
+            view.rich_content_views
+                .iter()
+                .find_map(|rich_content| {
+                    rich_content
+                        .ai_block_metadata()
+                        .map(|metadata| metadata.ai_block_handle.clone())
+                })
+                .expect("an AI block should have been inserted")
+        });
+
+        // Open the find bar and run find for a term that matches the AI block.
+        // The blocklist find pipeline only visits rich-content views that have
+        // been laid out, which does not happen in this headless test, so also
+        // drive the AI block's `run_find` directly to put it in the
+        // highlighted state.
+        let find_options = || FindOptions {
+            query: Some("needle".to_owned().into()),
+            ..Default::default()
+        };
+        terminal.update(&mut app, |view, ctx| {
+            view.show_find_bar(ctx);
+            view.run_find(find_options(), ctx);
+        });
+        ai_block.update(&mut app, |block, ctx| {
+            crate::terminal::find::FindableRichContentView::run_find(block, &find_options(), ctx);
+        });
+
+        assert_eq!(
+            ai_block.read(&app, |block, _| block.find_match_count()),
+            1,
+            "running find should highlight the match inside the AI block"
+        );
+
+        // Dismissing the find bar must clear the AI block's find highlights.
+        terminal.update(&mut app, |view, ctx| {
+            view.close_find_bar(ctx);
+        });
+
+        assert_eq!(
+            ai_block.read(&app, |block, _| block.find_match_count()),
+            0,
+            "closing the find bar should immediately clear AI block find highlights"
+        );
+    })
+}
+
+/// Regression test for the async-find branch of #11212.
+///
+/// Closing the find bar must clear stale AI block highlights without dropping
+/// the saved query options on the async-find path. `open_find_bar` reads
+/// `active_find_options` to restore the previous query; if `close_find_bar`
+/// routes through `clear_matches → AsyncFindController::clear_results`, that
+/// helper resets `current_find_options` and reopening the find bar starts
+/// from a blank query instead of the previous one.
+#[test]
+fn close_find_bar_preserves_options_on_async_find_path() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _async_find = FeatureFlag::AsyncFind.override_enabled(true);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        let needle_options = || FindOptions {
+            query: Some("needle".to_owned().into()),
+            ..Default::default()
+        };
+
+        terminal.update(&mut app, |view, ctx| {
+            view.show_find_bar(ctx);
+            view.run_find(needle_options(), ctx);
+        });
+
+        // The async controller should have saved the active query.
+        assert_eq!(
+            terminal.read(&app, |view, ctx| view
+                .find_model
+                .as_ref(ctx)
+                .active_find_options()
+                .map(|o| o.query.clone())),
+            Some(needle_options().query),
+            "running find on the async path must save the active query"
+        );
+
+        // Closing the find bar must NOT drop the saved query — otherwise
+        // the next `open_find_bar` would start blank instead of restoring
+        // the previous search.
+        terminal.update(&mut app, |view, ctx| {
+            view.close_find_bar(ctx);
+        });
+
+        assert_eq!(
+            terminal.read(&app, |view, ctx| view
+                .find_model
+                .as_ref(ctx)
+                .active_find_options()
+                .map(|o| o.query.clone())),
+            Some(needle_options().query),
+            "closing the find bar must preserve the saved query on the async path"
+        );
     })
 }

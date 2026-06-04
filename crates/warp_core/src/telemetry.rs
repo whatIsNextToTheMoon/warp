@@ -7,7 +7,7 @@ use std::marker::PhantomData;
 pub use inventory::submit;
 use serde_json::Value;
 use strum::IntoEnumIterator;
-use warpui::{AppContext, Entity, SingletonEntity};
+use warpui_core::{AppContext, Entity, SingletonEntity};
 
 use crate::channel::{Channel, ChannelState};
 use crate::features::FeatureFlag;
@@ -205,3 +205,28 @@ impl Entity for TelemetryContextModel {
 }
 
 impl SingletonEntity for TelemetryContextModel {}
+
+#[cfg(any(test, feature = "test-util"))]
+pub mod testing {
+    use warpui_core::prelude::*;
+
+    pub struct MockTelemetryContextProvider;
+
+    impl MockTelemetryContextProvider {
+        pub fn register(ctx: &mut AppContext) {
+            ctx.add_singleton_model(|_| {
+                Box::new(MockTelemetryContextProvider) as super::TelemetryContextModel
+            });
+        }
+    }
+
+    impl super::TelemetryContextProvider for MockTelemetryContextProvider {
+        fn user_id(&self, _ctx: &AppContext) -> Option<String> {
+            None
+        }
+
+        fn anonymous_id(&self, _ctx: &AppContext) -> String {
+            "test_anonymous_id".to_string()
+        }
+    }
+}
