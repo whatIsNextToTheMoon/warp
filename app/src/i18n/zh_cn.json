@@ -2066,5 +2066,18 @@
   "youtube-bilibili-subtitle": "youtube-bilibili-subtitle",
   "zsh": "zsh",
   "→ accepts autosuggestions.": "→ 接受自动建议。",
-  "Copy tab title": "复制标签标题"
+  "Copy tab title": "复制标签标题",
+  "Reopen closed session": "重新打开已关闭会话",
+  "Make default": "设为默认",
+  " + Add new repo": " + 添加新仓库",
+  "+ Add new repo": "+ 添加新仓库",
+  "New tab group": "新建标签组",
+  "Select a git repository to enable worktree support": "选择一个 Git 仓库以启用 worktree 支持",
+  "You must enable worktree in order to select this": "必须先启用 worktree 才能选择此项",
+  "Set up a reusable starting point for your tabs. Pick a repo, optionally attach a worktree, and use it whenever you want to open a new tab with this setup.": "为你的标签页设置一个可复用的起点：选择仓库，并可选地附加一个 worktree。以后每次想用此配置打开新标签页时都可以直接使用。",
+  "Add new repo...": "添加新仓库...",
+  "Name can only contain letters, numbers, hyphens, and underscores": "名称只能包含字母、数字、连字符和下划线",
+  "Worktree branch name": "Worktree 分支名",
+  "You must select that you want to automatically create a worktree in order to select this": "必须先选择自动创建 worktree，才能选择此项",
+  "Access your tab configs here.": "在这里访问你的标签配置。"
 }
