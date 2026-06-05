@@ -183,6 +183,86 @@ pub fn shell_git_line_changes() -> ShellCommandGenerator {
     ShellCommandGenerator::new(command, Some(vec!["git".to_owned()]))
 }
 
+pub fn github_pull_request_url() -> ShellCommandGenerator {
+    // `gh pr view` exits non-zero both when there is no PR for the current
+    // branch and when the command actually fails. The wrapper treats "no PR"
+    // as an empty success while preserving auth/config/network failures.
+    const SH_COMMAND: &str = r#"git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
+git symbolic-ref --quiet --short HEAD >/dev/null 2>&1 || exit 0
+
+remote_url=$(git remote get-url origin 2>/dev/null) || exit 0
+case "$remote_url" in
+    git@github.com:*|https://github.com/*|http://github.com/*|ssh://git@github.com/*)
+        ;;
+    *)
+        exit 0
+        ;;
+esac
+
+output=$(gh pr view --json url --jq .url 2>&1)
+exit_code=$?
+
+if [ $exit_code -eq 0 ]; then
+    printf '%s\n' "$output"
+else
+    case "$output" in
+        *'no pull requests found for branch '*|*'no open pull requests found for branch '*)
+            exit 0
+            ;;
+    esac
+    printf '%s\n' "$output" >&2
+    exit $exit_code
+fi"#;
+    const FISH_COMMAND: &str = r#"git rev-parse --is-inside-work-tree >/dev/null 2>/dev/null; or exit 0
+git symbolic-ref --quiet --short HEAD >/dev/null 2>/dev/null; or exit 0
+
+set remote_url (git remote get-url origin 2>/dev/null); or exit 0
+string match -rq '^(git@github\.com:|https?://github\.com/|ssh://git@github\.com/)' -- $remote_url; or exit 0
+
+set output (gh pr view --json url --jq .url 2>&1)
+set exit_code $status
+
+if test $exit_code -eq 0
+    printf '%s\n' "$output"
+else
+    set joined_output (string join '\n' $output)
+    string match -rq 'no (open )?pull requests found for branch ' -- $joined_output; and exit 0
+    printf '%s\n' "$joined_output" >&2
+    exit $exit_code
+end"#;
+    const PWSH_COMMAND: &str = r#"git rev-parse --is-inside-work-tree 2>$null | Out-Null
+if ($LASTEXITCODE -ne 0) { exit 0 }
+
+$branch = git symbolic-ref --quiet --short HEAD 2>$null
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($branch)) { exit 0 }
+
+$remoteUrl = git remote get-url origin 2>$null
+if ($LASTEXITCODE -ne 0) { exit 0 }
+if ($remoteUrl -notmatch '^(git@github\.com:|https?://github\.com/|ssh://git@github\.com/)') { exit 0 }
+
+$output = gh pr view --json url --jq .url 2>&1 | Out-String
+$exitCode = $LASTEXITCODE
+$output = $output.TrimEnd()
+
+if ($exitCode -eq 0) {
+    if (-not [string]::IsNullOrWhiteSpace($output)) { $output }
+    exit 0
+}
+
+if ($output -match 'no (open )?pull requests found for branch ') { exit 0 }
+if (-not [string]::IsNullOrWhiteSpace($output)) { [Console]::Error.WriteLine($output) }
+exit $exitCode"#;
+
+    let command = ShellCommand::shell_specific([
+        (ShellType::PowerShell, PWSH_COMMAND.to_string()),
+        (ShellType::Bash, SH_COMMAND.to_string()),
+        (ShellType::Zsh, SH_COMMAND.to_string()),
+        (ShellType::Fish, FISH_COMMAND.to_string()),
+    ]);
+
+    ShellCommandGenerator::new(command, Some(vec!["gh".to_owned(), "git".to_owned()]))
+}
+
 pub fn kubernetes_current_context() -> ShellCommandGenerator {
     ShellCommandGenerator::new(
         ShellCommand::portable("kubectl config current-context"),

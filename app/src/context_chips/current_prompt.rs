@@ -5,7 +5,6 @@ use crate::terminal::event::{BlockType, UserBlockCompleted};
 use crate::terminal::model::session::{ExecuteCommandOptions, Session, SessionsEvent};
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 use crate::{
-    debounce::debounce,
     editor::EditorView,
     menu::{MenuItem, MenuItemFields},
     terminal::{
@@ -20,15 +19,16 @@ use crate::{
         view::{ContextMenuAction, PromptPart, PromptPosition, TerminalAction},
     },
 };
-use futures::{FutureExt as _, pin_mut};
+use ::settings::Setting as _;
+use futures::{pin_mut, FutureExt as _};
 use itertools::Itertools;
-use warp_completer::completer::CommandExitStatus;
+use warp_completer::completer::{CommandExitStatus, CommandOutput};
 use warp_core::r#async::debounce;
 use warp_core::user_preferences::GetUserPreferences;
 
 use super::ChipResult;
 use super::{
-    ChipValue, ContextChipKind, chips_to_string,
+    chips_to_string,
     context_chip::{
         ChipAvailability, ChipDisabledReason, ChipFingerprintInput, ChipRuntimeCapabilities,
         ContextChip, Environment, ExternalCommandsAvailability, GeneratorContext, PromptGenerator,
@@ -36,6 +36,7 @@ use super::{
     },
     logging::{ChipCommandLogEntry, PromptChipExecutionPhase, PromptChipLogger},
     prompt::Prompt,
+    ChipValue, ContextChipKind,
 };
 #[cfg(feature = "local_fs")]
 use crate::code_review::git_status_update::{GitRepoStatusEvent, GitRepoStatusModel};
@@ -48,8 +49,8 @@ use std::time::Duration;
 #[cfg(feature = "local_fs")]
 use warpui::WeakModelHandle;
 use warpui::{
-    AppContext, ViewHandle,
     r#async::{SpawnedFutureHandle, Timer},
+    AppContext, ViewHandle,
 };
 use warpui::{Entity, ModelAsRef, ModelContext, ModelHandle, SingletonEntity};
 
@@ -72,6 +73,13 @@ enum ChipUpdateStatus {
     Disabled,
     TimedOut,
     Error,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GithubPrPromptChipCommandOutcome {
+    Validated,
+    DeterministicAuthFailure,
+    RetryableFailure,
 }
 
 /// ChipState stores the state and point-in-time information related to a specific chip.
@@ -679,6 +687,19 @@ impl CurrentPrompt {
             }
             self.update_chip_value(chip_kind, None);
             self.update_on_click_value(chip_kind, None);
+            // If the GithubPullRequest chip is disabled because `gh` is
+            // missing, transition validation state to Suppressed so future
+            // default resolution excludes it.
+            if matches!(chip_kind, ContextChipKind::GithubPullRequest) {
+                if let ChipAvailability::Disabled(ChipDisabledReason::RequiresExecutable {
+                    ref command,
+                }) = availability
+                {
+                    if command == "gh" {
+                        Self::maybe_suppress_github_pr_default(ctx);
+                    }
+                }
+            }
             self.set_chip_update_status(chip_kind, ChipUpdateStatus::Disabled);
             return;
         }
@@ -741,7 +762,7 @@ impl CurrentPrompt {
                         .await;
                         (value, timed_out, chip_kind, exec_ctx, chip_title)
                     },
-                    move |me, (value, timed_out, chip_kind, exec_ctx, chip_title), _| {
+                    move |me, (value, timed_out, chip_kind, exec_ctx, chip_title), ctx| {
                         logger.log_shell_command(&ChipCommandLogEntry {
                             chip_kind: &chip_kind,
                             chip_title: &chip_title,
@@ -764,9 +785,21 @@ impl CurrentPrompt {
                         }
 
                         if timed_out {
-                            if suppress_on_failure {
+                            if suppress_on_failure
+                                && Self::should_cache_failure_fingerprint(
+                                    &chip_kind,
+                                    value.as_ref(),
+                                    timed_out,
+                                )
+                            {
                                 if let Some(state) = me.states.get_mut(&chip_kind) {
                                     state.last_failure_fingerprint = current_fingerprint;
+                                }
+                            } else if suppress_on_failure {
+                                if let Some(state) = me.states.get_mut(&chip_kind) {
+                                    if state.last_failure_fingerprint == current_fingerprint {
+                                        state.last_failure_fingerprint = None;
+                                    }
                                 }
                             }
                             me.update_chip_value(&chip_kind, None);
@@ -791,7 +824,29 @@ impl CurrentPrompt {
                             _ => (None, ChipUpdateStatus::Error, true),
                         };
 
-                        if suppress_on_failure && failed {
+                        if matches!(chip_kind, ContextChipKind::GithubPullRequest) {
+                            match Self::github_pr_prompt_chip_command_outcome(
+                                value.as_ref(),
+                                timed_out,
+                            ) {
+                                GithubPrPromptChipCommandOutcome::Validated => {
+                                    Self::maybe_validate_github_pr_default(ctx);
+                                }
+                                GithubPrPromptChipCommandOutcome::DeterministicAuthFailure => {
+                                    Self::maybe_suppress_github_pr_default(ctx);
+                                }
+                                GithubPrPromptChipCommandOutcome::RetryableFailure => {}
+                            }
+                        }
+
+                        if suppress_on_failure
+                            && failed
+                            && Self::should_cache_failure_fingerprint(
+                                &chip_kind,
+                                value.as_ref(),
+                                timed_out,
+                            )
+                        {
                             if let Some(state) = me.states.get_mut(&chip_kind) {
                                 state.last_failure_fingerprint = current_fingerprint;
                             }
@@ -1561,11 +1616,9 @@ impl CurrentPrompt {
         let current = *SessionSettings::as_ref(ctx).github_pr_chip_default_validation;
         if current != GithubPrPromptChipDefaultValidation::Suppressed {
             SessionSettings::handle(ctx).update(ctx, |settings, ctx| {
-                report_if_error!(
-                    settings
-                        .github_pr_chip_default_validation
-                        .set_value(GithubPrPromptChipDefaultValidation::Suppressed, ctx)
-                );
+                report_if_error!(settings
+                    .github_pr_chip_default_validation
+                    .set_value(GithubPrPromptChipDefaultValidation::Suppressed, ctx));
             });
         }
     }
@@ -1591,11 +1644,9 @@ impl CurrentPrompt {
             .unwrap_or(false);
         if gh_on_path {
             SessionSettings::handle(ctx).update(ctx, |settings, ctx| {
-                report_if_error!(
-                    settings
-                        .github_pr_chip_default_validation
-                        .set_value(GithubPrPromptChipDefaultValidation::Unvalidated, ctx)
-                );
+                report_if_error!(settings
+                    .github_pr_chip_default_validation
+                    .set_value(GithubPrPromptChipDefaultValidation::Unvalidated, ctx));
             });
         }
     }
@@ -1604,11 +1655,9 @@ impl CurrentPrompt {
         let current = *SessionSettings::as_ref(ctx).github_pr_chip_default_validation;
         if current == GithubPrPromptChipDefaultValidation::Unvalidated {
             SessionSettings::handle(ctx).update(ctx, |settings, ctx| {
-                report_if_error!(
-                    settings
-                        .github_pr_chip_default_validation
-                        .set_value(GithubPrPromptChipDefaultValidation::Validated, ctx)
-                );
+                report_if_error!(settings
+                    .github_pr_chip_default_validation
+                    .set_value(GithubPrPromptChipDefaultValidation::Validated, ctx));
             });
         }
     }

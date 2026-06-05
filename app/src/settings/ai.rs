@@ -6,6 +6,10 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+pub use cloud_object_models::{
+    AgentModeCommandExecutionPredicate, DEFAULT_COMMAND_EXECUTION_ALLOWLIST,
+    DEFAULT_COMMAND_EXECUTION_DENYLIST,
+};
 use indexmap::IndexMap;
 
 use crate::ai::{

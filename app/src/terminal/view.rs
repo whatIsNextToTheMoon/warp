@@ -76,8 +76,8 @@ fn debug_ime_text_preview(text: &str) -> String {
 
 use crate::ai::blocklist::agent_view::fork_from_last_known_good_state_exchange_id;
 use crate::ai::blocklist::agent_view::{
-    agent_view_bg_fill, get_agent_view_entry_block_position_id, AgentViewController,
-    AgentViewControllerEvent, AgentViewDisplayMode, AgentViewEntryBlockParams,
+    agent_view_bg_fill, get_agent_view_entry_block_position_id, is_in_cloud_context,
+    AgentViewController, AgentViewControllerEvent, AgentViewDisplayMode, AgentViewEntryBlockParams,
     AgentViewEntryOrigin, AgentViewHeaderDisabledTheme, AgentViewHeaderTheme,
     AgentViewZeroStateBlock, AgentViewZeroStateEvent, EphemeralMessageModel,
     ExitConfirmationTrigger, InlineAgentViewHeader, OrchestrationPillBar,
@@ -117,7 +117,11 @@ use crate::ai::blocklist::block::status_bar::BlocklistAIStatusBarEvent;
 use crate::ai::blocklist::usage::conversation_usage_view::{
     ConversationUsageInfo, ConversationUsageView, TimingInfo,
 };
-use crate::ai::blocklist::{block_context_from_terminal_model, SlashCommandRequest};
+use crate::ai::blocklist::{
+    block_context_from_terminal_model, AutofireAction, QueuedQuery, QueuedQueryId,
+    QueuedQueryModel, QueuedQueryOrigin, SlashCommandRequest,
+};
+use crate::ai::conversation_details_panel::ConversationDetailsPanelEvent;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentModel, AIDocumentVersion};
 use crate::ai::loading::shimmering_warp_loading_text;
 #[cfg(feature = "local_fs")]
@@ -157,6 +161,8 @@ use crate::code_review::git_status_update::{
     GitRepoStatusModel, GitStatusMetadata, GitStatusUpdateModel,
 };
 use crate::code_review::telemetry_event::CodeReviewPaneEntrypoint;
+#[cfg(feature = "local_fs")]
+use crate::context_chips::prompt::PromptSelection;
 use crate::projects::ProjectManagementModel;
 use crate::remote_server::manager::{
     RemoteServerInitPhase, RemoteServerManager, RemoteServerManagerEvent,
@@ -164,12 +170,10 @@ use crate::remote_server::manager::{
 use crate::settings::ai::FocusedTerminalInfo;
 use crate::settings_view::mcp_servers_page::MCPServersSettingsPage;
 use crate::terminal::cli_agent_sessions::event::{
-    parse_event, CLIAgentEvent, CLIAgentEventPayload, CLIAgentEventType,
+    parse_event, CLIAgentEvent, CLIAgentEventPayload, CLIAgentEventSource, CLIAgentEventType,
     CLI_AGENT_NOTIFICATION_SENTINEL,
 };
-use crate::terminal::cli_agent_sessions::listener::{
-    agent_supports_rich_status, is_agent_supported, CLIAgentSessionListener,
-};
+use crate::terminal::cli_agent_sessions::listener::{is_agent_supported, CLIAgentSessionListener};
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::cli_agent_sessions::plugin_manager::{plugin_manager_for, PluginModalKind};
 use crate::terminal::cli_agent_sessions::{
@@ -215,7 +219,9 @@ pub use inline_banner::{NotificationsDiscoveryBannerAction, NotificationsErrorBa
 use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::repositories::RepoDetectionSource;
 use session_sharing_protocol::common::LongRunningCommandAgentInteractionState;
-use session_sharing_protocol::sharer::{RoleUpdateReason, SessionEndedReason};
+use session_sharing_protocol::sharer::{
+    RoleUpdateReason, SessionEndedReason, SessionRetentionReason,
+};
 use ssh_file_upload::{FileUpload, FileUploadEvent};
 use uuid::Uuid;
 use warp_core::channel::ChannelState;
