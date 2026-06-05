@@ -15,13 +15,15 @@ use crate::ui_components::icons::Icon;
 
 const COLOR_DOT_SIZE: f32 = 16.;
 
-pub(crate) const TAB_COLOR_OPTIONS: [AnsiColorIdentifier; 6] = [
+pub(crate) const TAB_COLOR_OPTIONS: [AnsiColorIdentifier; 8] = [
+    AnsiColorIdentifier::Black,
     AnsiColorIdentifier::Red,
     AnsiColorIdentifier::Green,
     AnsiColorIdentifier::Yellow,
     AnsiColorIdentifier::Blue,
     AnsiColorIdentifier::Magenta,
     AnsiColorIdentifier::Cyan,
+    AnsiColorIdentifier::White,
 ];
 
 /// Renders a hoverable color dot with selection ring, tooltip, and pointer cursor.

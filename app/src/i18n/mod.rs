@@ -130,6 +130,9 @@ pub fn init() {
                 return Some(Cow::Owned(format!("输入时自动打开补全（或按 {key}）。")));
             }
         }
+        if let Some(command) = trimmed.strip_prefix("Slash command: ") {
+            return Some(Cow::Owned(format!("斜杠命令：{command}")));
+        }
 
         if collect_missing {
             record_missing_translation(text, trimmed);

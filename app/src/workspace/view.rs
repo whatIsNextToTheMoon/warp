@@ -9160,12 +9160,7 @@ impl Workspace {
                 .into_item(),
         );
 
-        items.extend([
-            MenuItemFields::new("Slack")
-                .with_on_select_action(WorkspaceAction::JoinSlack)
-                .into_item(),
-            MenuItem::Separator,
-        ]);
+        items.push(MenuItem::Separator);
 
         if self.auth_state.is_anonymous_or_logged_out() {
             items.push(
@@ -9196,12 +9191,6 @@ impl Workspace {
                     .into_item(),
             );
         }
-
-        items.push(
-            MenuItemFields::new("Invite a friend")
-                .with_on_select_action(WorkspaceAction::ShowReferralSettingsPage)
-                .into_item(),
-        );
 
         if !self.auth_state.is_anonymous_or_logged_out() {
             items.push(

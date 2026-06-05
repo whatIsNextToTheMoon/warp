@@ -16,7 +16,7 @@ use warpui::elements::{
     Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, Padding,
     ParentAnchor, ParentElement, ParentOffsetBounds, PositionedElementAnchor,
     PositionedElementOffsetBounds, Radius, Rect, SavePosition, Shrinkable, SizeConstraintCondition,
-    SizeConstraintSwitch, Stack, Text,
+    SizeConstraintSwitch, Stack, Text, Wrap,
 };
 use warpui::fonts::Weight;
 use warpui::text_layout::ClipConfig;
@@ -603,8 +603,10 @@ impl TabData {
                     let theme = appearance.theme();
                     let ring_color: ColorU = theme.accent().into();
 
-                    let mut row = Flex::row()
-                        .with_main_axis_alignment(MainAxisAlignment::SpaceEvenly)
+                    let mut row = Wrap::row()
+                        .with_spacing(8.)
+                        .with_run_spacing(6.)
+                        .with_main_axis_alignment(MainAxisAlignment::Center)
                         .with_cross_axis_alignment(CrossAxisAlignment::Center)
                         .with_main_axis_size(MainAxisSize::Max);
 

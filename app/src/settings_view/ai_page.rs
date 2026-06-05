@@ -6245,7 +6245,9 @@ impl VoiceWidget {
 
         let voice_input_description_text_fragments = vec![
             FormattedTextFragment::plain_text(
-                "Voice input allows you to control Warp by speaking directly to your terminal (powered by ",
+                crate::i18n::ui_str(
+                    "Voice input allows you to control Warp by speaking directly to your terminal (powered by ",
+                ),
             ),
             FormattedTextFragment::hyperlink("Wispr Flow", WISPR_FLOW_URL),
             FormattedTextFragment::plain_text(")."),
@@ -7766,10 +7768,12 @@ impl SettingsWidget for ApiKeysWidget {
             {
                 vec![
                     FormattedTextFragment::hyperlink_action(
-                        "Create an account",
+                        crate::i18n::ui_str("Create an account"),
                         AISettingsPageAction::SignupAnonymousUser,
                     ),
-                    FormattedTextFragment::plain_text(" to use your own API keys."),
+                    FormattedTextFragment::plain_text(crate::i18n::ui_str(
+                        " to use your own API keys.",
+                    )),
                 ]
             } else {
                 let user_id = auth_state.user_id().unwrap_or_default();

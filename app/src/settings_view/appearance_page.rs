@@ -4951,7 +4951,11 @@ impl SettingsWidget for DirectoryTabColorsWidget {
             )
             .finish();
 
-            let mut dots_row = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
+            let mut dots_row = Wrap::row()
+                .with_spacing(8.)
+                .with_run_spacing(6.)
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_main_axis_size(MainAxisSize::Min);
 
             // None = default (no-color) dot, Some = ANSI color dot
             let color_options =

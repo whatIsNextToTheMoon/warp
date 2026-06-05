@@ -779,9 +779,10 @@ impl SettingsWidget for EarnRewardsWidget {
     }
 
     fn should_render(&self, app: &AppContext) -> bool {
-        !AuthStateProvider::as_ref(app)
-            .get()
-            .is_anonymous_or_logged_out()
+        // Hide referral/rewards marketing from the OSS settings UI. The widget is kept in place
+        // so upstream merges remain small and reversible, but it should not be shown.
+        let _ = app;
+        false
     }
 
     fn render(
