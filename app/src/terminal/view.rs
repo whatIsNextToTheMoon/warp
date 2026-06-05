@@ -285,7 +285,7 @@ use crate::drive::sharing::ShareableObject;
 use crate::drive::CloudObjectTypeAndId;
 use crate::env_vars::{
     env_var_collection_block::{EnvVarCollectionBlock, EnvVarCollectionBlockEvent},
-    CloudEnvVarCollection, EnvVar,
+    CloudEnvVarCollection, EnvVar, EnvVarExt,
 };
 use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::persistence::{self, FinishedCommandMetadata};
