@@ -72,7 +72,7 @@ impl BackgroundFileWatcher {
                         self.notifier
                             .watch_filtered(path, recursive_mode, filter)
                             .inspect_err(|err| {
-                                log::warn!("Failed to watch path: {err:?}");
+                                log::debug!("Failed to watch path: {err:?}");
                             })
                             .map_err(anyhow::Error::new),
                     );

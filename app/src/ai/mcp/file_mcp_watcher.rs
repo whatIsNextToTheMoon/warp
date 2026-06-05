@@ -258,7 +258,7 @@ impl FileMCPWatcher {
 
         ctx.spawn(start.registration_future, move |me, res, ctx| {
             if let Err(err) = res {
-                log::warn!(
+                log::debug!(
                     "Failed to start watching {repo_path} for file-based MCP servers: {err}",
                     repo_path = repo_path.display(),
                 );
@@ -295,7 +295,7 @@ impl FileMCPWatcher {
         {
             Ok(handle) => handle,
             Err(err) => {
-                log::warn!(
+                log::debug!(
                     "Failed to register {} for file-based MCP watching: {err}",
                     subdir_path.display(),
                 );
@@ -318,7 +318,7 @@ impl FileMCPWatcher {
         let subdir_path_owned = subdir_path.to_path_buf();
         ctx.spawn(start.registration_future, move |me, res, ctx| {
             if let Err(err) = res {
-                log::warn!(
+                log::debug!(
                     "Failed to start watching {} for file-based MCP servers: {err}",
                     subdir_path_owned.display(),
                 );

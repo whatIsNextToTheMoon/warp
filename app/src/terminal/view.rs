@@ -23341,7 +23341,9 @@ impl TerminalView {
 
         let session_id = self.active_block_session_id()?;
         let Some(session) = self.sessions.as_ref(ctx).get(session_id) else {
-            log::warn!("Expected to have session for session ID {session_id:?}, but doesn't exist");
+            log::debug!(
+                "Expected to have session for session ID {session_id:?}, but doesn't exist"
+            );
             return None;
         };
         if !session.is_local() {
@@ -27638,6 +27640,17 @@ impl View for TerminalView {
         let is_alt_screen_active = { model.is_alt_screen_active() };
         let should_render_blocklist_for_empty_codex_alt_screen =
             self.should_keep_blocklist_for_codex_alt_screen(&model, app, "render");
+        if should_debug_codex_alt_screen() && model.is_alt_screen_active() {
+            log::warn!(
+                "codex alt-screen render state: alt_active={} keep_blocklist={} input_visible={} use_agent_footer={} cli_footer_has_agent={} display_mode={:?}",
+                is_alt_screen_active,
+                should_render_blocklist_for_empty_codex_alt_screen,
+                self.is_input_box_visible(&model, app),
+                self.should_render_use_agent_footer(&model, app),
+                self.use_agent_footer.as_ref(app).has_cli_agent(app),
+                self.codex_alt_screen_display_mode,
+            );
+        }
         // Compute callout positioning early while we have the model lock.
         // For the final Agent Modality callout, always position relative to the input box,
         // even when the zero state is visible.
@@ -28415,8 +28428,13 @@ impl View for TerminalView {
                     });
                 } else if should_debug_ime_position() {
                     log::warn!(
-                        "terminal IME active cursor source=input-editor missing cursor_id={}",
-                        cursor_id
+                        "terminal IME active cursor source=input-editor missing cursor_id={} input_focused={} alt_screen_active={} cli_input_open={} ai_input_enabled={} view_id={:?}",
+                        cursor_id,
+                        self.input_editor_focused(ctx),
+                        self.model.lock().is_alt_screen_active(),
+                        CLIAgentSessionsModel::as_ref(ctx).is_input_open(self.view_id),
+                        self.ai_input_model.as_ref(ctx).is_ai_input_enabled(),
+                        self.view_id,
                     );
                 }
             } else if should_debug_ime_position() {
@@ -28439,8 +28457,13 @@ impl View for TerminalView {
                 );
             } else {
                 log::warn!(
-                    "terminal IME active cursor source=terminal-grid missing cursor_id={}",
-                    cursor_id
+                    "terminal IME active cursor source=terminal-grid missing cursor_id={} input_focused={} alt_screen_active={} cli_input_open={} ai_input_enabled={} view_id={:?}",
+                    cursor_id,
+                    self.input_editor_focused(ctx),
+                    self.model.lock().is_alt_screen_active(),
+                    CLIAgentSessionsModel::as_ref(ctx).is_input_open(self.view_id),
+                    self.ai_input_model.as_ref(ctx).is_ai_input_enabled(),
+                    self.view_id,
                 );
             }
         }

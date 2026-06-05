@@ -1526,7 +1526,12 @@ impl AppContext {
         self.typed_actions.insert(action_type, handlers);
 
         if !handled {
-            log::warn!("Action {action:?} was dispatched, but no view handled it");
+            let action_debug = format!("{action:?}");
+            if action_debug.contains("HandleFocusChange") {
+                log::debug!("Action {action_debug} was dispatched, but no view handled it");
+            } else {
+                log::warn!("Action {action_debug} was dispatched, but no view handled it");
+            }
         }
 
         self.flush_effects();

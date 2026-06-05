@@ -1,8 +1,10 @@
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use ::settings::ToggleableSetting;
 use warp_core::execution_mode::AppExecutionMode;
 use warp_graphql::mutations::create_anonymous_user::AnonymousUserType;
+use warpui::windowing::state::ApplicationStage;
 use warpui::windowing::WindowManager;
 use warpui::{AppContext, SingletonEntity, TypedActionView};
 
@@ -19,6 +21,8 @@ use crate::undo_close::UndoCloseStack;
 use crate::workspace::cross_window_tab_drag::CrossWindowTabDrag;
 use crate::workspace::{Workspace, WorkspaceAction};
 use crate::{auth, GlobalResourceHandlesProvider};
+
+static ACTIVE_BLOCKS_PERSISTED_DURING_TERMINATION: AtomicBool = AtomicBool::new(false);
 
 /// Specifies where a forked conversation should be opened.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -134,17 +138,44 @@ fn persist_active_blocks_for_restore(_: &(), ctx: &mut AppContext) {
         return;
     }
 
+    let is_terminating = ctx.windows().stage() == ApplicationStage::Terminating;
+    if is_terminating && ACTIVE_BLOCKS_PERSISTED_DURING_TERMINATION.swap(true, Ordering::Relaxed) {
+        log::info!(
+            "Skipping duplicate active terminal block snapshot request during app termination"
+        );
+        return;
+    }
+
+    let mut window_count = 0usize;
+    let mut workspace_count = 0usize;
+    let mut candidate_panes = 0usize;
+    let mut persisted_blocks = 0usize;
+    let mut skipped_empty_blocks = 0usize;
+    let mut missing_terminal_views = 0usize;
+
     let window_ids = ctx.window_ids().collect::<Vec<_>>();
     for window_id in window_ids {
+        window_count += 1;
         let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id) else {
             continue;
         };
         for workspace in workspaces {
-            workspace.update(ctx, |workspace, ctx| {
-                workspace.persist_active_terminal_blocks_for_restore(ctx);
+            workspace_count += 1;
+            let summary = workspace.update(ctx, |workspace, ctx| {
+                workspace.persist_active_terminal_blocks_for_restore(ctx)
             });
+            candidate_panes += summary.candidate_panes;
+            persisted_blocks += summary.persisted_blocks;
+            skipped_empty_blocks += summary.skipped_empty_blocks;
+            missing_terminal_views += summary.missing_terminal_views;
         }
     }
+
+    log::info!(
+        "Queued {persisted_blocks} active terminal block snapshot(s) for session restore \
+         ({window_count} window(s), {workspace_count} workspace(s), {candidate_panes} candidate pane(s), \
+         {skipped_empty_blocks} empty/skipped, {missing_terminal_views} missing view(s), terminating={is_terminating})"
+    );
 }
 
 fn save_app(_: &(), ctx: &mut AppContext) {

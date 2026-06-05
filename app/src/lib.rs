@@ -1497,6 +1497,13 @@ pub(crate) fn initialize_app(
         ChannelState::debug_str(),
         ChannelState::app_version()
     );
+    log::info!(
+        "debug flags: ime_flow={} ime_position={} text_layout={} codex_alt_screen={}",
+        std::env::var_os("WARP_DEBUG_IME_FLOW").is_some(),
+        std::env::var_os("WARP_DEBUG_IME_POSITION").is_some(),
+        std::env::var_os("WARP_DEBUG_TEXT_LAYOUT").is_some(),
+        std::env::var_os("WARP_DEBUG_CODEX_ALT_SCREEN").is_some(),
+    );
 
     // Teach our app that sometimes option means meta.
     ctx.set_event_munger(move |event, ctx| {

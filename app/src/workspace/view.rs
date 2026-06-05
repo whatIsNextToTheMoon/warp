@@ -273,10 +273,10 @@ use crate::pane_group::pane::ActionOrigin;
 #[cfg(feature = "local_fs")]
 use crate::pane_group::FilePane;
 use crate::pane_group::{
-    self, AIFactPane, AnyPaneContent, ChildAgentOrigin, CodeDiffPane, CodePane, CodeReviewPanelArg,
-    Direction as PaneGroupDirection, Direction, EnvironmentManagementPane,
-    ExecutionProfileEditorPane, NetworkLogPane, NewTerminalOptions, PaneGroup, PaneId, PanesLayout,
-    TabBarHoverIndex, TerminalPaneId,
+    self, AIFactPane, ActiveTerminalBlockPersistSummary, AnyPaneContent, ChildAgentOrigin,
+    CodeDiffPane, CodePane, CodeReviewPanelArg, Direction as PaneGroupDirection, Direction,
+    EnvironmentManagementPane, ExecutionProfileEditorPane, NetworkLogPane, NewTerminalOptions,
+    PaneGroup, PaneId, PanesLayout, TabBarHoverIndex, TerminalPaneId,
 };
 use crate::persistence::ModelEvent;
 use crate::projects::ProjectManagementModel;
@@ -1133,17 +1133,20 @@ impl Workspace {
     pub(crate) fn persist_active_terminal_blocks_for_restore(
         &mut self,
         ctx: &mut ViewContext<Self>,
-    ) {
+    ) -> ActiveTerminalBlockPersistSummary {
         let pane_groups = self
             .tabs
             .iter()
             .map(|tab| tab.pane_group.clone())
             .collect_vec();
+        let mut summary = ActiveTerminalBlockPersistSummary::default();
         for pane_group in pane_groups {
-            pane_group.update(ctx, |pane_group, ctx| {
-                pane_group.persist_active_terminal_blocks_for_restore(ctx);
+            let pane_summary = pane_group.update(ctx, |pane_group, ctx| {
+                pane_group.persist_active_terminal_blocks_for_restore(ctx)
             });
+            summary += pane_summary;
         }
+        summary
     }
 
     fn tab_rename_editor_font_size(ctx: &AppContext, appearance: &Appearance) -> f32 {

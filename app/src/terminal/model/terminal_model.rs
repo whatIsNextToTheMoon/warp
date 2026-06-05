@@ -2102,7 +2102,7 @@ impl TerminalModel {
     /// times, like `info`  (see WAR-5897).
     fn exit_alt_screen(&mut self, restore_cursor: bool) {
         if !self.alt_screen_active {
-            log::info!("Tried to exit the alternate screen, but it was already inactive");
+            log::debug!("Tried to exit the alternate screen, but it was already inactive");
             return;
         }
 

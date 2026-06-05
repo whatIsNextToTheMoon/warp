@@ -1136,6 +1136,23 @@ enum AIDocumentPaneVisibilityAction {
     Toggle,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct ActiveTerminalBlockPersistSummary {
+    pub(crate) candidate_panes: usize,
+    pub(crate) persisted_blocks: usize,
+    pub(crate) skipped_empty_blocks: usize,
+    pub(crate) missing_terminal_views: usize,
+}
+
+impl std::ops::AddAssign for ActiveTerminalBlockPersistSummary {
+    fn add_assign(&mut self, rhs: Self) {
+        self.candidate_panes += rhs.candidate_panes;
+        self.persisted_blocks += rhs.persisted_blocks;
+        self.skipped_empty_blocks += rhs.skipped_empty_blocks;
+        self.missing_terminal_views += rhs.missing_terminal_views;
+    }
+}
+
 impl PaneGroup {
     /// Executes the provided callback for each TerminalView contained within
     /// this pane group.
@@ -1178,39 +1195,41 @@ impl PaneGroup {
     pub(crate) fn persist_active_terminal_blocks_for_restore(
         &mut self,
         ctx: &mut ViewContext<Self>,
-    ) {
+    ) -> ActiveTerminalBlockPersistSummary {
         if !AppExecutionMode::as_ref(ctx).can_save_session()
             || !*GeneralSettings::as_ref(ctx).restore_session
         {
-            return;
+            return ActiveTerminalBlockPersistSummary::default();
         }
 
-        let Some(sender) = self.model_event_sender.clone() else {
-            return;
+        let pane_ids = self.terminal_pane_ids().collect_vec();
+        let mut summary = ActiveTerminalBlockPersistSummary {
+            candidate_panes: pane_ids.len(),
+            ..Default::default()
         };
 
-        let pane_ids = self.terminal_pane_ids().collect_vec();
-        let candidate_panes = pane_ids.len();
-        let mut persisted_blocks = 0usize;
-        let mut skipped_empty_blocks = 0usize;
-        let mut missing_terminal_views = 0usize;
+        let Some(sender) = self.model_event_sender.clone() else {
+            summary.skipped_empty_blocks += pane_ids.len();
+            return summary;
+        };
 
         for pane_id in pane_ids {
             let Some(session_uuid) = self
                 .terminal_session_by_id(pane_id)
                 .map(|pane| pane.session_uuid())
             else {
+                summary.skipped_empty_blocks += 1;
                 continue;
             };
             let Some(terminal_view) = self.terminal_view_from_pane_id(pane_id, ctx) else {
-                missing_terminal_views += 1;
+                summary.missing_terminal_views += 1;
                 continue;
             };
 
             let Some((block, is_local)) =
                 terminal_view.read(ctx, |view, app| view.active_block_snapshot_for_restore(app))
             else {
-                skipped_empty_blocks += 1;
+                summary.skipped_empty_blocks += 1;
                 continue;
             };
 
@@ -1226,7 +1245,7 @@ impl PaneGroup {
             // proceeds and the writer drains its channel.
             match sender.send(event) {
                 Ok(()) => {
-                    persisted_blocks += 1;
+                    summary.persisted_blocks += 1;
                 }
                 Err(err) => {
                     log::error!(
@@ -1236,11 +1255,7 @@ impl PaneGroup {
             }
         }
 
-        log::info!(
-            "Queued {persisted_blocks} active terminal block snapshot(s) for session restore \
-             ({candidate_panes} candidate pane(s), {skipped_empty_blocks} empty/skipped, \
-             {missing_terminal_views} missing view(s))"
-        );
+        summary
     }
 
     /// Returns true if this pane group contains any terminal panes.

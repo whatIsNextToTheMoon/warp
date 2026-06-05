@@ -139,22 +139,34 @@ impl AutoupdateState {
         if self.polling_started {
             return;
         }
-        if FeatureFlag::Autoupdate.is_enabled() && AppExecutionMode::as_ref(ctx).can_autoupdate() {
-            log::info!("Starting autoupdate polling loop");
-            self.polling_started = true;
-            // Initiate the polling loop.
-            self.poll_for_update(ctx);
-            // Queue a possible update check when the app gets activated, i.e. focused.
-            let state_handle = WindowManager::handle(ctx);
-            ctx.subscribe_to_model(&state_handle, |me, event, ctx| {
-                let windowing::StateEvent::ValueChanged { current, previous } = event;
-                if previous.stage == ApplicationStage::Inactive
-                    && current.stage == ApplicationStage::Active
-                {
-                    me.enqueue_request(RequestType::DailyCheck, ctx);
-                }
-            });
+        if !FeatureFlag::Autoupdate.is_enabled() || !AppExecutionMode::as_ref(ctx).can_autoupdate()
+        {
+            return;
         }
+
+        let channel = ChannelState::channel();
+        if matches!(
+            channel,
+            Channel::Oss | Channel::Local | Channel::Integration
+        ) {
+            log::info!("Skipping autoupdate polling for channel {channel}");
+            return;
+        }
+
+        log::info!("Starting autoupdate polling loop");
+        self.polling_started = true;
+        // Initiate the polling loop.
+        self.poll_for_update(ctx);
+        // Queue a possible update check when the app gets activated, i.e. focused.
+        let state_handle = WindowManager::handle(ctx);
+        ctx.subscribe_to_model(&state_handle, |me, event, ctx| {
+            let windowing::StateEvent::ValueChanged { current, previous } = event;
+            if previous.stage == ApplicationStage::Inactive
+                && current.stage == ApplicationStage::Active
+            {
+                me.enqueue_request(RequestType::DailyCheck, ctx);
+            }
+        });
     }
 
     /// Check if any requests are pending. If there are and we're ready to submit a new request,
