@@ -2764,20 +2764,20 @@ impl BlockListElement {
                 );
             }
 
-            let active_output_ime_popup_origin =
-                block.is_active_and_long_running()
-                    .then(|| {
-                        block.output_grid_ime_popup_cursor_origin(
-                            *grid_origin,
-                            block_grid_params.grid_render_params.cell_size,
-                            block_grid_params
-                                .grid_render_params
-                                .size_info
-                                .padding_x_px()
-                                .as_f32(),
-                        )
-                    })
-                    .flatten();
+            let active_output_ime_popup_origin = block
+                .is_active_and_long_running()
+                .then(|| {
+                    block.output_grid_ime_popup_cursor_origin(
+                        *grid_origin,
+                        block_grid_params.grid_render_params.cell_size,
+                        block_grid_params
+                            .grid_render_params
+                            .size_info
+                            .padding_x_px()
+                            .as_f32(),
+                    )
+                })
+                .flatten();
             if let Some(origin) = active_output_ime_popup_origin.or(active_command_ime_popup_origin)
             {
                 ctx.position_cache.cache_position_indefinitely(
@@ -3219,6 +3219,7 @@ impl Element for BlockListElement {
         let mut block_indices_with_label_elements = vec![];
         let mut visible_block_indices = vec![];
         let mut updated_rich_content_heights = HashMap::new();
+        let mut missing_rich_content_items = HashSet::new();
 
         // First, remeasure any rich content items whose heights may be out of date.
         // We track these in the BlockList via a dirty set keyed by view ID to
@@ -3237,6 +3238,8 @@ impl Element for BlockListElement {
                     let height_px = current_size.y();
 
                     updated_rich_content_heights.insert(*view_id, height_px as f64);
+                } else {
+                    missing_rich_content_items.insert(*view_id);
                 }
             }
         }
@@ -3314,7 +3317,7 @@ impl Element for BlockListElement {
                 }
 
                 let Some(rich_content) = self.rich_content_elements.get_mut(&view_id) else {
-                    log::warn!("Missing rich content element for ID: {view_id:?}");
+                    missing_rich_content_items.insert(view_id);
                     continue;
                 };
 
@@ -3341,6 +3344,17 @@ impl Element for BlockListElement {
         // Drop the iterator and viewport so we can safely update the model with new RichContent heights.
         drop(viewport_iter);
         drop(viewport);
+
+        if !missing_rich_content_items.is_empty() {
+            log::warn!(
+                "Removing {} stale rich content item(s) missing render elements: {:?}",
+                missing_rich_content_items.len(),
+                missing_rich_content_items
+            );
+            for view_id in &missing_rich_content_items {
+                model.block_list_mut().remove_all_rich_content(*view_id);
+            }
+        }
 
         model
             .block_list_mut()
@@ -3539,15 +3553,19 @@ impl Element for BlockListElement {
                     // here or if we should be using the height from the BlockList.
                     let height_px = if let Some(h) = updated_rich_content_heights.get(&view_id) {
                         *h
-                    } else {
-                        if let Some(rich_content) = self.rich_content_elements.get_mut(&view_id) {
-                            let _ = rich_content.layout(
-                                SizeConstraint::tight_on_cross_axis(Axis::Vertical, constraint),
-                                ctx,
-                                app,
-                            );
-                        }
+                    } else if let Some(rich_content) = self.rich_content_elements.get_mut(&view_id)
+                    {
+                        let _ = rich_content.layout(
+                            SizeConstraint::tight_on_cross_axis(Axis::Vertical, constraint),
+                            ctx,
+                            app,
+                        );
                         height.as_f64() * cell_size.y() as f64
+                    } else {
+                        log::warn!(
+                            "Skipping stale rich content item missing render element: {view_id:?}"
+                        );
+                        continue;
                     };
 
                     visible_height_px += height_px;

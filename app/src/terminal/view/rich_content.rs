@@ -331,9 +331,35 @@ impl TerminalView {
                 false,
             )
         };
+        let view_id = handle.id();
+
+        // A ViewHandle represents one rich-content view identity. Re-inserting the
+        // same handle should move/refresh that view, not leave multiple block-list
+        // rows pointing at the same child view. This is especially important for
+        // the CLI-agent/use-agent footer, which can be requested from several event
+        // paths during Codex alt-screen/status transitions.
+        let existing_view_count = self
+            .rich_content_views
+            .iter()
+            .filter(|rich_content| rich_content.view_id() == view_id)
+            .count();
+        if existing_view_count > 0 || is_use_agent_footer {
+            if existing_view_count > 0 {
+                log::warn!(
+                    "deduping rich content before insert: view_id={view_id:?} existing_views={existing_view_count} use_agent_footer={is_use_agent_footer}"
+                );
+            }
+            self.model
+                .lock()
+                .block_list_mut()
+                .remove_all_rich_content(view_id);
+            self.rich_content_views
+                .retain(|rich_content| rich_content.view_id() != view_id);
+        }
+
         let item = RichContentItem::new(
             content_type,
-            handle.id(),
+            view_id,
             agent_view_conversation_id,
             should_hide,
         );
