@@ -445,6 +445,18 @@ impl TerminalFindModel {
     /// Reruns find with the same options applied to the current run, to be called if terminal
     /// contents have changed since the last find run.
     pub fn rerun_find_on_active_grid(&mut self, ctx: &mut ModelContext<Self>) {
+        self.rerun_find_on_active_grid_internal(false, ctx);
+    }
+
+    pub fn force_rerun_find_on_active_grid(&mut self, ctx: &mut ModelContext<Self>) {
+        self.rerun_find_on_active_grid_internal(true, ctx);
+    }
+
+    fn rerun_find_on_active_grid_internal(
+        &mut self,
+        force_full_scan: bool,
+        ctx: &mut ModelContext<Self>,
+    ) {
         if self.terminal_model.lock().is_alt_screen_active() {
             if let Some(old_find_state) = self.alt_screen_find_run.take() {
                 self.alt_screen_find_run =
@@ -455,8 +467,12 @@ impl TerminalFindModel {
         }
 
         // Handle async find path.
-        if let Some(controller) = &self.async_find_controller {
-            if !controller.has_active_find() {
+        if self.async_find_controller.is_some() {
+            if !self
+                .async_find_controller
+                .as_ref()
+                .is_some_and(|controller| controller.has_active_find())
+            {
                 return;
             }
 
@@ -489,9 +505,21 @@ impl TerminalFindModel {
             // Drop the model lock before emitting events.
             drop(model);
 
-            self.invalidate_async_find_block(active_block_index, output_dirty_info, ctx);
-            if let Some(info) = command_dirty_info {
-                self.invalidate_async_find_block(active_block_index, Some(info), ctx);
+            match (output_dirty_info, command_dirty_info) {
+                (Some(output_info), Some(command_info)) => {
+                    self.invalidate_async_find_block(active_block_index, Some(output_info), ctx);
+                    self.invalidate_async_find_block(active_block_index, Some(command_info), ctx);
+                }
+                (Some(output_info), None) => {
+                    self.invalidate_async_find_block(active_block_index, Some(output_info), ctx);
+                }
+                (None, Some(command_info)) => {
+                    self.invalidate_async_find_block(active_block_index, Some(command_info), ctx);
+                }
+                (None, None) if force_full_scan => {
+                    self.force_invalidate_async_find_block(active_block_index, None, ctx);
+                }
+                (None, None) => {}
             }
             return;
         }
@@ -630,7 +658,7 @@ impl TerminalFindModel {
     pub fn is_async_find_scanning(&self) -> bool {
         self.async_find_controller
             .as_ref()
-            .map(|c| c.is_scanning())
+            .map(|c| c.is_initial_scanning())
             .unwrap_or(false)
     }
 
@@ -649,8 +677,33 @@ impl TerminalFindModel {
         dirty_info: Option<(RangeInclusive<usize>, GridType, u64)>,
         ctx: &mut ModelContext<Self>,
     ) {
+        self.invalidate_async_find_block_internal(block_index, dirty_info, false, ctx);
+    }
+
+    fn force_invalidate_async_find_block(
+        &mut self,
+        block_index: BlockIndex,
+        dirty_info: Option<(RangeInclusive<usize>, GridType, u64)>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.invalidate_async_find_block_internal(block_index, dirty_info, true, ctx);
+    }
+
+    fn invalidate_async_find_block_internal(
+        &mut self,
+        block_index: BlockIndex,
+        dirty_info: Option<(RangeInclusive<usize>, GridType, u64)>,
+        allow_full_scan_without_existing_results: bool,
+        ctx: &mut ModelContext<Self>,
+    ) {
         if let Some(controller) = self.async_find_controller.as_mut() {
-            controller.invalidate_block(block_index, dirty_info);
+            if !controller.invalidate_block(
+                block_index,
+                dirty_info,
+                allow_full_scan_without_existing_results,
+            ) {
+                return;
+            }
         } else {
             return;
         }
@@ -704,8 +757,13 @@ impl TerminalFindModel {
         };
 
         // Use invalidate_async_find_block which handles the dirty range properly.
-        let dirty_info = dirty_range.map(|range| (range, GridType::Output, num_lines_truncated));
-        self.invalidate_async_find_block(block_index, dirty_info, ctx);
+        if let Some(dirty_info) =
+            dirty_range.map(|range| (range, GridType::Output, num_lines_truncated))
+        {
+            self.invalidate_async_find_block(block_index, Some(dirty_info), ctx);
+        } else {
+            self.force_invalidate_async_find_block(block_index, None, ctx);
+        }
     }
 
     /// Returns the async find controller, if enabled.
@@ -719,7 +777,7 @@ impl Entity for TerminalFindModel {
 }
 
 /// Parameters for a find "run".
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FindOptions {
     /// The find query, if any.
     pub query: Option<Arc<String>>,

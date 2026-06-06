@@ -417,6 +417,11 @@ pub struct AsyncFindController {
     /// time and skips messages that arrive after a newer generation has started,
     /// preventing stale `Done` messages from prematurely ending a new scan.
     generation: u64,
+
+    /// Whether the first full scan for the active query has completed. Live
+    /// terminal output can enqueue incremental rescans after this; those should
+    /// not make the find bar flash back to an initial "Scanning..." state.
+    initial_scan_complete: bool,
 }
 
 impl AsyncFindController {
@@ -437,6 +442,7 @@ impl AsyncFindController {
             current_find_options: None,
             cached_focused_match: None,
             generation: 0,
+            initial_scan_complete: true,
         }
     }
 
@@ -463,6 +469,14 @@ impl AsyncFindController {
     /// Returns true if a find operation is currently in progress.
     pub fn is_scanning(&self) -> bool {
         matches!(self.status, AsyncFindStatus::Scanning)
+    }
+
+    /// Returns true only for the initial/full find scan where the find bar has no
+    /// stable results yet. Incremental rescans of a live terminal can keep
+    /// running in the background without replacing the match counter with a
+    /// flickering "Scanning..." label.
+    pub fn is_initial_scanning(&self) -> bool {
+        self.is_scanning() && !self.initial_scan_complete
     }
 
     /// Returns true if there is an active find configuration.
@@ -720,6 +734,7 @@ impl AsyncFindController {
         self.cached_focused_match = None;
         self.current_find_options = Some(options.clone());
         self.status = AsyncFindStatus::Scanning;
+        self.initial_scan_complete = false;
 
         // Build the work queue from the current block list.
         let queue = FindWorkQueue::new();
@@ -876,6 +891,7 @@ impl AsyncFindController {
             }
             FindTaskMessage::Done => {
                 self.status = AsyncFindStatus::Complete;
+                self.initial_scan_complete = true;
             }
         }
 
@@ -916,6 +932,7 @@ impl AsyncFindController {
         self.cached_focused_match = None;
         self.status = AsyncFindStatus::Idle;
         self.current_find_options = None;
+        self.initial_scan_complete = true;
 
         // Clear matches in AI blocks.
         for view in self.rich_content_views.values() {
@@ -938,13 +955,29 @@ impl AsyncFindController {
         &mut self,
         block_index: BlockIndex,
         dirty_info: Option<(RangeInclusive<usize>, GridType, u64)>,
-    ) {
+        allow_full_scan_without_existing_results: bool,
+    ) -> bool {
         if self.current_config.is_none() {
-            return;
+            return false;
         }
 
         let Some(queue) = self.work_queue.clone() else {
-            return;
+            return false;
+        };
+
+        let dirty_info = match dirty_info {
+            Some(info) => Some(info),
+            None => {
+                let has_existing_results = self
+                    .block_results
+                    .terminal_matches
+                    .keys()
+                    .any(|(idx, _)| *idx == block_index);
+                if !has_existing_results && !allow_full_scan_without_existing_results {
+                    return false;
+                }
+                None
+            }
         };
 
         // For a full block rescan (no dirty range), clear existing results now
@@ -965,6 +998,7 @@ impl AsyncFindController {
         // Mark status as scanning so the polling loop stays alive while the
         // background task processes the new work.
         self.status = AsyncFindStatus::Scanning;
+        true
     }
 
     /// Returns matches for a specific terminal block grid as AbsoluteMatch references.
@@ -1061,6 +1095,7 @@ impl AsyncFindController {
         self.cached_focused_match = None;
         self.current_find_options = Some(options.clone());
         self.status = AsyncFindStatus::Scanning;
+        self.initial_scan_complete = false;
 
         // Build the work queue from the current block list.
         let queue = FindWorkQueue::new();

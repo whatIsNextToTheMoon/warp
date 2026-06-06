@@ -2617,6 +2617,7 @@ pub struct TerminalView {
     find_link_tx: Sender<FindLinkArg>,
     find_update_debounce_tx: Sender<(u64, FindOptions)>,
     find_update_generation: u64,
+    pending_find_update_options: Option<FindOptions>,
 
     /// Highlighted link (could be url or file path) on the screen.
     highlighted_link: HighlightedLinkOption,
@@ -4284,6 +4285,7 @@ impl TerminalView {
             find_link_tx,
             find_update_debounce_tx,
             find_update_generation: 0,
+            pending_find_update_options: None,
             highlighted_link: HighlightedLinkOption::default(),
             last_hover_fragment_boundary: None,
             bootstrap_start: None,
@@ -16502,7 +16504,7 @@ impl TerminalView {
         // Update model with new size info.
         self.model.lock().resize(size_update);
         self.find_model.update(ctx, |find_model, ctx| {
-            find_model.rerun_find_on_active_grid(ctx);
+            find_model.force_rerun_find_on_active_grid(ctx);
         });
         // Resizing the model already clears selected text, but
         // we also need to clear selections in any rich content blocks (e.g. AI blocks).
@@ -19974,6 +19976,7 @@ impl TerminalView {
 
     fn next_find_update_generation(&mut self) -> u64 {
         self.find_update_generation = self.find_update_generation.wrapping_add(1);
+        self.pending_find_update_options = None;
         self.find_update_generation
     }
 
@@ -19984,9 +19987,18 @@ impl TerminalView {
             .is_some_and(|query| !query.trim().is_empty())
     }
 
+    fn has_pending_find_update(&self) -> bool {
+        self.pending_find_update_options.is_some()
+    }
+
+    fn active_find_matches_options(&self, options: &FindOptions, ctx: &AppContext) -> bool {
+        self.find_model.as_ref(ctx).active_find_options() == Some(options)
+    }
+
     fn schedule_or_run_find(&mut self, options: FindOptions, ctx: &mut ViewContext<Self>) {
         if Self::should_debounce_find_options(&options) {
             let generation = self.next_find_update_generation();
+            self.pending_find_update_options = Some(options.clone());
             let _ = self.find_update_debounce_tx.try_send((generation, options));
             return;
         }
@@ -20010,6 +20022,7 @@ impl TerminalView {
             return;
         }
 
+        self.pending_find_update_options = None;
         self.run_find(options, ctx);
     }
 
@@ -20036,8 +20049,13 @@ impl TerminalView {
 
     fn goto_next_find_match(&mut self, direction: &FindDirection, ctx: &mut ViewContext<Self>) {
         let options = self.find_options_from_find_bar(ctx);
-        if Self::should_debounce_find_options(&options) {
+        let active_matches_options = self.active_find_matches_options(&options, ctx);
+        if Self::should_debounce_find_options(&options) && !active_matches_options {
             self.run_find_immediately(options, ctx);
+        } else if active_matches_options && self.has_pending_find_update() {
+            // A duplicate debounced update for the same query should not make the arrow
+            // buttons look dead by clearing current results and starting a fresh scan.
+            self.next_find_update_generation();
         }
 
         self.find_model.update(ctx, |find_model, ctx| {
