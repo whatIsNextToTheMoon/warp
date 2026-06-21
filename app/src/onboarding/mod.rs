@@ -6,9 +6,13 @@
 //! want to reduce compile time by removing that heavy crate.
 
 pub mod callout;
+pub mod components;
 pub mod slides;
 
-pub use callout::{FinalState, OnboardingCalloutView, OnboardingCalloutViewEvent, OnboardingKeybindings, OnboardingQuery};
+pub use callout::{
+    FinalState, OnboardingCalloutView, OnboardingCalloutViewEvent, OnboardingKeybindings,
+    OnboardingQuery,
+};
 pub use slides::{
     AgentAutonomy, AgentDevelopmentSettings, OnboardingModelInfo, ProjectOnboardingSettings,
 };

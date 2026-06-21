@@ -7720,7 +7720,7 @@ impl ApiKeysWidget {
     fn new(ctx: &mut ViewContext<<Self as SettingsWidget>::View>) -> Self {
         let ai_settings = AISettings::as_ref(ctx);
         let workspace_handle = UserWorkspaces::handle(ctx);
-        let _is_any_ai_enabled = ai_settings.is_any_ai_enabled(ctx);
+        let is_any_ai_enabled = ai_settings.is_any_ai_enabled(ctx);
         let is_byo_enabled = workspace_handle.as_ref(ctx).is_byo_api_key_enabled(ctx);
         let is_api_keys_section_enabled = is_byo_enabled || FeatureFlag::SoloUserByok.is_enabled();
 

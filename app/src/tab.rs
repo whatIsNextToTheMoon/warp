@@ -1508,11 +1508,11 @@ impl<'a> TabComponent<'a> {
                 }
             } else if is_active {
                 internal_colors::fg_overlay_2(theme).into()
-            } else if is_in_multi_tab_selection && is_hovered {
+            } else if self.is_in_multi_tab_selection && is_hovered {
                 // Hovering a multi-selected tab steps one shade darker so the
                 // hover stays distinguishable from the in-selection highlight.
                 internal_colors::fg_overlay_2(theme).into()
-            } else if is_in_multi_tab_selection || is_hovered {
+            } else if self.is_in_multi_tab_selection || is_hovered {
                 internal_colors::fg_overlay_1(theme).into()
             } else {
                 Fill::None

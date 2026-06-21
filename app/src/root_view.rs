@@ -7,6 +7,7 @@ use crate::auth::auth_state::AuthState;
 use crate::auth::auth_view_modal::AuthRedirectPayload;
 use crate::auth::needs_sso_link_view::NeedsSsoLinkView;
 use crate::auth::paste_auth_token_modal::{PasteAuthTokenModalEvent, PasteAuthTokenModalView};
+use crate::auth::provider_keys_modal::ProviderKeysModalView;
 use crate::auth::{AuthStateProvider, LoginFailureReason};
 use crate::autoupdate::{AutoupdateState, AutoupdateStateEvent};
 use crate::cloud_object::model::persistence::CloudModel;
@@ -33,6 +34,7 @@ use crate::server::server_api::auth::UserAuthenticationError;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::telemetry::LaunchConfigUiLocation;
 use crate::settings::QuakeModeSettings;
+use crate::settings_view::custom_inference_modal::CustomEndpointModal;
 use crate::settings_view::flags;
 use crate::settings_view::mcp_servers_page::MCPServersSettingsPage;
 use crate::settings_view::OpenTeamsSettingsModalArgs;
@@ -67,7 +69,9 @@ use crate::{
     workspace::{view::OnboardingTutorial, PaneViewLocator, Workspace, WorkspaceRegistry},
 };
 use crate::{features::FeatureFlag, ChannelState};
-use crate::{send_telemetry_from_app_ctx, GlobalResourceHandles, GlobalResourceHandlesProvider};
+use crate::{
+    safe_error, send_telemetry_from_app_ctx, GlobalResourceHandles, GlobalResourceHandlesProvider,
+};
 use anyhow::Result;
 use cfg_if::cfg_if;
 use itertools::Itertools;

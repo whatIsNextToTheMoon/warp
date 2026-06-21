@@ -10,8 +10,11 @@ use crate::server::telemetry::{LoginEventSource, TelemetryEvent};
 use crate::settings::PrivacySettings;
 use crate::themes::theme::Fill as ThemeFill;
 use crate::util::bindings::CustomAction;
-use crate::{send_telemetry_from_ctx, send_telemetry_sync_from_ctx};
+use crate::{safe_error, send_telemetry_from_ctx, send_telemetry_sync_from_ctx};
 
+use crate::onboarding::components::feature_optout_dialog::{
+    render_feature_optout_dialog, FeatureOptOutDialog,
+};
 use crate::onboarding::slides::{layout, slide_content};
 use crate::onboarding::{OnboardingIntention, AI_FEATURES, WARP_DRIVE_FEATURES};
 use pathfinder_color::ColorU;

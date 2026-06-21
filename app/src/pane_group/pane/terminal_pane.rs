@@ -27,7 +27,6 @@ use crate::{
         blocklist::{
             agent_view::{AgentViewControllerEvent, AgentViewEntryOrigin},
             orchestration_event_streamer::OrchestrationEventStreamer,
-            orchestration_events::{OrchestrationEventService, SendEventResult},
             BlocklistAIHistoryModel, StartAgentRequest,
         },
         conversation_utils,
@@ -152,31 +151,6 @@ fn apply_child_model_id_override(
     LLMPreferences::handle(ctx).update(ctx, |llm_prefs, ctx| {
         llm_prefs.update_preferred_agent_mode_llm(&llm_id, child_terminal_view_id, ctx);
     });
-}
-
-#[cfg(not(target_family = "wasm"))]
-fn register_legacy_local_lifecycle_subscription(
-    parent_conversation_id: AIConversationId,
-    child_conversation_id: AIConversationId,
-    lifecycle_subscription: Option<Vec<LifecycleEventType>>,
-    ctx: &mut ViewContext<PaneGroup>,
-) {
-    if let Some(parent_agent_id) = BlocklistAIHistoryModel::as_ref(ctx)
-        .conversation(&parent_conversation_id)
-        .and_then(|conversation| {
-            conversation
-                .server_conversation_token()
-                .map(|token| token.as_str().to_string())
-        })
-    {
-        OrchestrationEventService::handle(ctx).update(ctx, |svc, _| {
-            svc.register_lifecycle_subscription(
-                child_conversation_id,
-                parent_agent_id,
-                lifecycle_subscription,
-            );
-        });
-    }
 }
 
 /// Returns the shared-session source the host terminal is sharing as, or
