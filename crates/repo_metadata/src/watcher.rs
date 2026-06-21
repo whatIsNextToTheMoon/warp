@@ -1,4 +1,3 @@
-use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::hash::{Hash, Hasher};
@@ -288,14 +287,21 @@ impl DirectoryWatcher {
             ));
         }
 
-        // Check if there's an existing registration to reuse.
-        let entry = self.directories.entry(repository_path);
-        if let Entry::Occupied(ref entry) = entry {
+        // Check if there's an existing registration to reuse. A raw-path registration can happen
+        // before git detection completes, so enrich the existing handle when a later registration
+        // identifies it as a linked worktree.
+        if let Some(repository_handle) = self.directories.get(&repository_path).cloned() {
             log::debug!("Using already-registered repository");
-            return Ok(entry.get().clone());
+            if let Some(external_git_directory) = external_git_directory {
+                repository_handle.update(ctx, |repository, _ctx| {
+                    repository.enrich_external_git_directory(external_git_directory)
+                });
+            }
+            return Ok(repository_handle);
         }
 
         // The repository is either not registered, or has expired.
+        let entry = self.directories.entry(repository_path);
         let queue_handle = self.processing_queue.clone();
         let repository_handle = ctx.add_model(|_ctx| {
             Repository::new(
@@ -427,7 +433,12 @@ impl DirectoryWatcher {
     }
 
     /// Handles events from the internal task queue.
-    fn handle_queue_event(&mut self, event: &TaskQueueEvent, ctx: &mut ModelContext<Self>) {
+    fn handle_queue_event(
+        &mut self,
+        _: ModelHandle<TaskQueue>,
+        event: &TaskQueueEvent,
+        ctx: &mut ModelContext<Self>,
+    ) {
         let &TaskQueueEvent::TaskEnqueued = event;
         self.processing_queue.update(ctx, |queue, ctx| {
             queue.advance(ctx);
@@ -479,6 +490,7 @@ impl DirectoryWatcher {
     #[cfg(feature = "local_fs")]
     fn handle_watcher_event(
         &mut self,
+        _: ModelHandle<BulkFilesystemWatcher>,
         event: &BulkFilesystemWatcherEvent,
         ctx: &mut ModelContext<Self>,
     ) {

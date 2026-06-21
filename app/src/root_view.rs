@@ -18,6 +18,7 @@ use crate::experiments::{BlockOnboarding, Experiment};
 use crate::interval_timer::IntervalTimer;
 use crate::launch_configs::launch_config;
 use crate::linear::LinearIssueWork;
+use crate::modal::{Modal, ModalEvent};
 use crate::notebooks::manager::NotebookSource;
 use crate::onboarding::OnboardingIntention;
 use crate::settings::cloud_preferences_syncer::{
@@ -27,7 +28,6 @@ use crate::settings::AISettings;
 
 use crate::persistence::ModelEvent;
 use crate::server::cloud_objects::update_manager::UpdateManager;
-use crate::server::experiments::is_free_user_no_ai_experiment_active;
 use crate::server::ids::SyncId;
 use crate::server::server_api::auth::UserAuthenticationError;
 use crate::server::server_api::ServerApiProvider;
@@ -1595,6 +1595,10 @@ pub struct RootView {
     window_id: WindowId,
     pending_tutorial: Option<OnboardingTutorial>,
     paste_auth_token_modal: Option<ViewHandle<PasteAuthTokenModalView>>,
+    /// BYOK "Add API key" modal.
+    add_api_key_modal: Option<ViewHandle<ProviderKeysModalView>>,
+    /// BYOK "Add custom endpoint" modal — reuses the settings `CustomEndpointModal`.
+    add_custom_endpoint_modal: Option<ViewHandle<Modal<CustomEndpointModal>>>,
 }
 
 impl RootView {
@@ -1691,6 +1695,8 @@ impl RootView {
             window_id: ctx.window_id(),
             pending_tutorial: None,
             paste_auth_token_modal: None,
+            add_api_key_modal: None,
+            add_custom_endpoint_modal: None,
         };
 
         match &root_view.auth_onboarding_state {
@@ -1929,7 +1935,10 @@ impl RootView {
                 });
             }
             Err(error) => {
-                log::error!("Unable to parse AuthResult from url: {error}");
+                safe_error!(
+                    safe: ("Unable to parse AuthResult from url"),
+                    full: ("Unable to parse AuthResult from url: {error}")
+                );
                 self.auth_view.update(ctx, |view, ctx| {
                     view.last_login_failure_reason =
                         Some(LoginFailureReason::InvalidRedirectUrl { was_pasted: false });
@@ -2693,7 +2702,10 @@ impl View for RootView {
     fn on_focus(&mut self, focus_ctx: &FocusContext, ctx: &mut ViewContext<Self>) {
         if focus_ctx.is_self_focused() {
             self.focus(ctx);
-        } else if self.paste_auth_token_modal.is_some() {
+        } else if self.paste_auth_token_modal.is_some()
+            || self.add_api_key_modal.is_some()
+            || self.add_custom_endpoint_modal.is_some()
+        {
             // Modal is open — focus belongs to the editor inside it.
         }
     }
@@ -2716,6 +2728,14 @@ impl View for RootView {
         stack.add_child(child);
 
         if let Some(modal) = &self.paste_auth_token_modal {
+            stack.add_child(ChildView::new(modal).finish());
+        }
+
+        if let Some(modal) = &self.add_api_key_modal {
+            stack.add_child(ChildView::new(modal).finish());
+        }
+
+        if let Some(modal) = &self.add_custom_endpoint_modal {
             stack.add_child(ChildView::new(modal).finish());
         }
 

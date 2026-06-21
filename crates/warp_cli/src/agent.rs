@@ -255,6 +255,22 @@ pub enum AgentCommand {
     Skills(ListAgentSkillsArgs),
 }
 
+impl AgentCommand {
+    pub(crate) fn as_str_for_tracing(&self) -> &'static str {
+        match self {
+            AgentCommand::Run(_) => "agent run",
+            AgentCommand::RunCloud(_) => "agent run-cloud",
+            AgentCommand::Profile(_) => "agent profile",
+            AgentCommand::List(_) => "agent list",
+            AgentCommand::Get(_) => "agent get",
+            AgentCommand::Create(_) => "agent create",
+            AgentCommand::Update(_) => "agent update",
+            AgentCommand::Delete(_) => "agent delete",
+            AgentCommand::Skills(_) => "agent skills",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Args)]
 #[command(
     visible_alias = "r",
@@ -312,6 +328,15 @@ pub struct RunAgentArgs {
     /// LEGACY: MCP servers to start before executing the agent, identified by UUID.
     #[arg(long = "mcp-server", value_name = "UUID", hide = true)]
     pub mcp_servers: Vec<uuid::Uuid>,
+    /// Fail the run when any requested MCP server fails to start.
+    ///
+    /// By default, MCP servers that don't start within the startup timeout are
+    /// skipped and the agent runs without their tools.
+    #[arg(long = "strict-mcp-startup")]
+    pub strict_mcp_startup: bool,
+    /// Maximum time to wait for requested MCP servers to start (e.g. `30s`, `1m`).
+    #[arg(long = "mcp-startup-timeout", value_name = "DURATION")]
+    pub mcp_startup_timeout: Option<humantime::Duration>,
     /// Cloud environment to use, identified by ID.
     #[arg(long = "environment", short = 'e', value_name = "ID")]
     pub environment: Option<String>,

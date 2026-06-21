@@ -5,7 +5,6 @@ use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::watcher::DirectoryWatcher;
 #[cfg(feature = "local_fs")]
 use repo_metadata::RepoMetadataModel;
-use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
 use warpui::platform::WindowStyle;
 use warpui::{App, SingletonEntity, ViewHandle, WindowId};
@@ -39,7 +38,7 @@ use crate::auth::auth_manager::AuthManager;
 use crate::auth::AuthStateProvider;
 use crate::changelog_model::ChangelogModel;
 use crate::cloud_object::model::persistence::CloudModel;
-use crate::code_review::git_status_update::GitStatusUpdateModel;
+use crate::code_review::git_repo_model::GitRepoModels;
 use crate::context_chips::prompt::Prompt;
 use crate::network::NetworkStatus;
 use crate::pricing::PricingInfoModel;
@@ -108,9 +107,7 @@ pub fn initialize_app_for_terminal_view(app: &mut App) {
     app.add_singleton_model(|_| CLIAgentSessionsModel::new());
     app.add_singleton_model(OrchestrationEventService::new);
     app.add_singleton_model(LocalAgentTaskSyncModel::new);
-    if FeatureFlag::OrchestrationV2.is_enabled() {
-        app.add_singleton_model(OrchestrationEventStreamer::new);
-    }
+    app.add_singleton_model(OrchestrationEventStreamer::new);
     app.add_singleton_model(|_| ActiveAgentViewsModel::new());
     app.add_singleton_model(BlocklistAIPermissions::new);
     app.add_singleton_model(AgentNotificationsModel::new);
@@ -150,7 +147,7 @@ pub fn initialize_app_for_terminal_view(app: &mut App) {
         model
     });
     app.add_singleton_model(FileSearchModel::new);
-    app.add_singleton_model(|_| GitStatusUpdateModel::new());
+    app.add_singleton_model(|_| GitRepoModels::new());
     app.add_singleton_model(RepoOutlines::new_for_test);
     app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
     app.add_singleton_model(WarpManagedPathsWatcher::new_for_testing);

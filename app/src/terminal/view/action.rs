@@ -51,7 +51,7 @@ use super::inline_banner::{
 use super::{
     AliasExpansionBannerAction, ContextMenuAction, GridHighlightedLink, InputContextMenuAction,
     NotificationsDiscoveryBannerAction, NotificationsErrorBannerAction, RichContentLink,
-    SSHBannerAction, TerminalEditor,
+    TerminalEditor,
 };
 
 pub use crate::onboarding::OnboardingIntention;
@@ -180,6 +180,7 @@ pub enum TerminalAction {
     SelectPriorBlock,
     SelectBookmarkDown,
     SelectBookmarkUp,
+    JumpToLatestAgentMessage,
     BookmarkSelectedBlock,
     ScrollToBottomOfSelectedBlocks,
     ScrollToTopOfSelectedBlocks,
@@ -261,7 +262,6 @@ pub enum TerminalAction {
     NotificationsDiscoveryBanner(NotificationsDiscoveryBannerAction),
     BookmarkBlock(BlockIndex),
     NotificationsErrorBanner(NotificationsErrorBannerAction),
-    LegacySSHBanner(SSHBannerAction),
     JumpToBookmark(BlockIndex),
     OpenGridLink(GridHighlightedLink),
     OpenRichContentLink(RichContentLink),
@@ -297,9 +297,6 @@ pub enum TerminalAction {
     /// Triggers the banner asking to turn the running block into a subshell. The String is the
     /// command that the user entered.
     ShowSubshellBanner(String),
-    /// Triggers the banner asking to Warpify the active ssh session. The String is the
-    /// command that the user entered.
-    ShowWarpifySshBanner(String, Option<String>),
     InsertMostRecentCommandCorrection,
     AliasExpansionBanner(AliasExpansionBannerAction),
     OpenInWarpBanner(OpenInWarpBannerAction),
@@ -330,9 +327,6 @@ pub enum TerminalAction {
     /// it if possible.
     SelectAIAttachedBlock(BlockIndex),
     DragAndDropFiles(Vec<String>),
-    /// Triggers an ssh session to warpify, even if there is no Warpify Block.
-    WarpifySSHSession,
-    NotifySshErrorBlock(SshErrorBlockAction),
     /// Sets the input mode to Agent Mode
     SetInputModeAgent,
     /// Sets the input mode to Terminal Mode
@@ -416,7 +410,9 @@ pub enum TerminalAction {
     ToggleHideCliResponses,
     ExitAgentView,
     EnterCloudAgentView,
-    StartNewAgentConversation,
+    StartNewAgentConversation {
+        origin: AgentViewEntryOrigin,
+    },
     /// Toggle the cloud mode conversation details panel
     ToggleConversationDetailsPanel,
     /// Cancel the ambient agent task while it's loading
@@ -468,11 +464,20 @@ pub enum TerminalAction {
     KillAgentConversation {
         conversation_id: AIConversationId,
     },
+    /// Navigate to the previous child agent conversation in the active
+    /// orchestration tree.
+    CyclePreviousOrchestrationChildAgent,
+    /// Navigate to the next child agent conversation in the active
+    /// orchestration tree.
+    CycleNextOrchestrationChildAgent,
     /// Toggle PTY recording for this session.
     ToggleSessionRecording,
     /// Toggle the rich input editor for composing a prompt to send to a CLI agent.
     /// Triggered by Ctrl-G when a CLI agent is detected, or from the footer button.
     ToggleCLIAgentRichInput,
+
+    /// Allow the blocked clipboard operation by adjusting the OSC 52 clipboard access setting.
+    Osc52AllowBlockedClipboardOperation,
 }
 
 // Manually implementing Debug to avoid leaking sensitive information in logs
@@ -544,6 +549,7 @@ impl fmt::Debug for TerminalAction {
             ReinputCommandsWithSudo => f.write_str("ReinputCommandsWithSudo"),
             ClearBuffer => f.write_str("ClearBuffer"),
             SelectBookmarkUp => f.write_str("SelectBookmarkUp"),
+            JumpToLatestAgentMessage => f.write_str("JumpToLatestAgentMessage"),
             SelectBookmarkDown => f.write_str("SelectBookmarkDown"),
             Focus => f.write_str("Focus"),
             FocusInputAndClearSelection => f.write_str("FocusInputAndClearSelection"),
@@ -594,7 +600,6 @@ impl fmt::Debug for TerminalAction {
                 write!(f, "BookmarkBlock({index:?})")
             }
             NotificationsErrorBanner(action) => write!(f, "NotificationsErrorBanner({action:?})"),
-            LegacySSHBanner(action) => write!(f, "SSHBanner({action:?})"),
             JumpToBookmark(index) => write!(f, "JumpToBookmark({index:?})"),
             InsertCommandCorrection { .. } => {
                 write!(f, "InsertCommandCorrection",)
@@ -624,7 +629,6 @@ impl fmt::Debug for TerminalAction {
             TriggerSubshellBootstrap => f.write_str("TriggerSubshellBootstrap"),
             DismissWarpifyBanner(remember) => write!(f, "DismissWarpifyBanner({remember:?})"),
             ShowSubshellBanner(_) => f.write_str("ShowSubshellBanner"),
-            ShowWarpifySshBanner(_, _) => f.write_str("ShowWarpifySshBanner"),
             InsertMostRecentCommandCorrection => f.write_str("InsertMostRecentCommandCorrection"),
             AliasExpansionBanner(action) => write!(f, "AliasExpansionBanner({action:?}"),
             OpenInWarpBanner(action) => write!(f, "OpenInWarpBanner({action:?})"),
@@ -662,8 +666,6 @@ impl fmt::Debug for TerminalAction {
             ExecuteRewindFromInlineMenu { .. } => write!(f, "ExecuteRewindFromInlineMenu"),
             SelectAIAttachedBlock(_) => write!(f, "SelectAIAttachedBlock"),
             DragAndDropFiles(_) => write!(f, "DragAndDropFiles"),
-            WarpifySSHSession => write!(f, "WarpifySSHSession"),
-            NotifySshErrorBlock(action) => write!(f, "NotifySshErrorBlock({action:?})"),
             SetInputModeAgent => write!(f, "SetInputModeAgent"),
             SetInputModeTerminal => write!(f, "SetInputModeTerminal"),
             #[cfg(feature = "voice_input")]
@@ -737,7 +739,9 @@ impl fmt::Debug for TerminalAction {
             ToggleHideCliResponses => write!(f, "ToggleHideCliResponses"),
             ExitAgentView => write!(f, "ExitAgentView"),
             EnterCloudAgentView => write!(f, "EnterCloudAgentView"),
-            StartNewAgentConversation => write!(f, "StartNewAgentConversation"),
+            StartNewAgentConversation { origin } => {
+                write!(f, "StartNewAgentConversation {{ origin: {origin:?} }}")
+            }
             ToggleConversationDetailsPanel => write!(f, "ToggleConversationDetailsPanel"),
             CancelAmbientAgentTask => write!(f, "CancelAmbientAgentTask"),
             OpenInlineHistoryMenu => write!(f, "OpenInlineHistoryMenu"),
@@ -752,8 +756,15 @@ impl fmt::Debug for TerminalAction {
             OpenChildAgentInNewTab { .. } => write!(f, "OpenChildAgentInNewTab"),
             StopAgentConversation { .. } => write!(f, "StopAgentConversation"),
             KillAgentConversation { .. } => write!(f, "KillAgentConversation"),
+            CyclePreviousOrchestrationChildAgent => {
+                write!(f, "CyclePreviousOrchestrationChildAgent")
+            }
+            CycleNextOrchestrationChildAgent => write!(f, "CycleNextOrchestrationChildAgent"),
             ToggleSessionRecording => write!(f, "ToggleSessionRecording"),
             ToggleCLIAgentRichInput => write!(f, "ToggleCLIAgentRichInput"),
+            Osc52AllowBlockedClipboardOperation => {
+                write!(f, "Osc52AllowBlockedClipboardOperation")
+            }
         }
     }
 }
