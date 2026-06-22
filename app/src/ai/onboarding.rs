@@ -1,12 +1,12 @@
 //! Onboarding-specific AI types and conversions.
 
-use ai::LLMId;
 use crate::onboarding::slides::OnboardingModelInfo;
 use crate::onboarding::OnboardingAuthState;
+use ai::LLMId;
 use warp_core::ui::icons::Icon;
 use warpui::{AppContext, SingletonEntity};
 
-use super::llms::{LLMInfo, LLMPreferences};
+use super::llms::{DisableReason, LLMInfo, LLMPreferences};
 use crate::auth::AuthStateProvider;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
@@ -16,6 +16,10 @@ impl From<&LLMInfo> for OnboardingModelInfo {
             id: llm.id.clone(),
             title: llm.display_name.clone(),
             icon: llm.provider.icon().unwrap_or(Icon::Oz),
+            requires_upgrade: matches!(
+                llm.disable_reason.as_ref(),
+                Some(DisableReason::RequiresUpgrade)
+            ),
             is_default: false,
         }
     }

@@ -757,7 +757,7 @@ impl<T: EventLoopSender> PtyController<T> {
                 // The shell will answer with an OSC-based prompt request before
                 // we send the text that needs to be completed.
                 let bytes = vec![trigger_byte];
-                (bytes.into(), false, None, false)
+                (bytes.into(), false, None)
             }
         };
 

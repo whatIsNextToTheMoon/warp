@@ -3265,6 +3265,7 @@ pub enum AISettingsPageAction {
     ToggleAutoToggleRichInput,
     ToggleAutoOpenRichInputOnCLIAgentStart,
     ToggleAutoDismissRichInputAfterSubmit,
+    ToggleSubmitRichInputOnCtrlEnter,
     ToggleTreatManualCodexAsPlainTerminal,
     SetCLIAgentForCommand {
         pattern: String,
@@ -3541,6 +3542,12 @@ impl TypedActionView for AISettingsPageView {
                     report_if_error!(settings
                         .auto_dismiss_rich_input_after_submit
                         .toggle_and_save_value(ctx));
+                });
+                ctx.notify();
+            }
+            AISettingsPageAction::ToggleSubmitRichInputOnCtrlEnter => {
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings.submit_on_ctrl_enter.toggle_and_save_value(ctx));
                 });
                 ctx.notify();
             }
@@ -7012,6 +7019,7 @@ struct CLIAgentWidget {
     auto_toggle_rich_input_info_tooltip: MouseStateHandle,
     auto_open_rich_input_on_cli_agent_start_toggle: SwitchStateHandle,
     auto_dismiss_rich_input_toggle: SwitchStateHandle,
+    submit_on_ctrl_enter_toggle: SwitchStateHandle,
     treat_manual_codex_as_plain_terminal_toggle: SwitchStateHandle,
 }
 
@@ -7707,6 +7715,10 @@ struct ApiKeysWidget {
     anthropic_api_key_editor: ViewHandle<EditorView>,
     google_api_key_editor: ViewHandle<EditorView>,
     open_router_api_key_editor: ViewHandle<EditorView>,
+
+    grok_connect_button: ViewHandle<ActionButton>,
+    grok_connecting_button: ViewHandle<ActionButton>,
+    grok_disconnect_button: ViewHandle<ActionButton>,
 
     can_use_warp_credits_for_fallback: SwitchStateHandle,
     upgrade_highlight_index: HighlightedHyperlink,
