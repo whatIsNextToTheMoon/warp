@@ -42,7 +42,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v6.0.3
         with:
           submodules: recursive
 
@@ -75,7 +75,7 @@ jobs:
           tool: sccache
 
       - name: Cache sccache
-        uses: actions/cache@v5
+        uses: actions/cache@v5.0.5
         with:
           # Must be an absolute, always-writable directory; sccache can be
           # invoked from build scripts with various working directories
