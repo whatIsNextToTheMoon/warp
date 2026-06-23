@@ -216,13 +216,13 @@ impl EnableAutoReloadModalBody {
     fn render_content(&self, appearance: &Appearance) -> Box<dyn Element> {
         let theme = appearance.theme();
         let explanation_fragments = vec![
-            FormattedTextFragment::plain_text("When enabled, "),
-            FormattedTextFragment::bold("auto-reload"),
-            FormattedTextFragment::plain_text(
+            FormattedTextFragment::plain_text(crate::i18n::ui_str("When enabled, ")),
+            FormattedTextFragment::bold(crate::i18n::ui_str("auto-reload")),
+            FormattedTextFragment::plain_text(crate::i18n::ui_str(
                 " will automatically purchase your selected package when you run out. ",
-            ),
+            )),
             FormattedTextFragment::hyperlink(
-                "Learn more",
+                crate::i18n::ui_str("Learn more"),
                 "https://docs.warp.dev/support-and-community/plans-and-billing/add-on-credits#id-2.-enable-auto-reload",
             ),
         ];

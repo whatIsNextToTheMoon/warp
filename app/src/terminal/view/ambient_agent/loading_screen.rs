@@ -49,7 +49,10 @@ pub fn render_cloud_mode_loading_screen(
         // Add link at the end if it exists
         if let Some(link_target) = tip.link() {
             fragments.push(FormattedTextFragment::plain_text(" "));
-            fragments.push(FormattedTextFragment::hyperlink("Learn more", link_target));
+            fragments.push(FormattedTextFragment::hyperlink(
+                crate::i18n::ui_str("Learn more"),
+                link_target,
+            ));
         }
 
         let formatted_text = FormattedText::new(vec![FormattedTextLine::Line(fragments)]);
@@ -154,8 +157,10 @@ fn render_tier_limits_footer(
     }
 
     let mut fragments = vec![FormattedTextFragment::plain_text(format!(
-        "Your agent is currently running on a {} machine. ",
-        specs
+        "{}{}{}",
+        crate::i18n::ui_str("Your agent is currently running on a "),
+        specs,
+        crate::i18n::ui_str(" machine. ")
     ))];
 
     // Get the upgrade URL for the current team
@@ -163,10 +168,13 @@ fn render_tier_limits_footer(
         .current_team()
         .map(|team| UserWorkspaces::upgrade_link_for_team(team.uid))?;
 
-    fragments.push(FormattedTextFragment::hyperlink("Upgrade", upgrade_url));
-    fragments.push(FormattedTextFragment::plain_text(
-        " for more powerful cloud agents.",
+    fragments.push(FormattedTextFragment::hyperlink(
+        crate::i18n::ui_str("Upgrade"),
+        upgrade_url,
     ));
+    fragments.push(FormattedTextFragment::plain_text(crate::i18n::ui_str(
+        " for more powerful cloud agents.",
+    )));
 
     let formatted_text = FormattedText::new(vec![FormattedTextLine::Line(fragments)]);
 

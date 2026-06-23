@@ -4697,28 +4697,41 @@ impl SettingsWidget for UsageWidget {
                 let upgrade_url = UserWorkspaces::upgrade_link_for_team(team.uid);
                 if has_admin_permissions {
                     vec![
-                        FormattedTextFragment::hyperlink("Upgrade", upgrade_url),
-                        FormattedTextFragment::plain_text(" to get more AI usage."),
+                        FormattedTextFragment::hyperlink(
+                            crate::i18n::ui_str("Upgrade"),
+                            upgrade_url,
+                        ),
+                        FormattedTextFragment::plain_text(crate::i18n::ui_str(
+                            " to get more AI usage.",
+                        )),
                     ]
                 } else {
                     // The /upgrade page says to contact their administrator.
                     vec![
-                        FormattedTextFragment::hyperlink("Compare plans", upgrade_url),
-                        FormattedTextFragment::plain_text(" for more AI usage."),
+                        FormattedTextFragment::hyperlink(
+                            crate::i18n::ui_str("Compare plans"),
+                            upgrade_url,
+                        ),
+                        FormattedTextFragment::plain_text(crate::i18n::ui_str(
+                            " for more AI usage.",
+                        )),
                     ]
                 }
             } else {
                 vec![
-                    FormattedTextFragment::hyperlink("Contact support", "mailto:support@warp.dev"),
-                    FormattedTextFragment::plain_text(" for more AI usage."),
+                    FormattedTextFragment::hyperlink(
+                        crate::i18n::ui_str("Contact support"),
+                        "mailto:support@warp.dev",
+                    ),
+                    FormattedTextFragment::plain_text(crate::i18n::ui_str(" for more AI usage.")),
                 ]
             }
         } else {
             let user_id = auth_state.user_id().unwrap_or_default();
             let upgrade_url = UserWorkspaces::upgrade_link(user_id);
             vec![
-                FormattedTextFragment::hyperlink("Upgrade", upgrade_url),
-                FormattedTextFragment::plain_text(" to get more AI usage."),
+                FormattedTextFragment::hyperlink(crate::i18n::ui_str("Upgrade"), upgrade_url),
+                FormattedTextFragment::plain_text(crate::i18n::ui_str(" to get more AI usage.")),
             ]
         };
 
@@ -5797,11 +5810,11 @@ impl AgentsWidget {
         );
 
         let codebase_context_description = vec![
-            FormattedTextFragment::plain_text(
+            FormattedTextFragment::plain_text(crate::i18n::ui_str(
                 "Allow the Warp Agent to generate an outline of your codebase that can be used for context. No code is ever stored on our servers. ",
-            ),
+            )),
             FormattedTextFragment::hyperlink(
-                "Learn more",
+                crate::i18n::ui_str("Learn more"),
                 "https://docs.warp.dev/agent-platform/capabilities/codebase-context",
             ),
         ];
@@ -5870,16 +5883,16 @@ impl AgentsWidget {
 
         let subtext = {
             let subtext_fragments = vec![
-                FormattedTextFragment::plain_text(
+                FormattedTextFragment::plain_text(crate::i18n::ui_str(
                     "You haven't added any MCP servers yet. Once you do, you'll be able to control how much autonomy the Warp Agent has when interacting with them. ",
-                ),
+                )),
                 FormattedTextFragment::hyperlink_action(
-                    "Add a server",
+                    crate::i18n::ui_str("Add a server"),
                     AISettingsPageAction::OpenMCPServerCollection,
                 ),
-                FormattedTextFragment::plain_text(" or "),
+                FormattedTextFragment::plain_text(crate::i18n::ui_str(" or ")),
                 FormattedTextFragment::hyperlink(
-                    "learn more about MCPs.",
+                    crate::i18n::ui_str("learn more about MCPs."),
                     "https://docs.warp.dev/agent-platform/capabilities/mcp",
                 ),
             ];
@@ -6223,9 +6236,11 @@ impl AIInputWidget {
             static AUTODETECTION_DESCRIPTION_FRAGMENTS: LazyLock<Vec<FormattedTextFragment>> =
                 LazyLock::new(|| {
                     vec![
-                        FormattedTextFragment::plain_text("Encountered an incorrect detection? "),
+                        FormattedTextFragment::plain_text(crate::i18n::ui_str(
+                            "Encountered an incorrect detection? ",
+                        )),
                         FormattedTextFragment::hyperlink(
-                            "Let us know",
+                            crate::i18n::ui_str("Let us know"),
                             "https://warpdotdev.typeform.com/to/offrTIpq",
                         ),
                     ]
@@ -6277,14 +6292,14 @@ impl AIInputWidget {
                 Vec<FormattedTextFragment>,
             > = LazyLock::new(|| {
                 vec![
-                    FormattedTextFragment::plain_text(
+                    FormattedTextFragment::plain_text(crate::i18n::ui_str(
                         "Enabling natural language detection will detect when natural language is written in the terminal input, and then automatically switch to Agent Mode for AI queries.",
-                    ),
-                    FormattedTextFragment::plain_text(
+                    )),
+                    FormattedTextFragment::plain_text(crate::i18n::ui_str(
                         " Encountered an incorrect input detection? ",
-                    ),
+                    )),
                     FormattedTextFragment::hyperlink(
-                        "Let us know",
+                        crate::i18n::ui_str("Let us know"),
                         "https://warpdotdev.typeform.com/to/offrTIpq",
                     ),
                 ]
@@ -6388,12 +6403,11 @@ impl SettingsWidget for MCPServersWidget {
         .finish();
 
         let mcp_description = vec![
-            FormattedTextFragment::plain_text(
-                "Add MCP servers to extend the Warp Agent's capabilities. \
-            MCP servers expose data sources or tools to agents through a standardized interface, essentially acting like plugins. ",
-            ),
+            FormattedTextFragment::plain_text(crate::i18n::ui_str(
+                "Add MCP servers to extend the Warp Agent's capabilities. MCP servers expose data sources or tools to agents through a standardized interface, essentially acting like plugins. ",
+            )),
             FormattedTextFragment::hyperlink(
-                "Learn more",
+                crate::i18n::ui_str("Learn more"),
                 "https://docs.warp.dev/agent-platform/capabilities/mcp",
             ),
         ];
@@ -6435,11 +6449,11 @@ impl SettingsWidget for MCPServersWidget {
                             Vec<FormattedTextFragment>,
                         > = LazyLock::new(|| {
                             vec![
-                                FormattedTextFragment::plain_text(
+                                FormattedTextFragment::plain_text(crate::i18n::ui_str(
                                     "Automatically detect and spawn MCP servers from globally-scoped third-party AI agent configuration files (e.g. in your home directory). Servers detected inside a repository are never spawned automatically and must be enabled individually from the MCP settings page. ",
-                                ),
+                                )),
                                 FormattedTextFragment::hyperlink(
-                                    "See supported providers.",
+                                    crate::i18n::ui_str("See supported providers."),
                                     "https://docs.warp.dev/agent-platform/capabilities/mcp#file-based-mcp-servers",
                                 ),
                             ]
@@ -6695,7 +6709,7 @@ impl VoiceWidget {
                     "Voice input allows you to control Warp by speaking directly to your terminal (powered by ",
                 ),
             ),
-            FormattedTextFragment::hyperlink("Wispr Flow", WISPR_FLOW_URL),
+            FormattedTextFragment::hyperlink(crate::i18n::ui_str("Wispr Flow"), WISPR_FLOW_URL),
             FormattedTextFragment::plain_text(")."),
         ];
 
@@ -7052,13 +7066,13 @@ impl SettingsWidget for CLIAgentWidget {
         );
 
         let description_fragments = vec![
-            FormattedTextFragment::plain_text(
+            FormattedTextFragment::plain_text(crate::i18n::ui_str(
                 "Show a toolbar with quick actions when running coding agents like ",
-            ),
+            )),
             FormattedTextFragment::inline_code("claude"),
             FormattedTextFragment::plain_text(", "),
             FormattedTextFragment::inline_code("codex"),
-            FormattedTextFragment::plain_text(", or "),
+            FormattedTextFragment::plain_text(crate::i18n::ui_str(", or ")),
             FormattedTextFragment::inline_code("gemini"),
             FormattedTextFragment::plain_text("."),
         ];
@@ -8002,10 +8016,13 @@ impl ApiKeysWidget {
     fn render_custom_inference_description(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         let text_fragments = vec![
-            FormattedTextFragment::plain_text(
+            FormattedTextFragment::plain_text(crate::i18n::ui_str(
                 "Use your own API keys from model providers for Warp Agent. You can also add custom endpoints to use third-party models. Custom endpoints must support the OpenAI-compatible Chat Completions API. API keys are stored only on your device, never on Warp's servers. They're used to make requests to your chosen model provider. Using auto models or models from providers you have not provided API keys for will consume Warp credits. ",
+            )),
+            FormattedTextFragment::hyperlink(
+                crate::i18n::ui_str("Learn more"),
+                CUSTOM_INFERENCE_LEARN_MORE_URL,
             ),
-            FormattedTextFragment::hyperlink("Learn more", CUSTOM_INFERENCE_LEARN_MORE_URL),
         ];
         let description = FormattedTextElement::new(
             FormattedText::new([FormattedTextLine::Line(text_fragments)]),
@@ -8040,13 +8057,16 @@ impl ApiKeysWidget {
         .finish();
 
         let tooltip_text = FormattedText::new([FormattedTextLine::Line(vec![
-            FormattedTextFragment::plain_text(
+            FormattedTextFragment::plain_text(crate::i18n::ui_str(
                 "By using BYOK or custom endpoints, you agree to use them only as permitted by ",
+            )),
+            FormattedTextFragment::hyperlink(
+                crate::i18n::ui_str("Warp's Terms of Service"),
+                CUSTOM_INFERENCE_TERMS_URL,
             ),
-            FormattedTextFragment::hyperlink("Warp's Terms of Service", CUSTOM_INFERENCE_TERMS_URL),
-            FormattedTextFragment::plain_text(
+            FormattedTextFragment::plain_text(crate::i18n::ui_str(
                 ". BYOK and custom endpoints are intended for individual use and small teams. Companies or organizations with more than 10 employees should use Warp Business or Enterprise.",
-            ),
+            )),
         ])]);
         let tooltip_background = appearance.theme().tooltip_background();
 
@@ -8516,10 +8536,13 @@ impl SettingsWidget for ApiKeysWidget {
             {
                 if team.billing_metadata.customer_type == CustomerType::Enterprise {
                     vec![
-                        FormattedTextFragment::hyperlink("Contact sales", "mailto:sales@warp.dev"),
-                        FormattedTextFragment::plain_text(
-                            " to enable bringing your own API keys on your Enterprise plan.",
+                        FormattedTextFragment::hyperlink(
+                            crate::i18n::ui_str("Contact sales"),
+                            "mailto:sales@warp.dev",
                         ),
+                        FormattedTextFragment::plain_text(crate::i18n::ui_str(
+                            " to enable bringing your own API keys on your Enterprise plan.",
+                        )),
                     ]
                 } else {
                     let current_user_email = auth_state.user_email().unwrap_or_default();
@@ -8528,15 +8551,17 @@ impl SettingsWidget for ApiKeysWidget {
                     if has_admin_permissions {
                         vec![
                             FormattedTextFragment::hyperlink(
-                                "Upgrade to the Build plan",
+                                crate::i18n::ui_str("Upgrade to the Build plan"),
                                 upgrade_url,
                             ),
-                            FormattedTextFragment::plain_text(" to use your own API keys."),
+                            FormattedTextFragment::plain_text(crate::i18n::ui_str(
+                                " to use your own API keys.",
+                            )),
                         ]
                     } else {
-                        vec![FormattedTextFragment::plain_text(
+                        vec![FormattedTextFragment::plain_text(crate::i18n::ui_str(
                             "Ask your team's admin to upgrade to the Build plan to use your own API keys.",
-                        )]
+                        ))]
                     }
                 }
             } else if FeatureFlag::SoloUserByok.is_enabled()
@@ -8555,8 +8580,13 @@ impl SettingsWidget for ApiKeysWidget {
                 let user_id = auth_state.user_id().unwrap_or_default();
                 let upgrade_url = UserWorkspaces::upgrade_link(user_id);
                 vec![
-                    FormattedTextFragment::hyperlink("Upgrade to the Build plan", upgrade_url),
-                    FormattedTextFragment::plain_text(" to use your own API keys."),
+                    FormattedTextFragment::hyperlink(
+                        crate::i18n::ui_str("Upgrade to the Build plan"),
+                        upgrade_url,
+                    ),
+                    FormattedTextFragment::plain_text(crate::i18n::ui_str(
+                        " to use your own API keys.",
+                    )),
                 ]
             };
 

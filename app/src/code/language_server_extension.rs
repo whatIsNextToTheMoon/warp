@@ -593,11 +593,11 @@ impl LocalCodeEditorView {
 
         // Create the diagnostic text with bold severity prefix.
         let severity_text = match diagnostic.severity {
-            lsp_types::DiagnosticSeverity::ERROR => "Error",
-            lsp_types::DiagnosticSeverity::WARNING => "Warning",
-            lsp_types::DiagnosticSeverity::INFORMATION => "Info",
-            lsp_types::DiagnosticSeverity::HINT => "Hint",
-            _ => "Diagnostic",
+            lsp_types::DiagnosticSeverity::ERROR => crate::i18n::ui_str("Error"),
+            lsp_types::DiagnosticSeverity::WARNING => crate::i18n::ui_str("Warning"),
+            lsp_types::DiagnosticSeverity::INFORMATION => crate::i18n::ui_str("Info"),
+            lsp_types::DiagnosticSeverity::HINT => crate::i18n::ui_str("Hint"),
+            _ => crate::i18n::ui_str("Diagnostic"),
         };
 
         let text = FormattedText::new([FormattedTextLine::Line(vec![

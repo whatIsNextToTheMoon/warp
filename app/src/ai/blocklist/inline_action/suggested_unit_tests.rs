@@ -325,7 +325,7 @@ impl SuggestedUnitTestsView {
         let formatted_text = FormattedTextElement::new(
             FormattedText::new([FormattedTextLine::Line(vec![
                 FormattedTextFragment::hyperlink(
-                    "Manage suggested code banner settings",
+                    crate::i18n::ui_str("Manage suggested code banner settings"),
                     "Settings > AI",
                 ),
             ])]),

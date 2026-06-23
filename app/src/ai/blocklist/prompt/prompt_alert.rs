@@ -200,31 +200,31 @@ impl PromptAlertView {
         text_fragments.push(FormattedTextFragment::plain_text("  "));
         match state {
             PromptAlertState::NoConnection => {
-                text_fragments.push(FormattedTextFragment::plain_text(
+                text_fragments.push(FormattedTextFragment::plain_text(crate::i18n::ui_text(
                     NO_CONNECTION_PRIMARY_TEXT,
-                ));
+                )));
             }
             PromptAlertState::AnonymousUserRequestLimitSoftGate => {
-                text_fragments.push(FormattedTextFragment::plain_text(
+                text_fragments.push(FormattedTextFragment::plain_text(crate::i18n::ui_text(
                     ANONYMOUS_USER_REQUEST_LIMIT_SOFT_GATE_PRIMARY_TEXT,
-                ));
+                )));
             }
             PromptAlertState::AnonymousUserRequestLimitHardGate => {
-                text_fragments.push(FormattedTextFragment::plain_text(
+                text_fragments.push(FormattedTextFragment::plain_text(crate::i18n::ui_text(
                     ANONYMOUS_USER_REQUEST_LIMIT_HARD_GATE_PRIMARY_TEXT,
-                ));
+                )));
             }
             PromptAlertState::DelinquentDueToPaymentIssue => {
-                text_fragments.push(FormattedTextFragment::plain_text(
+                text_fragments.push(FormattedTextFragment::plain_text(crate::i18n::ui_text(
                     DELINQUENT_DUE_TO_PAYMENT_ISSUE_PRIMARY_TEXT,
-                ));
+                )));
             }
             PromptAlertState::OveragesToggleableButNotEnabled
             | PromptAlertState::MonthlyOveragesSpendLimitReached
             | PromptAlertState::RequestLimitReached => {
-                text_fragments.push(FormattedTextFragment::plain_text(
+                text_fragments.push(FormattedTextFragment::plain_text(crate::i18n::ui_text(
                     OUT_OF_REQUESTS_PRIMARY_TEXT,
-                ));
+                )));
             }
             PromptAlertState::NoAlert => {}
         }
@@ -248,7 +248,7 @@ impl PromptAlertView {
             | PromptAlertState::AnonymousUserRequestLimitHardGate => {
                 text_fragments.push(FormattedTextFragment::plain_text("  "));
                 text_fragments.push(FormattedTextFragment::hyperlink_action(
-                    ANONYMOUS_USER_REQUEST_LIMIT_ACTION_TEXT,
+                    crate::i18n::ui_text(ANONYMOUS_USER_REQUEST_LIMIT_ACTION_TEXT),
                     PromptAlertAction::SignUpClickedForAnonymousUser,
                 ));
             }
@@ -260,41 +260,41 @@ impl PromptAlertView {
                 if has_admin_permissions && has_billing_history {
                     text_fragments.push(FormattedTextFragment::plain_text("  "));
                     text_fragments.push(FormattedTextFragment::hyperlink_action(
-                        DELINQUENT_DUE_TO_PAYMENT_ISSUE_ACTION_TEXT,
+                        crate::i18n::ui_text(DELINQUENT_DUE_TO_PAYMENT_ISSUE_ACTION_TEXT),
                         PromptAlertAction::ManageBillingClicked {
                             team_uid: current_team.map(|team| team.uid).unwrap_or_default(),
                         },
                     ));
                 } else {
-                    text_fragments.push(FormattedTextFragment::plain_text(
+                    text_fragments.push(FormattedTextFragment::plain_text(crate::i18n::ui_text(
                         NON_ADMIN_CONTACT_ADMIN_TEXT,
-                    ));
+                    )));
                 }
             }
             PromptAlertState::OveragesToggleableButNotEnabled => {
                 if has_admin_permissions {
                     text_fragments.push(FormattedTextFragment::plain_text("  "));
                     text_fragments.push(FormattedTextFragment::hyperlink_action(
-                        OVERAGES_TOGGLEABLE_BUT_NOT_ENABLED_ACTION_TEXT,
+                        crate::i18n::ui_text(OVERAGES_TOGGLEABLE_BUT_NOT_ENABLED_ACTION_TEXT),
                         PromptAlertAction::OpenSettingsClicked,
                     ));
                 } else {
-                    text_fragments.push(FormattedTextFragment::plain_text(
+                    text_fragments.push(FormattedTextFragment::plain_text(crate::i18n::ui_text(
                         NON_ADMIN_ASK_ADMIN_TO_ENABLE_OVERAGES_TEXT,
-                    ));
+                    )));
                 }
             }
             PromptAlertState::MonthlyOveragesSpendLimitReached => {
                 if has_admin_permissions {
                     text_fragments.push(FormattedTextFragment::plain_text("  "));
                     text_fragments.push(FormattedTextFragment::hyperlink_action(
-                        MONTHLY_OVERAGES_SPEND_LIMIT_REACHED_ACTION_TEXT,
+                        crate::i18n::ui_text(MONTHLY_OVERAGES_SPEND_LIMIT_REACHED_ACTION_TEXT),
                         PromptAlertAction::OpenSettingsClicked,
                     ));
                 } else {
-                    text_fragments.push(FormattedTextFragment::plain_text(
+                    text_fragments.push(FormattedTextFragment::plain_text(crate::i18n::ui_text(
                         NON_ADMIN_ASK_ADMIN_TO_INCREASE_OVERAGES_TEXT,
-                    ));
+                    )));
                 }
             }
             PromptAlertState::RequestLimitReached => {
@@ -310,11 +310,13 @@ impl PromptAlertView {
                             UPGRADE_TEXT
                         };
 
-                        text_fragments
-                            .push(FormattedTextFragment::hyperlink(upgrade_text, upgrade_url));
+                        text_fragments.push(FormattedTextFragment::hyperlink(
+                            crate::i18n::ui_text(upgrade_text),
+                            upgrade_url,
+                        ));
                     } else {
                         text_fragments.push(FormattedTextFragment::hyperlink(
-                            CONTACT_SUPPORT_TEXT,
+                            crate::i18n::ui_text(CONTACT_SUPPORT_TEXT),
                             "mailto:support@warp.dev".to_owned(),
                         ));
                     }
@@ -331,12 +333,17 @@ impl PromptAlertView {
                         } else {
                             UPGRADE_TEXT
                         };
-                    text_fragments.push(FormattedTextFragment::hyperlink(label, upgrade_url));
+                    text_fragments.push(FormattedTextFragment::hyperlink(
+                        crate::i18n::ui_text(label),
+                        upgrade_url,
+                    ));
                 }
                 if UserWorkspaces::as_ref(app).is_byo_api_key_enabled(app) {
-                    text_fragments.push(FormattedTextFragment::plain_text(" or "));
+                    text_fragments.push(FormattedTextFragment::plain_text(crate::i18n::ui_str(
+                        " or ",
+                    )));
                     text_fragments.push(FormattedTextFragment::hyperlink_action(
-                        "use your own API keys",
+                        crate::i18n::ui_str("use your own API keys"),
                         WorkspaceAction::ShowSettingsPageWithSearch {
                             search_query: "api".to_string(),
                             section: Some(SettingsSection::WarpAgent),
@@ -400,7 +407,7 @@ impl View for PromptAlertView {
         if suggest_buy_credits {
             text_fragments.push(FormattedTextFragment::plain_text("  "));
             text_fragments.push(FormattedTextFragment::hyperlink_action(
-                "Add credits",
+                crate::i18n::ui_str("Add credits"),
                 WorkspaceAction::ShowSettingsPage(SettingsSection::BillingAndUsage),
             ));
         } else {

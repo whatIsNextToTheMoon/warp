@@ -928,14 +928,18 @@ impl BlocklistAIStatusBar {
         if let Some(auth_url) = ambient_agent_model.github_auth_url() {
             let error_message = ambient_agent_model
                 .github_auth_error_message()
-                .unwrap_or("Missing GitHub authentication.");
+                .map(crate::i18n::ui_text)
+                .unwrap_or_else(|| crate::i18n::ui_str("Missing GitHub authentication."));
             return Some(render_wrapping_standard_message_bar(
                 CoreIcon::Triangle,
                 error_color,
                 error_color,
                 vec![
                     FormattedTextFragment::plain_text(format!("{error_message} ")),
-                    FormattedTextFragment::hyperlink("Authenticate GitHub", auth_url.to_owned()),
+                    FormattedTextFragment::hyperlink(
+                        crate::i18n::ui_str("Authenticate GitHub"),
+                        auth_url.to_owned(),
+                    ),
                 ],
                 app,
             ));
@@ -947,9 +951,9 @@ impl BlocklistAIStatusBar {
                 CoreIcon::StopFilled,
                 color,
                 color,
-                vec![FormattedTextFragment::plain_text(
+                vec![FormattedTextFragment::plain_text(crate::i18n::ui_str(
                     "Cloud agent run cancelled",
-                )],
+                ))],
                 app,
             ));
         }
@@ -1010,7 +1014,10 @@ fn render_agent_tip(tip: &AgentTip, app: &AppContext) -> Box<dyn Element> {
         fragments.push(FormattedTextFragment::hyperlink_action(text, action));
     } else if let Some(link_target) = tip.link.clone() {
         fragments.push(FormattedTextFragment::plain_text(" "));
-        fragments.push(FormattedTextFragment::hyperlink("Learn more", link_target));
+        fragments.push(FormattedTextFragment::hyperlink(
+            crate::i18n::ui_str("Learn more"),
+            link_target,
+        ));
     }
 
     let formatted_text =

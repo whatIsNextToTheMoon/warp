@@ -3952,10 +3952,13 @@ impl TerminalView {
         let slow_bootstrap_banner = ctx.add_typed_action_view(|_| {
             Banner::<TerminalAction>::new_with_buttons(
                 BannerTextContent::formatted_text(vec![
-                    FormattedTextFragment::plain_text(
+                    FormattedTextFragment::plain_text(crate::i18n::ui_str(
                         "Seems like your shell is taking a while to start...  ",
+                    )),
+                    FormattedTextFragment::hyperlink(
+                        crate::i18n::ui_str("More info"),
+                        KNOWN_ISSUES_URL,
                     ),
-                    FormattedTextFragment::hyperlink("More info", KNOWN_ISSUES_URL),
                 ]),
                 vec![BannerTextButton::new(
                     "Show initialization block".to_string(),
@@ -3978,14 +3981,21 @@ impl TerminalView {
 
         let control_master_error_banner = ctx.add_typed_action_view(|_| {
             Banner::new(BannerTextContent::formatted_text(vec![
-                FormattedTextFragment::plain_text("Seems like your completions are not working ("),
-                FormattedTextFragment::hyperlink("more info", CONTROLMASTER_ISSUES_URL),
-                FormattedTextFragment::plain_text("). Enabling the SSH extension in "),
+                FormattedTextFragment::plain_text(crate::i18n::ui_str(
+                    "Seems like your completions are not working (",
+                )),
+                FormattedTextFragment::hyperlink(
+                    crate::i18n::ui_str("more info"),
+                    CONTROLMASTER_ISSUES_URL,
+                ),
+                FormattedTextFragment::plain_text(crate::i18n::ui_str(
+                    "). Enabling the SSH extension in ",
+                )),
                 FormattedTextFragment::hyperlink_action(
-                    "settings",
+                    crate::i18n::ui_str("settings"),
                     TerminalAction::ShowWarpifySettings,
                 ),
-                FormattedTextFragment::plain_text(" may resolve this issue."),
+                FormattedTextFragment::plain_text(crate::i18n::ui_str(" may resolve this issue.")),
             ]))
         });
 
@@ -3995,10 +4005,13 @@ impl TerminalView {
 
         let incompatible_configuration_banner = ctx.add_typed_action_view(|_| {
             Banner::new(BannerTextContent::formatted_text(vec![
-                FormattedTextFragment::plain_text(
+                FormattedTextFragment::plain_text(crate::i18n::ui_str(
                     "Your shell configuration is incompatible with Warp...  ",
+                )),
+                FormattedTextFragment::hyperlink(
+                    crate::i18n::ui_str("More info"),
+                    KNOWN_ISSUES_URL,
                 ),
-                FormattedTextFragment::hyperlink("More info", KNOWN_ISSUES_URL),
             ]))
         });
 
@@ -4009,11 +4022,11 @@ impl TerminalView {
         let emacs_bindings_banner = ctx.add_typed_action_view(|_| {
             Banner::new_with_buttons(
                 BannerTextContent::formatted_text(vec![
-                    FormattedTextFragment::plain_text("Did you intend "),
+                    FormattedTextFragment::plain_text(crate::i18n::ui_str("Did you intend ")),
                     FormattedTextFragment::inline_code("ctrl-a"),
                     FormattedTextFragment::plain_text("/"),
                     FormattedTextFragment::inline_code("ctrl-e"),
-                    FormattedTextFragment::plain_text(" to move the cursor?"),
+                    FormattedTextFragment::plain_text(crate::i18n::ui_str(" to move the cursor?")),
                 ]),
                 // Here, we use DismissalType::Temporary and DismissalType::Permanent variants
                 // as stand-ins for changing bindings vs. leaving them as-is.
@@ -22741,23 +22754,30 @@ impl TerminalView {
         let show_banner = if honor_ps1 {
             let banner_content = if shell_plugins.contains("p10k_unsupported") {
                 Some(BannerTextContent::formatted_text(vec![
-                    FormattedTextFragment::bold("Powerlevel10k now supports Warp!  "),
-                    FormattedTextFragment::plain_text(
+                    FormattedTextFragment::bold(crate::i18n::ui_str(
+                        "Powerlevel10k now supports Warp!  ",
+                    )),
+                    FormattedTextFragment::plain_text(crate::i18n::ui_str(
                         "You seem to be running an older (unsupported) version, please follow ",
-                    ),
+                    )),
                     FormattedTextFragment::hyperlink(
-                        "these instructions",
+                        crate::i18n::ui_str("these instructions"),
                         P10K_UPDATE_INSTRUCTIONS_URL,
                     ),
-                    FormattedTextFragment::plain_text(" to update to the latest version."),
+                    FormattedTextFragment::plain_text(crate::i18n::ui_str(
+                        " to update to the latest version.",
+                    )),
                 ]))
             } else if shell_plugins.contains("pure") {
                 Some(BannerTextContent::formatted_text(vec![
-                    FormattedTextFragment::plain_text(
+                    FormattedTextFragment::plain_text(crate::i18n::ui_str(
                         "Pure is not yet supported in Warp. You might consider one of the \
                         supported prompts as an alternative.  ",
+                    )),
+                    FormattedTextFragment::hyperlink(
+                        crate::i18n::ui_str("Learn more"),
+                        PROMPT_COMPATIBILITY_URL,
                     ),
-                    FormattedTextFragment::hyperlink("Learn more", PROMPT_COMPATIBILITY_URL),
                 ]))
             } else {
                 None

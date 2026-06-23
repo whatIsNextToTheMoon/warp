@@ -574,11 +574,14 @@ impl BuyCreditsBanner {
             if is_at_monthly_limit || would_purchase_exceed_limit {
                 // Create formatted text with clickable hyperlink
                 let warning_text_fragments = vec![
-                    FormattedTextFragment::plain_text(
+                    FormattedTextFragment::plain_text(crate::i18n::ui_str(
                         "Purchasing these credits would take you over your monthly spend limit. ",
+                    )),
+                    FormattedTextFragment::hyperlink_action(
+                        crate::i18n::ui_str("Increase it"),
+                        Action::ManageBilling,
                     ),
-                    FormattedTextFragment::hyperlink_action("Increase it", Action::ManageBilling),
-                    FormattedTextFragment::plain_text(" to continue."),
+                    FormattedTextFragment::plain_text(crate::i18n::ui_str(" to continue.")),
                 ];
 
                 let formatted_warning = FormattedTextElement::new(

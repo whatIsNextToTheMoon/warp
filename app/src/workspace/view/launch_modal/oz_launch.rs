@@ -28,9 +28,9 @@ impl Slide for OzLaunchSlide {
 
     fn modal_subtext_paragraphs(&self) -> Vec<FormattedTextLine> {
         vec![FormattedTextLine::Line(vec![
-            FormattedTextFragment::plain_text(
+            FormattedTextFragment::plain_text(crate::i18n::ui_str(
                 "Infinitely scalable coding agent — run in local sessions or in the cloud.",
-            ),
+            )),
         ])]
     }
 

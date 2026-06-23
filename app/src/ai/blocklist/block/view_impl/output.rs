@@ -984,7 +984,7 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                                         .and_then(|c| c.title())
                                         .map(|q| truncate_from_end(&q, 40));
                                     Some((
-                                        "conversation",
+                                        crate::i18n::ui_str("conversation"),
                                         title.unwrap_or_else(|| target_id.clone()),
                                     ))
                                 })
@@ -999,13 +999,17 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                                         })
                                         .map(|task| truncate_from_end(&task.title, 40));
                                     Some((
-                                        "agent run",
+                                        crate::i18n::ui_str("agent run"),
                                         title.unwrap_or_else(|| truncate_from_end(target_id, 40)),
                                     ))
                                 });
 
                             let done = is_finished || is_cancelled;
-                            let verb = if done { "Searched" } else { "Searching" };
+                            let verb = if done {
+                                crate::i18n::ui_str("Searched")
+                            } else {
+                                crate::i18n::ui_str("Searching")
+                            };
 
                             let mut fragments: Vec<FormattedTextFragment> =
                                 vec![FormattedTextFragment::plain_text(format!("{verb} "))];
@@ -1021,7 +1025,7 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                                 }
                                 None => {
                                     fragments.push(FormattedTextFragment::plain_text(
-                                        "this conversation",
+                                        crate::i18n::ui_str("this conversation"),
                                     ));
                                 }
                             };
@@ -2392,9 +2396,9 @@ fn create_formatted_text_for_grep(
         .is_some_and(|status| status.is_queued());
 
     let display_path = if path == "." {
-        "the current directory"
+        crate::i18n::ui_str("the current directory")
     } else {
-        path
+        path.to_string()
     };
 
     let formatted_text = if queries.len() == 1 {
@@ -2403,20 +2407,24 @@ fn create_formatted_text_for_grep(
             .expect("Queries slice should have an element");
         let mut fragments = if is_cancelled || is_queued {
             vec![
-                FormattedTextFragment::plain_text("Grep for "),
+                FormattedTextFragment::plain_text(crate::i18n::ui_str("Grep for ")),
                 FormattedTextFragment::inline_code(query),
             ]
         } else {
             vec![
-                FormattedTextFragment::plain_text("Grepping for "),
+                FormattedTextFragment::plain_text(crate::i18n::ui_str("Grepping for ")),
                 FormattedTextFragment::inline_code(query),
             ]
         };
-        fragments.push(if is_cancelled {
-            FormattedTextFragment::plain_text(format!(" in {display_path} cancelled"))
-        } else {
-            FormattedTextFragment::plain_text(format!(" in {display_path}"))
-        });
+        fragments.push(FormattedTextFragment::plain_text(format!(
+            "{}{display_path}",
+            crate::i18n::ui_str(" in ")
+        )));
+        if is_cancelled {
+            fragments.push(FormattedTextFragment::plain_text(crate::i18n::ui_str(
+                " cancelled",
+            )));
+        }
         FormattedText::new([FormattedTextLine::Line(fragments)])
     } else {
         let mut lines = Vec::new();
@@ -2424,17 +2432,20 @@ fn create_formatted_text_for_grep(
         if is_cancelled {
             lines.push(FormattedTextLine::Line(vec![
                 FormattedTextFragment::plain_text(format!(
-                    "Cancelled grep for the following patterns in {display_path}"
+                    "{}{display_path}",
+                    crate::i18n::ui_str("Cancelled grep for the following patterns in ")
                 )),
             ]));
         } else {
             lines.push(FormattedTextLine::Line(vec![if is_queued {
                 FormattedTextFragment::plain_text(format!(
-                    "Grep for the following patterns in {display_path}"
+                    "{}{display_path}",
+                    crate::i18n::ui_str("Grep for the following patterns in ")
                 ))
             } else {
                 FormattedTextFragment::plain_text(format!(
-                    "Grepping for the following patterns in {display_path}"
+                    "{}{display_path}",
+                    crate::i18n::ui_str("Grepping for the following patterns in ")
                 ))
             }]));
         }
@@ -2491,7 +2502,9 @@ fn create_formatted_text_for_file_glob(
         .as_ref()
         .is_some_and(|status| status.is_queued());
 
-    let path = path.unwrap_or("the current directory");
+    let path = path
+        .map(str::to_string)
+        .unwrap_or_else(|| crate::i18n::ui_str("the current directory"));
 
     let formatted_text = if patterns.len() == 1 {
         let pattern = patterns
@@ -2500,20 +2513,26 @@ fn create_formatted_text_for_file_glob(
 
         let mut fragments = if is_cancelled || is_queued {
             vec![
-                FormattedTextFragment::plain_text("Search for files that match "),
+                FormattedTextFragment::plain_text(crate::i18n::ui_str(
+                    "Search for files that match ",
+                )),
                 FormattedTextFragment::inline_code(pattern),
             ]
         } else {
             vec![
-                FormattedTextFragment::plain_text("Finding files that match "),
+                FormattedTextFragment::plain_text(crate::i18n::ui_str("Finding files that match ")),
                 FormattedTextFragment::inline_code(pattern),
             ]
         };
-        fragments.push(if is_cancelled {
-            FormattedTextFragment::plain_text(format!(" in {path} cancelled"))
-        } else {
-            FormattedTextFragment::plain_text(format!(" in {path}"))
-        });
+        fragments.push(FormattedTextFragment::plain_text(format!(
+            "{}{path}",
+            crate::i18n::ui_str(" in ")
+        )));
+        if is_cancelled {
+            fragments.push(FormattedTextFragment::plain_text(crate::i18n::ui_str(
+                " cancelled",
+            )));
+        }
         FormattedText::new([FormattedTextLine::Line(fragments)])
     } else {
         let mut lines = Vec::new();
@@ -2521,17 +2540,22 @@ fn create_formatted_text_for_file_glob(
         if is_cancelled {
             lines.push(FormattedTextLine::Line(vec![
                 FormattedTextFragment::plain_text(format!(
-                    "Cancelled search for files that match the following patterns in {path}"
+                    "{}{path}",
+                    crate::i18n::ui_str(
+                        "Cancelled search for files that match the following patterns in "
+                    )
                 )),
             ]));
         } else {
             lines.push(FormattedTextLine::Line(vec![if is_queued {
                 FormattedTextFragment::plain_text(format!(
-                    "Find files that match the following patterns in {path}"
+                    "{}{path}",
+                    crate::i18n::ui_str("Find files that match the following patterns in ")
                 ))
             } else {
                 FormattedTextFragment::plain_text(format!(
-                    "Finding files that match the following patterns in {path}"
+                    "{}{path}",
+                    crate::i18n::ui_str("Finding files that match the following patterns in ")
                 ))
             }]));
         }

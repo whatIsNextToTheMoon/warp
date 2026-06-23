@@ -688,8 +688,11 @@ impl BillingCycleUsageSectionView {
         let sub_text = theme.sub_text_color(theme.background());
         let body = FormattedTextElement::new(
             FormattedText::new([FormattedTextLine::Line(vec![
-                FormattedTextFragment::hyperlink_action(link_text, action),
-                FormattedTextFragment::plain_text(format!(" {trailing_copy}")),
+                FormattedTextFragment::hyperlink_action(crate::i18n::ui_text(link_text), action),
+                FormattedTextFragment::plain_text(format!(
+                    " {}",
+                    crate::i18n::ui_text(trailing_copy)
+                )),
             ])]),
             appearance.ui_font_size(),
             appearance.ui_font_family(),

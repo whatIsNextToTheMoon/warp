@@ -1227,7 +1227,9 @@ impl BillingAndUsagePageV2View {
                 FormattedTextElement::new(
                     FormattedText::new([FormattedTextLine::Line(vec![
                         FormattedTextFragment::hyperlink(link_text, url),
-                        FormattedTextFragment::plain_text(" to purchase add-on credits."),
+                        FormattedTextFragment::plain_text(crate::i18n::ui_str(
+                            " to purchase add-on credits.",
+                        )),
                     ])]),
                     appearance.ui_font_size(),
                     appearance.ui_font_family(),

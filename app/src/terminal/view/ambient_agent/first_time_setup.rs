@@ -156,11 +156,11 @@ impl FirstTimeCloudAgentSetupView {
 
         // Description with "Visit docs" link
         let description_fragments = vec![
-            FormattedTextFragment::plain_text(
+            FormattedTextFragment::plain_text(crate::i18n::ui_str(
                 "Use Oz cloud agents to run parallel agents, build agents that run autonomously, and check in on your agents from anywhere. ",
-            ),
+            )),
             FormattedTextFragment::hyperlink(
-                "Visit docs",
+                crate::i18n::ui_str("Visit docs"),
                 "https://docs.warp.dev/agent-platform/cloud-agents/overview",
             ),
         ];

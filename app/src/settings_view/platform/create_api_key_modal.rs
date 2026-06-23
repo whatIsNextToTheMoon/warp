@@ -609,9 +609,14 @@ impl View for CreateApiKeyModal {
                 let description_text = if selected_key_type == ApiKeyType::Agent {
                     FormattedTextElement::new(
                         FormattedText::new([FormattedTextLine::Line(vec![
-                            FormattedTextFragment::plain_text(selected_key_type.description()),
+                            FormattedTextFragment::plain_text(crate::i18n::ui_text(
+                                selected_key_type.description(),
+                            )),
                             FormattedTextFragment::plain_text(" "),
-                            FormattedTextFragment::hyperlink("Learn more", API_KEY_DOCS_URL),
+                            FormattedTextFragment::hyperlink(
+                                crate::i18n::ui_str("Learn more"),
+                                API_KEY_DOCS_URL,
+                            ),
                         ])]),
                         LABEL_FONT_SIZE,
                         appearance.ui_font_family(),
