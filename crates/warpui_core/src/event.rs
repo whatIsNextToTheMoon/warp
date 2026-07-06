@@ -284,6 +284,7 @@ impl InBoundsExt for Event {
             Event::KeyDown { .. }
             | Event::ModifierKeyChanged { .. }
             | Event::TypedCharacters { .. }
+            | Event::ImeCommit { .. }
             | Event::DragFileExit
             | Event::SetMarkedText { .. }
             | Event::ClearMarkedText => true,
