@@ -105,6 +105,22 @@ pub fn init() {
         if let Some(rest) = trimmed.strip_prefix("Rule: ") {
             return Some(Cow::Owned(format!("规则：{rest}")));
         }
+        if let Some(rest) = trimmed.strip_prefix("Run time: ") {
+            return Some(Cow::Owned(format!("运行时间：{rest}")));
+        }
+        if let Some(rest) = trimmed.strip_prefix("Credits used: ") {
+            return Some(Cow::Owned(format!("已用点数：{rest}")));
+        }
+        if let Some(rest) = trimmed.strip_prefix("Error: ") {
+            return Some(Cow::Owned(format!("错误：{rest}")));
+        }
+        if let Some(rest) = trimmed.strip_prefix("Select an API key type to use ") {
+            if let Some(name) = rest.strip_suffix(" in the cloud with Oz.") {
+                return Some(Cow::Owned(format!(
+                    "选择 API Key 类型，以便在云端通过 Oz 使用 {name}。"
+                )));
+            }
+        }
         if let Some(rest) = trimmed.strip_prefix("Move to ") {
             return Some(Cow::Owned(format!("移动到 {rest}")));
         }
