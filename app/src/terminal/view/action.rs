@@ -70,7 +70,6 @@ pub enum AgentOnboardingVersion {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OnboardingVersion {
-    Legacy,
     Agent(AgentOnboardingVersion),
 }
 

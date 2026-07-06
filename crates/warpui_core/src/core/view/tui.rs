@@ -21,6 +21,12 @@ pub trait TuiView: Entity {
     fn ui_name() -> &'static str;
 
     /// Produces the [`TuiElement`] representation of this view.
+    ///
+    /// Terminal resizes are handled through the layout pass, not a dedicated
+    /// hook: the presenter lays out against the current terminal size every
+    /// frame, and each [`TuiElement::layout`] receives the [`AppContext`], so
+    /// width-dependent state (e.g. a char-cell editor's terminal width) is
+    /// refreshed there.
     fn render(&self, app: &AppContext) -> Box<dyn TuiElement>;
 
     /// Handles the view or its descendent receiving focus.
@@ -40,6 +46,16 @@ pub trait TuiView: Entity {
         let mut ctx = keymap::Context::default();
         ctx.set.insert(Self::ui_name());
         ctx
+    }
+
+    /// Returns the ids of child views this view directly owns via
+    /// [`ViewHandle`]s that are not registered in the structural parent/child
+    /// graph, regardless of whether they are currently being rendered.
+    ///
+    /// See [`View::child_view_ids`](crate::View::child_view_ids) for the full
+    /// contract. The semantics are identical for TUI views.
+    fn child_view_ids(&self, _app: &AppContext) -> Vec<EntityId> {
+        Vec::new()
     }
 }
 
@@ -66,6 +82,7 @@ pub trait AnyTuiView {
         view_id: EntityId,
     );
     fn keymap_context(&self, app: &AppContext) -> keymap::Context;
+    fn child_view_ids(&self, app: &AppContext) -> Vec<EntityId>;
 }
 
 impl<T> AnyTuiView for T
@@ -112,5 +129,9 @@ where
 
     fn keymap_context(&self, app: &AppContext) -> keymap::Context {
         TuiView::keymap_context(self, app)
+    }
+
+    fn child_view_ids(&self, app: &AppContext) -> Vec<EntityId> {
+        TuiView::child_view_ids(self, app)
     }
 }

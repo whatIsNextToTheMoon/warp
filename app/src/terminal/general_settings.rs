@@ -12,6 +12,7 @@ define_settings_group!(GeneralSettings, settings: [
         default: true,
         supported_platforms: SupportedPlatforms::DESKTOP,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "general.show_warning_before_quitting",
         description: "Whether to show a warning dialog before quitting Warp.",
@@ -21,6 +22,7 @@ define_settings_group!(GeneralSettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::MAC,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "general.quit_on_last_window_closed",
         description: "Whether to quit Warp when the last window is closed.",
@@ -30,6 +32,7 @@ define_settings_group!(GeneralSettings, settings: [
         default: true,
         supported_platforms: SupportedPlatforms::DESKTOP,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "general.restore_session",
         description: "Whether to restore the previous session when Warp starts up.",
@@ -54,6 +57,7 @@ define_settings_group!(GeneralSettings, settings: [
             Box::new(SupportedPlatforms::WINDOWS),
         ),
         sync_to_cloud: SyncToCloud::Never,
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "general.login_item",
         description: "Whether to launch Warp automatically when you log in.",
@@ -71,6 +75,7 @@ define_settings_group!(GeneralSettings, settings: [
             Box::new(SupportedPlatforms::WINDOWS),
         ),
         sync_to_cloud: SyncToCloud::Never,
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     },
     link_tooltip: LinkTooltip {
@@ -78,6 +83,7 @@ define_settings_group!(GeneralSettings, settings: [
         default: true,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "general.link_tooltip",
         description: "Whether to show a tooltip when hovering over links.",
@@ -87,6 +93,7 @@ define_settings_group!(GeneralSettings, settings: [
         default: HashSet::new(),
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Never,
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     },
     welcome_tips_skipped_or_completed: WelcomeTipsCompleted {
@@ -94,6 +101,7 @@ define_settings_group!(GeneralSettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     },
     agent_mode_onboarding_block_shown: AgentModeOnboardingBlockShown {
@@ -101,6 +109,7 @@ define_settings_group!(GeneralSettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     },
     telemetry_banner_dismissed: TelemetryBannerDismissed {
@@ -108,6 +117,7 @@ define_settings_group!(GeneralSettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     },
     user_default_shell_unsupported_banner_state: UserDefaultShellUnsupportedBannerState {
@@ -115,6 +125,7 @@ define_settings_group!(GeneralSettings, settings: [
         default: BannerState::default(),
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     },
     open_in_warp_banner_dismissed_for_markdown: OpenInWarpBannerDismissedMarkdown {
@@ -122,6 +133,7 @@ define_settings_group!(GeneralSettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Never,
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     },
     open_in_warp_banner_dismissed_for_code_and_text: OpenInWarpBannerDismissedCode {
@@ -129,6 +141,7 @@ define_settings_group!(GeneralSettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Never,
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     },
     did_non_anonymous_user_log_in: DidNonAnonymousUserLogIn {
@@ -136,6 +149,7 @@ define_settings_group!(GeneralSettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Never,
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     },
     free_tier_limit_hit_modal_dismissed: FreeTierLimitHitModalDismissed {
@@ -143,6 +157,7 @@ define_settings_group!(GeneralSettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     },
     build_plan_migration_modal_dismissed: BuildPlanMigrationModalDismissed {
@@ -150,6 +165,7 @@ define_settings_group!(GeneralSettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     },
     // One-time flag tracking whether the OpenWarp launch modal has already been
@@ -160,6 +176,7 @@ define_settings_group!(GeneralSettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::No),
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     },
     anonymous_user_ai_sign_up_banner_shown: AnonymousUserAISignUpBannerShown {
@@ -167,6 +184,7 @@ define_settings_group!(GeneralSettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Never,
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     },
     auto_open_code_review_pane_on_first_agent_change: AutoOpenCodeReviewPaneOnFirstAgentChange {
@@ -174,6 +192,7 @@ define_settings_group!(GeneralSettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "code.editor.auto_open_code_review_pane_on_first_agent_change",
         description: "Whether to automatically open the code review pane when the agent makes its first change.",
@@ -183,6 +202,7 @@ define_settings_group!(GeneralSettings, settings: [
         default: HashSet::new(),
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     },
 ]);

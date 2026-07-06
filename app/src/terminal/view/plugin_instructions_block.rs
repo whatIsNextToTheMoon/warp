@@ -14,14 +14,14 @@ use warpui::{
 };
 
 use crate::ai::blocklist::code_block::{
-    CodeBlockOptions, CodeSnippetButtonHandles, render_code_block_plain,
+    render_code_block_plain, CodeBlockOptions, CodeSnippetButtonHandles,
 };
 use crate::appearance::Appearance;
-use crate::terminal::CLIAgent;
 use crate::terminal::cli_agent_sessions::plugin_manager::PluginInstructions;
+use crate::terminal::CLIAgent;
 use crate::ui_components::icons::Icon;
-use crate::view_components::DismissibleToast;
 use crate::view_components::action_button::{ActionButton, ButtonSize, NakedTheme};
+use crate::view_components::DismissibleToast;
 use crate::workspace::{ToastStack, WorkspaceAction};
 
 pub(crate) struct PluginInstructionsBlock {

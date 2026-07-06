@@ -18,7 +18,7 @@ use crate::{
         active_agent_views_model::ActiveAgentViewsModel,
         agent::{
             conversation::{AIConversationId, ConversationStatus},
-            StartAgentExecutionMode,
+            RenderableAIError, StartAgentExecutionMode,
         },
         ambient_agents::{
             task::{normalize_orchestrator_agent_name, HarnessConfig},
@@ -447,7 +447,7 @@ impl PaneContent for TerminalPane {
             // permanently closed.
             BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
                 history_model
-                    .clear_conversations_in_terminal_view(self.terminal_view(ctx).id(), ctx);
+                    .clear_conversations_for_terminal_surface(self.terminal_view(ctx).id(), ctx);
             });
             self.delete_blocks(ctx);
         }
@@ -581,7 +581,7 @@ impl PaneContent for TerminalPane {
 
             // Collect all conversation IDs for this terminal view
             let conversation_ids_to_restore = BlocklistAIHistoryModel::as_ref(app)
-                .all_live_conversations_for_terminal_view(self.terminal_view(app).id())
+                .all_live_conversations_for_terminal_surface(self.terminal_view(app).id())
                 .map(|conversation| conversation.id())
                 .collect();
 
@@ -642,7 +642,7 @@ impl PaneContent for TerminalPane {
             // TODO(roland): store conversation id or server conversation token on the model ConversationTranscriptViewerStatus
             if let Some(conversation) = history_model
                 .as_ref(ctx)
-                .all_live_conversations_for_terminal_view(terminal_view_id)
+                .all_live_conversations_for_terminal_surface(terminal_view_id)
                 .next()
             {
                 if let Some(token) = conversation.server_conversation_token() {
@@ -712,7 +712,7 @@ fn agent_conversation_action_state(
     let history_model = BlocklistAIHistoryModel::as_ref(ctx);
     let conversation = history_model.conversation(&conversation_id)?;
     let owner_terminal_view_id =
-        history_model.terminal_view_id_for_conversation(&conversation_id)?;
+        history_model.terminal_surface_id_for_conversation(&conversation_id)?;
     Some(AgentConversationActionState {
         owner_terminal_view_id,
         task_id: conversation.task_id(),
@@ -2043,11 +2043,11 @@ fn launch_remote_child(
                 unresolved_references.join(", ")
             );
             BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
-                history_model.update_conversation_status_with_error_message(
+                history_model.update_conversation_status_with_error(
                     terminal_view_id,
                     conversation_id,
                     ConversationStatus::Error,
-                    Some(error_message),
+                    Some(RenderableAIError::other(error_message, false)),
                     ctx,
                 );
             });
@@ -2168,7 +2168,7 @@ fn handle_ai_history_event(
     };
 
     if event
-        .terminal_view_id()
+        .terminal_surface_id()
         .is_some_and(|id| id != terminal_view_id)
     {
         return;
@@ -2257,7 +2257,7 @@ fn handle_ai_history_event(
                 },
             );
         }
-        BlocklistAIHistoryEvent::ClearedConversationsInTerminalView { .. }
+        BlocklistAIHistoryEvent::ClearedConversationsForTerminalSurface { .. }
         | BlocklistAIHistoryEvent::ClearedActiveConversation { .. } => {
             ctx.emit(pane_group::Event::InvalidatedActiveConversation);
         }
@@ -2298,7 +2298,7 @@ fn handle_ai_history_event(
         | BlocklistAIHistoryEvent::UpdatedConversationMetadata { .. }
         | BlocklistAIHistoryEvent::UpdatedConversationArtifacts { .. }
         | BlocklistAIHistoryEvent::ConversationServerTokenAssigned { .. }
-        | BlocklistAIHistoryEvent::ConversationOwnershipTransferred { .. }
+        | BlocklistAIHistoryEvent::ConversationTransferredBetweenTerminalSurfaces { .. }
         | BlocklistAIHistoryEvent::NewConversationRequestComplete { .. }
         | BlocklistAIHistoryEvent::OrchestrationConfigUpdated { .. }
         | BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { .. }
