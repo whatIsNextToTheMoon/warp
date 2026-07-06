@@ -27171,6 +27171,7 @@ impl TypedActionView for TerminalView {
             | StopFileDropTarget
             | RunNativeShellCompletions { .. }
             | OpenTeamSettingsPage
+            | SelectAgenticSuggestion(_)
             | HideTelemetryBannerPermanently
             | GenerateCodebaseIndex
             | LoadAgentModeConversation
@@ -27820,13 +27821,9 @@ impl TypedActionView for TerminalView {
             } => self.set_marked_text_on_terminal(marked_text, selected_range, ctx),
             ClearMarkedText => self.clear_marked_text_on_terminal(ctx),
             ImeCommit(text) => self.ime_commit_on_terminal(text, ctx),
-            SelectAgenticSuggestion(index) => {
-                if let Some(block) = self.onboarding_agentic_suggestions_block.as_ref() {
-                    block.update(ctx, |block, ctx| {
-                        block.handle_key_pressed(*index, ctx);
-                    });
-                }
-            }
+            // Upstream removed the onboarding agentic suggestions block; keep the
+            // action variant as a no-op for stale keybindings/actions.
+            SelectAgenticSuggestion(_) => {}
             HideTelemetryBannerPermanently => self.hide_telemetry_banner_permanently(ctx),
             ShowInitializationBlock => self.show_initialization_block(),
             GenerateCodebaseIndex => {
