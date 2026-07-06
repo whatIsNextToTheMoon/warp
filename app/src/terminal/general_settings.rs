@@ -45,6 +45,7 @@ define_settings_group!(GeneralSettings, settings: [
             Box::new(SupportedPlatforms::WINDOWS),
         ),
         sync_to_cloud: SyncToCloud::Never,
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "general.single_instance_mode",
         description: "Whether to prevent starting more than one Warp process at a time.",

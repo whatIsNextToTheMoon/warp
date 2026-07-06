@@ -1428,6 +1428,7 @@ define_settings_group!(AISettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "agents.third_party.codex.treat_manual_codex_as_plain_terminal",
         description: "Whether manually launched Codex should run as a plain terminal program instead of using Warp's Codex integration.",
