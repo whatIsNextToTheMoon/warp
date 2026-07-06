@@ -1583,9 +1583,9 @@ impl<'a> TabComponent<'a> {
         let (background_color, border_fill) = if FeatureFlag::NewTabStyling.is_enabled() {
             // If there is a custom tab background, we overlay it with varying opacities.
             let bg = if let Some(custom_background) = custom_tab_background {
-                let base_opacity = if is_active || (is_in_multi_tab_selection && is_hovered) {
+                let base_opacity = if is_active || (self.is_in_multi_tab_selection && is_hovered) {
                     60
-                } else if is_in_multi_tab_selection {
+                } else if self.is_in_multi_tab_selection {
                     // Multi-selected (but not hovered): brighter than the resting
                     // tint. A grouped member sits on the group's color backdrop,
                     // so it needs a bigger step to read as selected against it;
