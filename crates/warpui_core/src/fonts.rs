@@ -217,6 +217,8 @@ pub struct Cache {
     raster_bounds: DashMap<RasterBoundsKey, Result<RectI, Error>>,
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     available_system_fonts: Option<Vec<(Option<FamilyId>, FontInfo)>>,
+    configured_fallback_families: Vec<FamilyId>,
+    fallback_generation: u64,
     font_fallback_cache: FontFallbackCache,
 }
 
@@ -237,6 +239,21 @@ impl Properties {
         self.weight = weight;
         self
     }
+
+    /// Returns face properties in fallback order. The requested face is tried
+    /// first, followed by a regular face with the same weight, then regular
+    /// normal weight. Duplicate candidates are harmless because font
+    /// selections and glyph lookups are cached.
+    pub fn fallback_candidates(self) -> [Self; 3] {
+        [
+            self,
+            Self {
+                style: Style::Normal,
+                weight: self.weight,
+            },
+            Self::default(),
+        ]
+    }
 }
 
 impl Cache {
@@ -251,6 +268,8 @@ impl Cache {
             glyph_typographic_bounds: Default::default(),
             raster_bounds: Default::default(),
             available_system_fonts: Default::default(),
+            configured_fallback_families: Default::default(),
+            fallback_generation: 0,
             font_fallback_cache: Default::default(),
         }
     }
@@ -261,6 +280,7 @@ impl Cache {
         TextLayoutSystem {
             platform: self.font_db().text_layout_system(),
             cache: &self.font_fallback_cache,
+            fallback_generation: self.fallback_generation,
         }
     }
 
@@ -341,6 +361,25 @@ impl Cache {
                 *entry.insert(font)
             }
         }
+    }
+
+    /// Replaces the ordered fallback chain configured by the user.
+    pub fn set_configured_fallback_families(&mut self, families: Vec<FamilyId>) {
+        if self.configured_fallback_families == families {
+            return;
+        }
+
+        self.configured_fallback_families = families.clone();
+        self.fallback_generation = self.fallback_generation.wrapping_add(1);
+        self.platform.set_configured_fallback_families(families);
+
+        // Entries may contain a previously selected system fallback (or None),
+        // so they must be recomputed against the new configured chain.
+        self.glyphs_by_char.clear();
+    }
+
+    pub fn fallback_generation(&self) -> u64 {
+        self.fallback_generation
     }
 
     pub fn line_height(&self, font_size: f32, line_height_ratio: f32) -> f32 {
@@ -445,6 +484,30 @@ impl Cache {
             .find_map(|font| self.glyph_for_char(font, ch, false))
     }
 
+    /// Checks configured fallback families before the platform fallback list.
+    /// A family without the requested face (commonly CJK fonts without an
+    /// italic face) is retried as regular text before moving to the next family.
+    fn configured_font_fallback(&self, ch: char, font: FontId) -> Option<(GlyphId, FontId)> {
+        let properties = self
+            .font_properties
+            .get(&font)
+            .map(|properties| *properties)
+            .unwrap_or_default();
+
+        for family in self.configured_fallback_families.iter().copied() {
+            for fallback_properties in properties.fallback_candidates() {
+                let fallback_font = self.select_font(family, fallback_properties);
+                if let Some((glyph_id, font_id)) = self.glyph_for_char(fallback_font, ch, false) {
+                    if glyph_id != 0 {
+                        return Some((glyph_id, font_id));
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
     // Returns the `GlyphId` for a given a character and font. Optionally returns
     // the font ID of the font the character would be rendered with, which could be
     // a fallback font if the font does not contain the glyph
@@ -462,7 +525,7 @@ impl Cache {
             Entry::Vacant(entry) => {
                 let glyph_id = self.platform.glyph_for_char(font, char);
 
-                if let Some(glyph_id) = glyph_id {
+                if let Some(glyph_id) = glyph_id.filter(|glyph_id| *glyph_id != 0) {
                     return *entry.insert(Some((glyph_id, font)));
                 }
 
@@ -481,7 +544,8 @@ impl Cache {
             );
 
             let fallback_glyph_and_font = self
-                .app_font_fallback(char, font)
+                .configured_font_fallback(char, font)
+                .or_else(|| self.app_font_fallback(char, font))
                 .or(self.system_font_fallback(char, font));
 
             self.glyphs_by_char

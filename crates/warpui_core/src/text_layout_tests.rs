@@ -93,6 +93,7 @@ fn test_cache_key_includes_fixed_width_tab_size() {
 
     let key_4 = CacheKeyRef {
         text,
+        fallback_generation: 0,
         font_size: OrderedFloat(12.),
         line_height_ratio: OrderedFloat(1.),
         fixed_width_tab_size: Some(4),
@@ -109,6 +110,29 @@ fn test_cache_key_includes_fixed_width_tab_size() {
     };
 
     assert!(key_4 != key_8);
+}
+
+#[test]
+fn test_cache_key_includes_fallback_generation() {
+    let key = CacheKeyRef {
+        text: "abc",
+        fallback_generation: 0,
+        font_size: OrderedFloat(12.),
+        line_height_ratio: OrderedFloat(1.),
+        fixed_width_tab_size: None,
+        style_runs: &[],
+        max_width: OrderedFloat(100.),
+        max_height: None,
+        alignment: TextAlignment::Left,
+        first_line_head_indent: None,
+        clip_config: None,
+    };
+    let changed_fallbacks = CacheKeyRef {
+        fallback_generation: 1,
+        ..key
+    };
+
+    assert!(key != changed_fallbacks);
 }
 
 #[test]

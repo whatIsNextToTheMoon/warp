@@ -77,6 +77,13 @@ impl AppearanceManager {
                         });
                     }
                 }
+                FontSettingsChangedEvent::MonospaceFallbackFontNames { .. } => {
+                    let fallback_names = FontSettings::as_ref(ctx)
+                        .monospace_fallback_font_names
+                        .value()
+                        .clone();
+                    apply_terminal_fallback_fonts(&fallback_names, ctx);
+                }
                 FontSettingsChangedEvent::MonospaceFontSize { .. } => {
                     let new_font_size = *FontSettings::as_ref(ctx).monospace_font_size.value();
                     Appearance::handle(ctx).update(ctx, |appearance, ctx| {
@@ -393,6 +400,34 @@ fn get_or_load_font_family(font_name: &str, ctx: &mut AppContext) -> Option<Fami
     })
 }
 
+#[cfg(not(target_family = "wasm"))]
+fn apply_terminal_fallback_fonts(font_names: &[String], ctx: &mut AppContext) {
+    warpui::fonts::Cache::handle(ctx).update(ctx, |font_cache, _| {
+        let mut families = Vec::new();
+        for font_name in font_names {
+            match font_cache.get_or_load_system_font(font_name) {
+                Ok(family) if !families.contains(&family) => families.push(family),
+                Ok(_) => {}
+                Err(err) => {
+                    log::warn!("Failed to load fallback font {font_name}: {err:?}");
+                }
+            }
+        }
+        font_cache.set_configured_fallback_families(families);
+    });
+}
+
+#[cfg(target_family = "wasm")]
+fn apply_terminal_fallback_fonts(font_names: &[String], ctx: &mut AppContext) {
+    warpui::fonts::Cache::handle(ctx).update(ctx, |font_cache, _| {
+        let families = font_names
+            .iter()
+            .filter_map(|font_name| font_cache.family_id_for_name(font_name))
+            .collect();
+        font_cache.set_configured_fallback_families(families);
+    });
+}
+
 fn build_appearance(ctx: &mut AppContext) -> Appearance {
     let default_monospace_font_family = load_default_monospace_font_family(ctx)
         .expect("unable to load default monospace font family");
@@ -403,6 +438,12 @@ fn build_appearance(ctx: &mut AppContext) -> Appearance {
     let am_font_name = FontSettings::as_ref(ctx).ai_font_name.value().clone();
 
     let monospace_font_family_from_settings = get_or_load_font_family(&monospace_font_name, ctx);
+
+    let fallback_font_names = FontSettings::as_ref(ctx)
+        .monospace_fallback_font_names
+        .value()
+        .clone();
+    apply_terminal_fallback_fonts(&fallback_font_names, ctx);
 
     let ui_font_family =
         load_default_ui_font_family(ctx).expect("unable to load default ui font family");

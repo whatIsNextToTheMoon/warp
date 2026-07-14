@@ -60,8 +60,8 @@ use crate::settings::{
     active_theme_kind, respect_system_theme, AIFontName, AppEditorSettings, CursorBlink,
     CursorBlinkEnabled, CursorDisplayType, EnforceMinimumContrast, FocusPaneOnHover, FontSettings,
     FontSettingsChangedEvent, GPUSettings, InputBoxType, InputModeSettings, InputModeState,
-    InputSettings, InputSettingsChangedEvent, MonospaceFontName, PaneSettings,
-    ShouldDimInactivePanes, ThemeSettings, UseSystemTheme, UseThinStrokes,
+    InputSettings, InputSettingsChangedEvent, MonospaceFallbackFontNames, MonospaceFontName,
+    PaneSettings, ShouldDimInactivePanes, ThemeSettings, UseSystemTheme, UseThinStrokes,
     DEFAULT_MONOSPACE_FONT_NAME,
 };
 use crate::terminal::block_list_viewport::InputMode;
@@ -493,6 +493,10 @@ pub enum AppearancePageAction {
     OpacitySliderDragged(f32),
     BlurSliderDragged(f32),
     SetFontFamily(String),
+    AddFallbackFont(String),
+    RemoveFallbackFont(usize),
+    MoveFallbackFontUp(usize),
+    MoveFallbackFontDown(usize),
     SetAIFontFamily(String),
     SetThinStrokes(ThinStrokes),
     SetInputMode {
@@ -543,6 +547,12 @@ pub enum AppearancePageAction {
     },
 }
 
+struct FallbackFontActionButtons {
+    move_up: ViewHandle<ActionButton>,
+    move_down: ViewHandle<ActionButton>,
+    remove: ViewHandle<ActionButton>,
+}
+
 pub struct AppearanceSettingsPageView {
     page: PageType<Self>,
     window_id: WindowId,
@@ -558,6 +568,8 @@ pub struct AppearanceSettingsPageView {
     opacity_state: SliderStateHandle,
     blur_state: SliderStateHandle,
     font_family_dropdown: ViewHandle<FilterableDropdown<AppearancePageAction>>,
+    fallback_font_family_dropdown: ViewHandle<FilterableDropdown<AppearancePageAction>>,
+    fallback_font_action_buttons: Vec<FallbackFontActionButtons>,
     font_weight_dropdown: ViewHandle<Dropdown<AppearancePageAction>>,
     #[allow(dead_code)]
     thin_strokes_dropdown: ViewHandle<Dropdown<AppearancePageAction>>,
@@ -614,6 +626,10 @@ impl TypedActionView for AppearanceSettingsPageView {
             SetOpacity(value) => self.set_opacity(*value, true, ctx),
             SetBlur(value) => self.set_blur(*value, true, ctx),
             SetFontFamily(name) => self.set_font_family(name, ctx),
+            AddFallbackFont(name) => self.add_fallback_font(name, ctx),
+            RemoveFallbackFont(index) => self.remove_fallback_font(*index, ctx),
+            MoveFallbackFontUp(index) => self.move_fallback_font(*index, true, ctx),
+            MoveFallbackFontDown(index) => self.move_fallback_font(*index, false, ctx),
             SetAIFontFamily(name) => {
                 self.set_ai_font_family(name, ctx);
                 FontSettings::handle(ctx).update(ctx, |font_settings, ctx| {
@@ -907,6 +923,11 @@ impl AppearanceSettingsPageView {
                     });
                     ctx.notify();
                 }
+                FontSettingsChangedEvent::MonospaceFallbackFontNames { .. } => {
+                    me.rebuild_fallback_font_action_buttons(ctx);
+                    me.update_fallback_font_dropdown(ctx);
+                    ctx.notify();
+                }
                 _ => {}
             },
         );
@@ -1080,6 +1101,16 @@ impl AppearanceSettingsPageView {
             dropdown.set_selected_by_index(0, ctx);
             dropdown
         });
+
+        let fallback_font_family_dropdown = ctx.add_typed_action_view(|ctx| {
+            let mut dropdown = FilterableDropdown::new(ctx);
+            dropdown.set_top_bar_max_width(FONT_FAMILY_DROPDOWN_WIDTH);
+            dropdown.set_menu_width(FONT_FAMILY_DROPDOWN_WIDTH, ctx);
+            dropdown.set_placeholder("Add fallback font", ctx);
+            dropdown
+        });
+
+        let fallback_font_action_buttons = build_fallback_font_action_buttons(ctx);
 
         let ai_font_family_dropdown = ctx.add_typed_action_view(|ctx| {
             let mut dropdown = FilterableDropdown::new(ctx);
@@ -1293,6 +1324,8 @@ impl AppearanceSettingsPageView {
             opacity_state: Default::default(),
             blur_state: Default::default(),
             font_family_dropdown,
+            fallback_font_family_dropdown,
+            fallback_font_action_buttons,
             font_weight_dropdown,
             thin_strokes_dropdown,
             input_mode_dropdown,
@@ -2089,7 +2122,50 @@ impl AppearanceSettingsPageView {
             }
         });
 
+        self.update_fallback_font_dropdown(ctx);
+
         ctx.notify();
+    }
+
+    fn update_fallback_font_dropdown(&mut self, ctx: &mut ViewContext<Self>) {
+        let configured = FontSettings::as_ref(ctx)
+            .monospace_fallback_font_names
+            .value()
+            .clone();
+        let primary = FontSettings::as_ref(ctx)
+            .monospace_font_name
+            .value()
+            .clone();
+
+        self.fallback_font_family_dropdown
+            .update(ctx, |dropdown, ctx| {
+                let mut items = self
+                    .available_families
+                    .iter()
+                    .filter(|(name, _)| {
+                        name.as_str() != primary.as_str()
+                            && !configured
+                                .iter()
+                                .any(|configured_name| configured_name.as_str() == name.as_str())
+                    })
+                    .map(|(name, (family, _))| {
+                        let mut item = DropdownItem::new(
+                            name,
+                            AppearancePageAction::AddFallbackFont(name.clone()),
+                        );
+                        if cfg!(not(any(target_os = "linux", target_os = "freebsd"))) {
+                            if let Some(family_id) = family {
+                                item = item.with_font_override(*family_id);
+                            }
+                        }
+                        item
+                    })
+                    .collect::<Vec<_>>();
+                items.sort_by(|a, b| a.display_text.cmp(&b.display_text));
+                dropdown.set_items(items, ctx);
+                dropdown.clear_filter(ctx);
+                dropdown.set_selected_by_index(usize::MAX, ctx);
+            });
     }
 
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
@@ -2132,7 +2208,73 @@ impl AppearanceSettingsPageView {
             if *font_settings.match_ai_font_to_terminal_font.value() {
                 report_if_error!(font_settings.ai_font_name.set_value(name.to_string(), ctx))
             }
+            let fallback_names = font_settings
+                .monospace_fallback_font_names
+                .value()
+                .iter()
+                .filter(|fallback_name| fallback_name.as_str() != name)
+                .cloned()
+                .collect();
+            report_if_error!(font_settings
+                .monospace_fallback_font_names
+                .set_value(fallback_names, ctx));
         });
+    }
+
+    fn set_fallback_font_names(&mut self, names: Vec<String>, ctx: &mut ViewContext<Self>) {
+        FontSettings::handle(ctx).update(ctx, |font_settings, ctx| {
+            report_if_error!(font_settings
+                .monospace_fallback_font_names
+                .set_value(names.clone(), ctx));
+        });
+    }
+
+    fn add_fallback_font(&mut self, name: &str, ctx: &mut ViewContext<Self>) {
+        let mut names = FontSettings::as_ref(ctx)
+            .monospace_fallback_font_names
+            .value()
+            .clone();
+        if name.is_empty() || names.iter().any(|configured| configured == name) {
+            return;
+        }
+        names.push(name.to_string());
+        self.set_fallback_font_names(names, ctx);
+    }
+
+    fn remove_fallback_font(&mut self, index: usize, ctx: &mut ViewContext<Self>) {
+        let mut names = FontSettings::as_ref(ctx)
+            .monospace_fallback_font_names
+            .value()
+            .clone();
+        if index >= names.len() {
+            return;
+        }
+        names.remove(index);
+        self.set_fallback_font_names(names, ctx);
+    }
+
+    fn move_fallback_font(&mut self, index: usize, move_up: bool, ctx: &mut ViewContext<Self>) {
+        let mut names = FontSettings::as_ref(ctx)
+            .monospace_fallback_font_names
+            .value()
+            .clone();
+        if index >= names.len() {
+            return;
+        }
+        let target = if move_up {
+            index.checked_sub(1)
+        } else {
+            index.checked_add(1).filter(|target| *target < names.len())
+        };
+        let Some(target) = target else {
+            return;
+        };
+        names.swap(index, target);
+        self.set_fallback_font_names(names, ctx);
+    }
+
+    fn rebuild_fallback_font_action_buttons(&mut self, ctx: &mut ViewContext<Self>) {
+        self.fallback_font_action_buttons = build_fallback_font_action_buttons(ctx);
     }
 
     pub fn toggle_match_ai_font_to_terminal_font(&mut self, ctx: &mut ViewContext<Self>) {
@@ -4029,7 +4171,7 @@ impl SettingsWidget for TerminalFontWidget {
     type View = AppearanceSettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "text terminal font family font size line height monospace"
+        "text terminal font family fallback font size line height monospace"
     }
 
     fn render(
@@ -4182,7 +4324,103 @@ impl SettingsWidget for TerminalFontWidget {
         );
 
         self.render_line_height_editor(view, appearance, &mut terminal_font_row);
-        terminal_font_row.finish()
+
+        let font_settings = FontSettings::as_ref(app);
+        let fallback_names = font_settings.monospace_fallback_font_names.value();
+        let mut fallback_fonts = Flex::column();
+        fallback_fonts.add_child(render_body_item_label::<AppearancePageAction>(
+            "Fallback fonts".to_string(),
+            None,
+            None,
+            LocalOnlyIconState::for_setting(
+                MonospaceFallbackFontNames::storage_key(),
+                MonospaceFallbackFontNames::sync_to_cloud(),
+                &mut view.local_only_icon_tooltip_states.borrow_mut(),
+                app,
+            ),
+            ToggleState::Enabled,
+            appearance,
+        ));
+        fallback_fonts.add_child(
+            appearance
+                .ui_builder()
+                .span(
+                    "Fonts are tried in order when the terminal font cannot render a character."
+                        .to_string(),
+                )
+                .with_style(UiComponentStyles {
+                    font_size: Some(appearance.ui_font_size() * 0.9),
+                    ..Default::default()
+                })
+                .build()
+                .with_margin_bottom(6.)
+                .finish(),
+        );
+        fallback_fonts.add_child(
+            Container::new(ChildView::new(&view.fallback_font_family_dropdown).finish())
+                .with_margin_bottom(6.)
+                .finish(),
+        );
+
+        for (font_name, buttons) in fallback_names
+            .iter()
+            .zip(view.fallback_font_action_buttons.iter())
+        {
+            let actions = Flex::row()
+                .with_spacing(2.)
+                .with_child(ChildView::new(&buttons.move_up).finish())
+                .with_child(ChildView::new(&buttons.move_down).finish())
+                .with_child(ChildView::new(&buttons.remove).finish())
+                .finish();
+            let row = Flex::row()
+                .with_main_axis_size(MainAxisSize::Max)
+                .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_child(
+                    Shrinkable::new(
+                        1.,
+                        appearance
+                            .ui_builder()
+                            .span(font_name.clone())
+                            .build()
+                            .finish(),
+                    )
+                    .finish(),
+                )
+                .with_child(actions)
+                .finish();
+            fallback_fonts.add_child(
+                Container::new(row)
+                    .with_horizontal_padding(10.)
+                    .with_vertical_padding(4.)
+                    .with_margin_bottom(4.)
+                    .with_background(appearance.theme().surface_1())
+                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
+                    .finish(),
+            );
+        }
+
+        fallback_fonts.add_child(
+            appearance
+                .ui_builder()
+                .span("System fallback fonts are always used last.".to_string())
+                .with_style(UiComponentStyles {
+                    font_size: Some(appearance.ui_font_size() * 0.85),
+                    ..Default::default()
+                })
+                .build()
+                .with_margin_top(2.)
+                .finish(),
+        );
+
+        Flex::column()
+            .with_child(terminal_font_row.finish())
+            .with_child(
+                Container::new(fallback_fonts.finish())
+                    .with_margin_top(12.)
+                    .finish(),
+            )
+            .finish()
     }
 }
 
@@ -4948,6 +5186,61 @@ fn build_directory_delete_buttons(
                         );
                     })
             })
+        })
+        .collect()
+}
+
+fn build_fallback_font_action_buttons(
+    ctx: &mut ViewContext<AppearanceSettingsPageView>,
+) -> Vec<FallbackFontActionButtons> {
+    let count = FontSettings::as_ref(ctx)
+        .monospace_fallback_font_names
+        .value()
+        .len();
+
+    (0..count)
+        .map(|index| {
+            let move_up = ctx.add_typed_action_view(move |_| {
+                ActionButton::new("", NakedTheme)
+                    .with_icon(Icon::ArrowUp)
+                    .with_tooltip("Move up")
+                    .with_size(ButtonSize::XSmall)
+                    .on_click(move |ctx| {
+                        ctx.dispatch_typed_action(AppearancePageAction::MoveFallbackFontUp(index));
+                    })
+            });
+            move_up.update(ctx, |button, ctx| button.set_disabled(index == 0, ctx));
+
+            let move_down = ctx.add_typed_action_view(move |_| {
+                ActionButton::new("", NakedTheme)
+                    .with_icon(Icon::ArrowDown)
+                    .with_tooltip("Move down")
+                    .with_size(ButtonSize::XSmall)
+                    .on_click(move |ctx| {
+                        ctx.dispatch_typed_action(AppearancePageAction::MoveFallbackFontDown(
+                            index,
+                        ));
+                    })
+            });
+            move_down.update(ctx, |button, ctx| {
+                button.set_disabled(index + 1 == count, ctx)
+            });
+
+            let remove = ctx.add_typed_action_view(move |_| {
+                ActionButton::new("", NakedTheme)
+                    .with_icon(Icon::X)
+                    .with_tooltip("Remove fallback font")
+                    .with_size(ButtonSize::XSmall)
+                    .on_click(move |ctx| {
+                        ctx.dispatch_typed_action(AppearancePageAction::RemoveFallbackFont(index));
+                    })
+            });
+
+            FallbackFontActionButtons {
+                move_up,
+                move_down,
+                remove,
+            }
         })
         .collect()
 }

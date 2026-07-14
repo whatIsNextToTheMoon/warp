@@ -204,6 +204,7 @@ pub struct TextLayoutSystem {
     loaded_font_ids_since_last_raster: RwLock<Vec<FontId>>,
     #[cfg(not(target_os = "windows"))]
     fallback_fonts: DashMap<FontId, Vec<FontId>>,
+    configured_fallback_families: RwLock<Vec<FamilyId>>,
 }
 
 pub struct FontDB {
@@ -305,6 +306,7 @@ impl TextLayoutSystem {
             loaded_fonts: Default::default(),
             #[cfg(not(target_os = "windows"))]
             fallback_fonts: Default::default(),
+            configured_fallback_families: Default::default(),
             #[cfg(feature = "fontkit-rasterizer")]
             loaded_font_ids_since_last_raster: Default::default(),
         }
@@ -751,31 +753,107 @@ impl TextLayoutSystem {
                 .get_by_left(&selected_font)
                 .expect("Selected font must exist in font_id_map");
 
-            let font_store = self.font_store.read();
-            let face = match font_store.db().face(id) {
-                None => continue,
-                Some(face) => face,
-            };
-
-            let Some((family, _)) = face.families.first() else {
-                continue;
-            };
-
             let style_index = text_styles_map.insert(style_and_font.style);
 
-            attrs_list.add_span(
-                start_byte_index..end_byte_index,
-                Attrs {
-                    color_opt: None,
-                    family: cosmic_text::Family::Name(family),
-                    stretch: Default::default(),
-                    style: face.style,
-                    weight: face.weight,
-                    metadata: style_index,
-                    cache_key_flags: cosmic_text::CacheKeyFlags::empty(),
-                    metrics_opt: None,
-                },
-            );
+            {
+                let font_store = self.font_store.read();
+                let face = match font_store.db().face(id) {
+                    None => continue,
+                    Some(face) => face,
+                };
+
+                let Some((family, _)) = face.families.first() else {
+                    continue;
+                };
+
+                attrs_list.add_span(
+                    start_byte_index..end_byte_index,
+                    Attrs {
+                        color_opt: None,
+                        family: cosmic_text::Family::Name(family),
+                        stretch: Default::default(),
+                        style: face.style,
+                        weight: face.weight,
+                        metadata: style_index,
+                        cache_key_flags: cosmic_text::CacheKeyFlags::empty(),
+                        metrics_opt: None,
+                    },
+                );
+            }
+
+            // Override only characters that the selected primary face cannot
+            // render. Contiguous characters using the same configured fallback
+            // are grouped so shaping remains intact for CJK and emoji runs.
+            let mut fallback_spans = Vec::<(Range<usize>, FontId)>::new();
+            let mut active_span: Option<(usize, usize, FontId)> = None;
+
+            for char_index in range.clone() {
+                let Some(char_start) = str_index_map.byte_index(char_index) else {
+                    continue;
+                };
+                let char_end = str_index_map
+                    .byte_index(char_index + 1)
+                    .unwrap_or(text.len());
+                let Some(character) = text[char_start..char_end].chars().next() else {
+                    continue;
+                };
+
+                let fallback_font = self
+                    .glyph_for_char(selected_font, character)
+                    .filter(|glyph_id| *glyph_id != 0)
+                    .is_none()
+                    .then(|| {
+                        self.configured_fallback_font_for_char(character, style_and_font.properties)
+                    })
+                    .flatten();
+
+                match (active_span.take(), fallback_font) {
+                    (Some((start, _, font)), Some(next_font)) if font == next_font => {
+                        active_span = Some((start, char_end, font));
+                    }
+                    (Some((start, end, font)), next_font) => {
+                        fallback_spans.push((start..end, font));
+                        active_span = next_font.map(|font| (char_start, char_end, font));
+                    }
+                    (None, Some(font)) => {
+                        active_span = Some((char_start, char_end, font));
+                    }
+                    (None, None) => {}
+                }
+            }
+
+            if let Some((start, end, font)) = active_span {
+                fallback_spans.push((start..end, font));
+            }
+
+            for (fallback_range, fallback_font) in fallback_spans {
+                let fallback_id = *self
+                    .font_id_map
+                    .read()
+                    .get_by_left(&fallback_font)
+                    .expect("Configured fallback font must exist in font_id_map");
+                let font_store = self.font_store.read();
+                let Some(face) = font_store.db().face(fallback_id) else {
+                    continue;
+                };
+                let Some((family, _)) = face.families.first() else {
+                    continue;
+                };
+
+                attrs_list.add_span(
+                    fallback_range,
+                    Attrs {
+                        color_opt: None,
+                        family: cosmic_text::Family::Name(family),
+                        stretch: Default::default(),
+                        style: face.style,
+                        weight: face.weight,
+                        metadata: style_index,
+                        cache_key_flags: cosmic_text::CacheKeyFlags::empty(),
+                        metrics_opt: None,
+                    },
+                );
+            }
         }
         attrs_list
     }
@@ -873,6 +951,11 @@ impl platform::FontDB for FontDB {
 
     fn select_font(&self, family_id: FamilyId, properties: Properties) -> FontId {
         self.text_layout_system.select_font(family_id, properties)
+    }
+
+    fn set_configured_fallback_families(&mut self, families: Vec<FamilyId>) {
+        self.text_layout_system
+            .set_configured_fallback_families(families);
     }
 
     fn fallback_fonts(&self, character: char, font_id: FontId) -> Vec<FontId> {
@@ -1154,6 +1237,30 @@ impl TextLayoutSystem {
 
     fn load_family_name_from_id(&self, id: FamilyId) -> Option<String> {
         self.families.get(&id).map(|family| family.name.to_owned())
+    }
+
+    fn set_configured_fallback_families(&self, families: Vec<FamilyId>) {
+        *self.configured_fallback_families.write() = families;
+    }
+
+    fn configured_fallback_font_for_char(
+        &self,
+        character: char,
+        properties: Properties,
+    ) -> Option<FontId> {
+        for family in self.configured_fallback_families.read().iter().copied() {
+            for fallback_properties in properties.fallback_candidates() {
+                let font = self.select_font(family, fallback_properties);
+                if self
+                    .glyph_for_char(font, character)
+                    .is_some_and(|glyph_id| glyph_id != 0)
+                {
+                    return Some(font);
+                }
+            }
+        }
+
+        None
     }
 
     fn select_font(&self, family_id: FamilyId, properties: Properties) -> FontId {

@@ -16,15 +16,28 @@ use warpui::PaintContext;
 pub struct CellGlyphCache {
     glyph_cache: HashMap<(char, FontId), Option<(GlyphId, FontId)>>,
     string_cache: HashMap<(String, FontId), Option<(GlyphId, FontId)>>,
+    fallback_generation: u64,
 }
 
 impl CellGlyphCache {
+    fn invalidate_for_fallback_change(&mut self, font_cache: &FontCache) {
+        let generation = font_cache.fallback_generation();
+        if self.fallback_generation == generation {
+            return;
+        }
+
+        self.glyph_cache.clear();
+        self.string_cache.clear();
+        self.fallback_generation = generation;
+    }
+
     pub(super) fn glyph_for_char(
         &mut self,
         char: char,
         font_id: FontId,
         font_cache: &FontCache,
     ) -> Option<(GlyphId, FontId)> {
+        self.invalidate_for_fallback_change(font_cache);
         *self
             .glyph_cache
             .entry((char, font_id))
@@ -42,6 +55,7 @@ impl CellGlyphCache {
         properties: Properties,
         ctx: &mut PaintContext,
     ) -> Option<(GlyphId, FontId)> {
+        self.invalidate_for_fallback_change(font_cache);
         let glyph = *self
             .string_cache
             .entry((string.to_owned(), font_id))

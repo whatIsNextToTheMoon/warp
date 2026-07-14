@@ -156,6 +156,7 @@ impl LayoutCache {
             .map_or(styles, |adjusted_styles| adjusted_styles.as_slice());
         let key = &CacheKeyRef {
             text,
+            fallback_generation: text_layout_system.fallback_generation(),
             font_size: OrderedFloat(line_style.font_size),
             line_height_ratio: line_style.line_height_ratio.into(),
             fixed_width_tab_size: line_style.fixed_width_tab_size,
@@ -181,6 +182,7 @@ impl LayoutCache {
             ));
             let key = CacheKeyValue {
                 text: text.into(),
+                fallback_generation: text_layout_system.fallback_generation(),
                 font_size: line_style.font_size.into(),
                 line_height_ratio: line_style.line_height_ratio.into(),
                 fixed_width_tab_size: line_style.fixed_width_tab_size,
@@ -223,6 +225,7 @@ impl LayoutCache {
             });
         let key = &CacheKeyRef {
             text,
+            fallback_generation: text_layout_system.fallback_generation(),
             font_size: line_style.font_size.into(),
             line_height_ratio: line_style.line_height_ratio.into(),
             fixed_width_tab_size: line_style.fixed_width_tab_size,
@@ -247,6 +250,7 @@ impl LayoutCache {
 
             let key = CacheKeyValue {
                 text: text.into(),
+                fallback_generation: text_layout_system.fallback_generation(),
                 font_size: line_style.font_size.into(),
                 line_height_ratio: line_style.line_height_ratio.into(),
                 fixed_width_tab_size: line_style.fixed_width_tab_size,
@@ -347,6 +351,7 @@ impl Hash for dyn CacheKey + '_ {
 #[derive(Clone, Eq)]
 pub struct CacheKeyValue {
     text: String,
+    fallback_generation: u64,
     font_size: OrderedFloat<f32>,
     line_height_ratio: OrderedFloat<f32>,
     fixed_width_tab_size: Option<u8>,
@@ -368,6 +373,7 @@ impl CacheKey for CacheKeyValue {
     fn key(&self) -> CacheKeyRef<'_> {
         CacheKeyRef {
             text: self.text.as_str(),
+            fallback_generation: self.fallback_generation,
             font_size: self.font_size,
             line_height_ratio: self.line_height_ratio,
             fixed_width_tab_size: self.fixed_width_tab_size,
@@ -420,6 +426,7 @@ impl PaintStyleOverride {
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
 pub struct CacheKeyRef<'a> {
     text: &'a str,
+    fallback_generation: u64,
     font_size: OrderedFloat<f32>,
     line_height_ratio: OrderedFloat<f32>,
     fixed_width_tab_size: Option<u8>,

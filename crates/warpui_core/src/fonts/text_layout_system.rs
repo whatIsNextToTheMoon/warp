@@ -10,9 +10,14 @@ use crate::text_layout::{ClipConfig, Line, StyleAndFont, TextAlignment, TextFram
 pub struct TextLayoutSystem<'a> {
     pub(super) platform: &'a dyn platform::TextLayoutSystem,
     pub(super) cache: &'a FontFallbackCache,
+    pub(super) fallback_generation: u64,
 }
 
 impl TextLayoutSystem<'_> {
+    pub(crate) fn fallback_generation(&self) -> u64 {
+        self.fallback_generation
+    }
+
     /// Checks if the application specified a fallback font for the given char.
     /// If yes, the UI framework will lazy load the fallback font and trigger
     /// a re-render of the window.

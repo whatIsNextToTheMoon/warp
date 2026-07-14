@@ -380,6 +380,12 @@ pub trait FontDB: 'static {
     /// the given properties.
     fn select_font(&self, family_id: FamilyId, properties: Properties) -> FontId;
 
+    /// Sets the user-configured fallback families, in priority order.
+    ///
+    /// Platforms that perform their own shaping can use this list to override
+    /// missing-glyph spans before applying their normal system fallback.
+    fn set_configured_fallback_families(&mut self, _families: Vec<FamilyId>) {}
+
     /// Returns the ordered list of fonts which should be checked when the given
     /// font is lacking a glyph for a character.
     fn fallback_fonts(&self, character: char, font_id: FontId) -> Vec<FontId>;

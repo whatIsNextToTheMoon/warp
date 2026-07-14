@@ -40,3 +40,23 @@ fn test_subpixel_alignment_computation() {
         assert_eq!(alignment.0, 0);
     }
 }
+
+#[test]
+fn fallback_candidates_relax_italic_before_weight() {
+    let requested = Properties {
+        style: Style::Italic,
+        weight: Weight::Bold,
+    };
+
+    assert_eq!(
+        requested.fallback_candidates(),
+        [
+            requested,
+            Properties {
+                style: Style::Normal,
+                weight: Weight::Bold,
+            },
+            Properties::default(),
+        ]
+    );
+}
