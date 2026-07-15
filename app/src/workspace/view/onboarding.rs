@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use warp_core::execution_mode::AppExecutionMode;
+use warp_errors::report_error;
 use warpui::{SingletonEntity as _, ViewContext};
 
 /// Configuration for starting the agent onboarding tutorial.

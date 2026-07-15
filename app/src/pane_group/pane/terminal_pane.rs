@@ -61,9 +61,6 @@ use crate::{
     workspace::{sync_inputs::SyncedInputState, PaneViewLocator, WorkspaceRegistry},
     AIExecutionProfilesModel,
 };
-// Imports below are only consumed by the non-wasm `launch_local_*_child`
-// dispatch helpers; gating them keeps the wasm build warning-clean.
-use crate::AIExecutionProfilesModel;
 #[cfg(not(target_family = "wasm"))]
 use crate::{
     pane_group::child_agent::{

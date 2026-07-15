@@ -7,6 +7,7 @@ use itertools::Itertools;
 use num_traits::Float as _;
 use parking_lot::Mutex;
 use pathfinder_color::ColorU;
+use pathfinder_geometry::vector::Vector2F;
 use vec1::Vec1;
 use warp_core::semantic_selection::SemanticSelection;
 use warp_errors::report_error;
@@ -39,17 +40,6 @@ use crate::terminal::model::secrets::ObfuscateSecrets;
 use crate::terminal::model::selection::{Selection, SelectionRange};
 use crate::terminal::model::{cell, char_or_str::CharOrStr};
 use crate::terminal::{SizeInfo, SizeUpdate};
-use itertools::Itertools;
-use num_traits::Float as _;
-use parking_lot::Mutex;
-use pathfinder_color::ColorU;
-use pathfinder_geometry::vector::Vector2F;
-use std::sync::Arc;
-use vec1::Vec1;
-use warp_core::semantic_selection::SemanticSelection;
-use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
-use warpui::text::SelectionType;
-use warpui::units::Lines;
 
 pub struct AltScreen {
     grid_handler: GridHandler,

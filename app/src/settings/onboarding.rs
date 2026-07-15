@@ -9,6 +9,7 @@ use crate::workspace::tab_settings::TabSettings;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use settings::Setting as _;
 use warp_core::features::FeatureFlag;
+use warp_errors::report_if_error;
 use warpui::{AppContext, SingletonEntity as _};
 
 /// Applies onboarding settings based on the user's selected mode.

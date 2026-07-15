@@ -49,7 +49,6 @@ use warpui::{
 use super::{
     should_debug_codex_alt_screen, RichContentInsertionPosition, TerminalAction, TerminalView,
 };
-use crate::ai::blocklist::agent_view::agent_view_bg_fill;
 use crate::ai::blocklist::block::cli_controller::CLISubagentEvent;
 use crate::cmd_or_ctrl_shift;
 use crate::code_review::diff_state::GitDeltaPreference;
