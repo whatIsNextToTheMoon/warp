@@ -17,6 +17,7 @@ jobs:
     # this fork, so scheduled runs can stay queued forever here.
     if: github.repository == 'warpdotdev/warp'
     runs-on: namespace-profile-ubuntu-small
+    if: github.repository_owner == 'warpdotdev'
     permissions:
       contents: read
       pull-requests: read

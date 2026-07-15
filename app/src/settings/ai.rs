@@ -11,13 +11,13 @@ pub use cloud_object_models::{
     DEFAULT_COMMAND_EXECUTION_DENYLIST,
 };
 use indexmap::IndexMap;
+use warp_errors::report_if_error;
 
 use crate::ai::{
     agent::conversation::AIConversation, blocklist::BlocklistAIHistoryModel,
     request_usage_model::RequestLimitInfo,
 };
 use crate::auth::AuthStateProvider;
-use crate::report_if_error;
 use crate::settings::PrivacySettings;
 use crate::terminal::CLIAgent;
 use crate::workspaces::user_workspaces::UserWorkspaces;
@@ -444,6 +444,52 @@ settings::macros::implement_setting_for_enum!(
     toml_path: "agents.warp_agent.other.orchestration_message_display_mode",
     description: "Controls how child-agent messages are displayed.",
 );
+
+/// Which unit the TUI's usage entry displays.
+#[derive(
+    Default,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    PartialEq,
+    Copy,
+    Clone,
+    EnumIter,
+    schemars::JsonSchema,
+    settings_value::SettingsValue,
+)]
+#[schemars(
+    description = "Which unit the TUI's usage entry displays.",
+    rename_all = "snake_case"
+)]
+pub enum TuiUsageDisplayMode {
+    /// Credits spent — the same number the GUI's usage footer shows (default).
+    #[default]
+    Credits,
+    /// Provider dollar cost.
+    Cost,
+}
+
+settings::macros::implement_setting_for_enum!(
+    TuiUsageDisplayMode,
+    AISettings,
+    SupportedPlatforms::ALL,
+    SyncToCloud::Never,
+    surface: settings::SettingSurfaces::TUI,
+    private: false,
+    toml_path: "agents.usage_display_mode",
+    description: "Which unit the TUI's usage entry displays: credits or provider cost.",
+);
+
+impl TuiUsageDisplayMode {
+    /// The other unit — clicking the usage entry flips to this.
+    pub fn toggled(self) -> Self {
+        match self {
+            TuiUsageDisplayMode::Credits => TuiUsageDisplayMode::Cost,
+            TuiUsageDisplayMode::Cost => TuiUsageDisplayMode::Credits,
+        }
+    }
+}
 
 impl OrchestrationMessageDisplayMode {
     /// Display name for the settings dropdown.
@@ -1075,6 +1121,12 @@ define_settings_group!(AISettings, settings: [
         toml_path: "agents.model",
         description: "The default model the TUI agent uses.",
     }
+    // Which unit the TUI footer's usage entry displays (credits or provider
+    // cost), flipped by clicking the entry.
+    //
+    // TUI-only (`surface: Tui`), like `agent_model` above: modeled as a
+    // file-backed setting so the choice persists across TUI sessions.
+    usage_display_mode: TuiUsageDisplayMode,
     // Whether or not the profile-level command autoexecution speedbump has been shown.
     //
     // Not a user-visible setting - we model it as a setting so we can track how often
@@ -1718,6 +1770,21 @@ define_settings_group!(AISettings, settings: [
         surface: settings::SettingSurfaces::GUI,
         private: true,
     }
+
+    // Not a user-visible setting - it tracks which one-time feature-intro popups the
+    // user has already seen, keyed by the feature-intro id (see `FEATURE_INTROS`).
+    //
+    // We model it as a globally-synced setting (not respecting the user's sync setting)
+    // so each feature is announced at most once per user, regardless of how many devices
+    // they use. A feature is considered seen when its id is present and mapped to `true`.
+    seen_feature_intro_ids: SeenFeatureIntroIds {
+        type: HashMap<String, bool>,
+        default: HashMap::default(),
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::No),
+        surface: settings::SettingSurfaces::GUI,
+        private: true,
+    }
 ]);
 
 impl AISettings {
@@ -2179,6 +2246,25 @@ impl AISettings {
         report_if_error!(self
             .cli_agent_footer_enabled_commands
             .set_value(ToolbarCommandMap::new(map), ctx));
+    }
+
+    /// Whether the feature-intro popover with the given id key has been seen.
+    pub fn is_feature_intro_seen(&self, key: &str) -> bool {
+        self.seen_feature_intro_ids
+            .get(key)
+            .copied()
+            .unwrap_or(false)
+    }
+
+    /// Records that the feature-intro popover with the given id key has been seen,
+    /// so it is never shown again. No-op if already recorded.
+    pub fn mark_feature_intro_seen(&mut self, key: &str, ctx: &mut ModelContext<Self>) {
+        if self.is_feature_intro_seen(key) {
+            return;
+        }
+        let mut map = self.seen_feature_intro_ids.clone();
+        map.insert(key.to_owned(), true);
+        report_if_error!(self.seen_feature_intro_ids.set_value(map, ctx));
     }
 
     /// Whether the plugin install chip was dismissed for the given agent/host.

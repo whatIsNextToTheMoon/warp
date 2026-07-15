@@ -101,7 +101,10 @@ impl Workspace {
             } => {
                 // Open the repository - this will create a new terminal and trigger init
                 let Some(path_str) = path.to_str() else {
-                    log::error!("Failed to convert path to string: {path:?}");
+                    report_error!(
+                        "Failed to convert path to string",
+                        extra: { "path" => ?path }
+                    );
                     return;
                 };
                 self.handle_open_repository(path_str, ctx);

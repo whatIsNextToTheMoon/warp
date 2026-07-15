@@ -22,10 +22,10 @@ use std::path::Path;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
-use anyhow::anyhow;
 use parking_lot::FairMutex;
 use pathfinder_color::ColorU;
 use warp_core::features::FeatureFlag;
+use warp_core::send_telemetry_from_ctx;
 use warp_core::settings::Setting;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::color::contrast::{
@@ -33,7 +33,7 @@ use warp_core::ui::color::contrast::{
 };
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill as ThemeFill;
-use warp_core::{report_error, send_telemetry_from_ctx};
+use warp_errors::report_error;
 use warp_terminal::model::escape_sequences::{BRACKETED_PASTE_END, BRACKETED_PASTE_START};
 use warpify_footer::{WarpifyFooterView, WarpifyFooterViewEvent};
 use warpui::elements::{
@@ -793,9 +793,9 @@ impl TerminalView {
                         match base64::engine::general_purpose::STANDARD.decode(&image.data) {
                             Ok(bytes) => bytes,
                             Err(_) => {
-                                log::error!(
-                                    "Failed to decode base64 image data for {}",
-                                    image.file_name
+                                report_error!(
+                                    "Failed to decode base64 image data",
+                                    extra: { "file_name" => %image.file_name }
                                 );
                                 continue;
                             }
@@ -881,7 +881,10 @@ impl TerminalView {
                         }
                         Ok(_) => {}
                         Err(e) => {
-                            log::error!("Failed to stat dropped image {path_str}: {e}");
+                            report_error!(
+                                anyhow::Error::new(e).context("Failed to stat dropped image"),
+                                extra: { "path" => %path_str }
+                            );
                             continue;
                         }
                     }
@@ -889,7 +892,10 @@ impl TerminalView {
                     let bytes = match async_fs::read(&path_str).await {
                         Ok(b) => b,
                         Err(e) => {
-                            log::error!("Failed to read dropped image {path_str}: {e}");
+                            report_error!(
+                                anyhow::Error::new(e).context("Failed to read dropped image"),
+                                extra: { "path" => %path_str }
+                            );
                             continue;
                         }
                     };
@@ -1401,8 +1407,6 @@ impl View for UseAgentToolbar {
             if let Some(bg_color) = terminal_model.alt_screen().inferred_bg_color() {
                 container = container.with_background(bg_color);
             }
-        } else if terminal_model.block_list().agent_view_state().is_inline() {
-            container = container.with_background(agent_view_bg_fill(app));
         }
 
         container.finish()
@@ -1428,8 +1432,9 @@ impl TypedActionView for UseAgentToolbar {
                     .should_render_use_agent_footer_for_user_commands
                     .set_value(false, ctx)
                 {
-                    report_error!(anyhow!("{e:?}")
-                        .context("Failed to set `ShouldRenderUseAgentToolbarForUserCommands`"));
+                    report_error!(
+                        e.context("Failed to set `ShouldRenderUseAgentToolbarForUserCommands`")
+                    );
                 }
             });
         }

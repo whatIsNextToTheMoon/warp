@@ -1473,7 +1473,7 @@ pub(crate) fn header_message_for_user_take_over_reason(
 ) -> &'static str {
     match reason {
         UserTakeOverReason::Manual => USER_TOOK_CONTROL_COMMAND_MESSAGE,
-        UserTakeOverReason::Stop => USER_STOPPED_CLI_SUBAGENT_COMMAND_MESSAGE,
+        UserTakeOverReason::Stop { .. } => USER_STOPPED_CLI_SUBAGENT_COMMAND_MESSAGE,
         UserTakeOverReason::TransferFromAgent { .. } => {
             AGENT_REQUESTED_USER_TAKE_CONTROL_COMMAND_MESSAGE
         }
@@ -1585,7 +1585,7 @@ impl View for RequestedCommandView {
         if should_render_mcp_content {
             if FeatureFlag::McpJsonTreeView.is_enabled() {
                 let colors = JsonTreeColors::from_theme(theme);
-                let font_family = appearance.ui_font_family();
+                let font_family = appearance.monospace_font_family();
 
                 let mut tree_column =
                     Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);

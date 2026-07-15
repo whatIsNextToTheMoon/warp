@@ -1,3 +1,4 @@
+use warp_errors::report_error;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use crate::{
@@ -79,7 +80,10 @@ impl PromptType {
                             .into_item(),
                         )
                     } else {
-                        log::error!("Missing definition for chip: {:?}", chip_result.kind);
+                        report_error!(
+                            "Missing definition for chip",
+                            extra: { "chip_kind" => ?chip_result.kind }
+                        );
                         None
                     }
                 } else {
