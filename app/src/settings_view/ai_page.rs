@@ -8546,6 +8546,8 @@ impl ApiKeysWidget {
         column.add_child(self.render_api_key_input(
             appearance,
             "OpenRouter API Key",
+            LLMProvider::Unknown,
+            Default::default(),
             self.open_router_api_key_editor.clone(),
             is_enabled,
             app,

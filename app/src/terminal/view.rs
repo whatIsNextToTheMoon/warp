@@ -11633,7 +11633,7 @@ impl TerminalView {
         let model = self.model.lock();
         let block_list = model.block_list();
         let active_block = block_list.active_block();
-        if active_block.is_empty(block_list.agent_view_state()) {
+        if active_block.is_empty(block_list.transcript_scope()) {
             return None;
         }
 
