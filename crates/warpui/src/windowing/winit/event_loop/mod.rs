@@ -929,6 +929,13 @@ impl EventLoop {
             }) => {
                 self.send_notification(notification_info, window_id);
             }
+            Event::UserEvent(CustomEvent::NotificationClicked {
+                window_id,
+                response,
+            }) => {
+                self.focus_window(window_id);
+                self.callbacks.notification_clicked(response);
+            }
             Event::UserEvent(CustomEvent::FocusWindow { window_id }) => {
                 self.focus_window(window_id);
             }

@@ -1,14 +1,14 @@
 use futures::FutureExt;
 use winit::event_loop::EventLoopProxy;
 
-use crate::notification::NotificationSendError;
+use crate::notification::{NotificationResponse, NotificationSendError};
 use crate::windowing::winit::app::CustomEvent;
 use crate::windowing::winit::notifications::NotificationInfo;
 use crate::WindowId;
 
 pub(super) async fn send_notification(
     notification_info: NotificationInfo,
-    _window_id: WindowId,
+    window_id: WindowId,
     proxy: EventLoopProxy<CustomEvent>,
 ) {
     let NotificationInfo {
@@ -20,18 +20,44 @@ pub(super) async fn send_notification(
     notification
         .summary(notification_content.title())
         .body(notification_content.body());
+    if let Some(label) = notification_content.default_action_label() {
+        notification.action("default", label);
+    }
+
+    let sent_date = chrono::Utc::now().naive_utc();
+    let notification_data = notification_content.data().map(str::to_owned);
+    let action_proxy = proxy.clone();
 
     notification
         .show_async()
         .then(|handle| async move {
             match handle {
                 Ok(handle) => {
-                    // The call to on_close blocks until the notification is closed, so make the blocking
-                    // call on its own thread in the `blocking` crate threadpool to avoid starving the shared
-                    // background executor.
+                    // Waiting for an action blocks until the notification is clicked or closed,
+                    // so use the blocking threadpool rather than the shared background executor.
                     blocking::unblock(move || {
-                        // Without the on_close handler, the notification will fail to appear.
-                        handle.on_close(|reason| log::info!("Notification closed via {reason:?}"))
+                        // Keeping the handle alive is required for the notification and its
+                        // actions to remain available on some desktop environments.
+                        handle.wait_for_action(|action| {
+                            if action == "default" {
+                                let response = NotificationResponse::new(
+                                    sent_date,
+                                    notification_data,
+                                );
+                                if let Err(error) = action_proxy.send_event(
+                                    CustomEvent::NotificationClicked {
+                                        window_id,
+                                        response,
+                                    },
+                                ) {
+                                    log::warn!(
+                                        "Unable to handle notification click after event loop closed: {error:?}"
+                                    );
+                                }
+                            } else {
+                                log::info!("Notification closed via {action:?}");
+                            }
+                        })
                     })
                     .await;
                 }

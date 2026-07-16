@@ -15943,7 +15943,8 @@ impl Workspace {
                             notification.body.to_string(),
                             Some(notification_data_str),
                             play_sound,
-                        ),
+                        )
+                        .with_default_action_label(crate::i18n::ui_str("Open")),
                         move |workspace, notification_error, ctx| {
                             // Log to sentry if unknown error
                             if let NotificationSendError::Other { error_message } =

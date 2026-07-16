@@ -13,6 +13,8 @@ pub struct UserNotification {
     body: String,
     // Arbitrary data associated with the notification.
     data: Option<String>,
+    // Label for the notification's default click action, when supported.
+    default_action_label: Option<String>,
     // Whether to play sound with the notification.
     play_sound: bool,
 }
@@ -31,6 +33,7 @@ impl UserNotification {
             title,
             body,
             data,
+            default_action_label: None,
             play_sound: true,
         }
     }
@@ -45,12 +48,18 @@ impl UserNotification {
             title,
             body,
             data,
+            default_action_label: None,
             play_sound,
         }
     }
 
     pub fn with_data(mut self, data: impl Into<String>) -> Self {
         self.data = Some(data.into());
+        self
+    }
+
+    pub fn with_default_action_label(mut self, label: impl Into<String>) -> Self {
+        self.default_action_label = Some(label.into());
         self
     }
 
@@ -64,6 +73,10 @@ impl UserNotification {
 
     pub fn data(&self) -> Option<&str> {
         self.data.as_deref()
+    }
+
+    pub fn default_action_label(&self) -> Option<&str> {
+        self.default_action_label.as_deref()
     }
 
     pub fn play_sound(&self) -> bool {

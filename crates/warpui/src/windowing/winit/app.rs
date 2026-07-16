@@ -78,6 +78,11 @@ pub enum CustomEvent {
         window_id: WindowId,
         notification_info: NotificationInfo,
     },
+    /// A platform-native notification's default action was invoked.
+    NotificationClicked {
+        window_id: WindowId,
+        response: crate::notification::NotificationResponse,
+    },
     /// Focus the native window that triggered a notification.
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     FocusWindow {

@@ -118,18 +118,10 @@ impl AppCallbackDispatcher {
         }
     }
 
-    // This is not called on Linux or wasm, as there isn't any generic way to
-    // click on/interact with a notification.
+    // This is not called on wasm, as there isn't any generic way to
+    // click on/interact with a notification there.
     // TODO(CORE-2322): implement desktop notifications on Windows
-    #[cfg_attr(
-        any(
-            target_os = "linux",
-            target_os = "freebsd",
-            target_os = "windows",
-            target_family = "wasm"
-        ),
-        allow(dead_code)
-    )]
+    #[cfg_attr(any(target_os = "windows", target_family = "wasm"), allow(dead_code))]
     pub fn notification_clicked(&mut self, response: notification::NotificationResponse) {
         if let Some(callback) = &mut self.callbacks.on_notification_clicked {
             self.ui_app.update(|ctx| callback(response, ctx));
