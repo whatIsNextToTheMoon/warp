@@ -24,7 +24,7 @@ pub(super) async fn send_notification(
         notification.action("default", label);
     }
 
-    let sent_date = chrono::Utc::now().naive_utc();
+    let sent_date = crate::time::get_current_time().naive_utc();
     let notification_data = notification_content.data().map(str::to_owned);
     let action_proxy = proxy.clone();
 
