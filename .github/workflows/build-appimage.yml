@@ -1,4 +1,4 @@
-name: Build Warp OSS AppImage
+name: Build Warp OSS Arch Package
 
 on:
   workflow_dispatch:
@@ -13,19 +13,18 @@ permissions:
   contents: write
 
 concurrency:
-  # Only keep the newest AppImage/Arch packaging run per branch. If GitHub
+  # Only keep the newest Arch packaging run per branch. If GitHub
   # leaves an older run queued/stuck, later pushes should supersede it instead
   # of stacking more release builds.
-  group: build-appimage-${{ github.ref }}
+  group: build-arch-package-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  appimage:
+  arch_package:
     runs-on: ubuntu-22.04
     env:
       CARGO_TERM_COLOR: always
       # Warp bundling scripts read these.
-      APPIMAGE_EXTRACT_AND_RUN: "1"
       NO_LICENSES: "1"
       SKIP_SETTINGS_SCHEMA: "1"
 
@@ -51,17 +50,12 @@ jobs:
           sudo apt-get update
           ./script/linux/install_build_deps
 
-      - name: Install linuxdeploy (for AppImage bundling)
-        run: |
-          ./script/linux/install_linuxdeploy
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
           # Make the cache key stable across workflow runs to avoid creating a new
           # cache entry per job/run (which reduces cache hit rate and burns the 10GB budget).
-          shared-key: build-appimage
+          shared-key: build-arch-package
           add-job-id-key: false
           # By default rust-cache avoids caching workspace crates; for Warp this
           # means expensive workspace crates (e.g. `onboarding`, `ai`, etc.) get
@@ -98,14 +92,20 @@ jobs:
           # NOTE: Avoid '-' characters (Arch pkgver lint) and keep it short.
           echo "tag=v0.0.0.oss_$(git rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Build AppImage (OSS)
+      - name: Clean stale package output
+        run: rm -rf target/release-lto/bundle/linux
+
+      - name: Build Warp binary (OSS)
         env:
           RUSTC_WRAPPER: sccache
           SCCACHE_DIR: ${{ runner.temp }}/sccache
           GIT_RELEASE_TAG: ${{ steps.rel.outputs.tag }}
         run: |
           mkdir -p "$SCCACHE_DIR"
-          ./script/linux/bundle -c oss --packages appimage --release-tag "$GIT_RELEASE_TAG"
+          # An empty package list compiles and strips the release binary without
+          # producing AppImage/deb/rpm output. The Arch packaging action below
+          # consumes that binary inside its makepkg container.
+          ./script/linux/bundle -c oss --packages "" --release-tag "$GIT_RELEASE_TAG"
 
       - name: Bundle Arch Linux package (OSS)
         uses: ./.github/actions/bundle_arch_package
@@ -132,18 +132,12 @@ jobs:
           fi
           cp -f "$pkg" warp-terminal-zh-cn-oss-latest-x86_64.pkg.tar.zst
 
-          appimage="$(find . -maxdepth 1 -type f -name 'WarpOss-*.AppImage' ! -name 'WarpOss-latest-x86_64.AppImage' -printf '%f\n' | head -n 1)"
-          if [[ -n "$appimage" ]]; then
-            cp -f "$appimage" WarpOss-latest-x86_64.AppImage
-          fi
-
       - name: Compute checksums
         run: |
           cd target/release-lto/bundle/linux
           # Don't write a checksum file name containing '*' (upload-artifact
           # rejects it for cross-platform filesystem compatibility).
-          sha256sum WarpOss-*.AppImage | tee SHA256SUMS
-          sha256sum *.pkg.tar.zst | tee SHA256SUMS.arch
+          sha256sum *.pkg.tar.zst | tee SHA256SUMS
 
       - name: Publish GitHub Release (OSS)
         # Upload artifacts as Release assets so downloads are typically faster
@@ -157,10 +151,8 @@ jobs:
           fail_on_unmatched_files: true
           make_latest: true
           files: |
-            target/release-lto/bundle/linux/WarpOss-*.AppImage
-            target/release-lto/bundle/linux/SHA256SUMS
             target/release-lto/bundle/linux/*.pkg.tar.zst
-            target/release-lto/bundle/linux/SHA256SUMS.arch
+            target/release-lto/bundle/linux/SHA256SUMS
 
       - name: Prune old OSS releases (keep latest 3)
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
