@@ -3582,6 +3582,99 @@ fn test_clear_buffer() {
 }
 
 #[test]
+fn test_context_menu_includes_delete_for_single_completed_command_block() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            let block_index = {
+                let mut model = view.model.lock();
+                model.simulate_block("ls", "foo");
+                BlockIndex(model.block_list().active_block_index().0 - 1)
+            };
+            view.selected_blocks.reset_to_single(block_index);
+
+            let menu_source = BlockListMenuSource::RegularBlockRightClick {
+                block_index,
+                position_in_terminal_view: Vector2F::zero(),
+            };
+            let items = view.context_menu_items(&menu_source, ctx);
+            let labels: Vec<&str> = items
+                .iter()
+                .filter_map(|item| item.fields().map(|fields| fields.label()))
+                .collect();
+            assert!(
+                labels.contains(&"Delete command block"),
+                "Expected `Delete command block` menu item, got {labels:?}"
+            );
+
+            let active_index = view.model.lock().block_list().active_block_index();
+            view.selected_blocks.reset_to_single(active_index);
+            let active_items = view.context_menu_items(
+                &BlockListMenuSource::RegularBlockRightClick {
+                    block_index: active_index,
+                    position_in_terminal_view: Vector2F::zero(),
+                },
+                ctx,
+            );
+            assert!(!active_items.iter().any(|item| {
+                item.fields()
+                    .is_some_and(|fields| fields.label() == "Delete command block")
+            }));
+        });
+    })
+}
+
+#[test]
+fn test_delete_command_block_keeps_other_blocks_and_reindexes_bookmark() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            let (first_index, first_id, second_id) = {
+                let mut model = view.model.lock();
+                model.simulate_block("first", "first output");
+                model.simulate_block("second", "second output");
+                let active_index = model.block_list().active_block_index();
+                let first_index = BlockIndex(active_index.0 - 2);
+                let second_index = BlockIndex(active_index.0 - 1);
+                (
+                    first_index,
+                    model
+                        .block_list()
+                        .block_at(first_index)
+                        .unwrap()
+                        .id()
+                        .clone(),
+                    model
+                        .block_list()
+                        .block_at(second_index)
+                        .unwrap()
+                        .id()
+                        .clone(),
+                )
+            };
+            let second_index = BlockIndex(first_index.0 + 1);
+            view.bookmark_block(&second_index, ctx);
+            view.selected_blocks.reset_to_single(first_index);
+
+            view.delete_command_block(first_index, ctx);
+
+            let model = view.model.lock();
+            assert!(model.block_list().block_index_for_id(&first_id).is_none());
+            assert_eq!(
+                model.block_list().block_index_for_id(&second_id),
+                Some(first_index)
+            );
+            assert!(view.bookmarked_blocks.contains_key(&first_index));
+            assert!(view.selected_blocks.is_empty());
+        });
+    })
+}
+
+#[test]
 fn test_context_menu_includes_clear_when_block_list_non_empty() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);

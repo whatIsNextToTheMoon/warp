@@ -48,6 +48,7 @@ use crate::{
     terminal::view::ambient_agent::should_disable_snapshot,
     terminal::{
         general_settings::GeneralSettings,
+        model::block::BlockId,
         shared_session::{
             join_link,
             manager::{Manager, ManagerEvent},
@@ -265,6 +266,26 @@ impl TerminalPane {
             if let Err(err) = sender.send(model_event) {
                 report_error!(
                     anyhow::Error::new(err).context("Error sending blocks deleted event"),
+                    extra: { "terminal_id" => ?self.terminal_view(ctx).id() }
+                );
+            }
+        }
+    }
+
+    /// Instructs the SQLite thread to delete one block for this session.
+    fn delete_block(&self, block_id: &BlockId, ctx: &AppContext) {
+        if !AppExecutionMode::as_ref(ctx).can_save_session() {
+            return;
+        }
+
+        if let Some(sender) = &self.model_event_sender {
+            let model_event = ModelEvent::DeleteBlock {
+                pane_id: self.uuid.clone(),
+                block_id: block_id.as_str().to_string(),
+            };
+            if let Err(err) = sender.send(model_event) {
+                report_error!(
+                    anyhow::Error::new(err).context("Error sending block deleted event"),
                     extra: { "terminal_id" => ?self.terminal_view(ctx).id() }
                 );
             }
@@ -1002,6 +1023,11 @@ fn handle_terminal_view_event(
                 // all the associated blocks stored in the history.
                 if let Some(terminal_pane) = group.terminal_session_by_id(pane_id) {
                     terminal_pane.delete_blocks(ctx);
+                }
+            }
+            Event::BlockRemoved { block_id } => {
+                if let Some(terminal_pane) = group.terminal_session_by_id(pane_id) {
+                    terminal_pane.delete_block(block_id, ctx);
                 }
             }
             Event::ShareModalOpened(block_id) => {

@@ -1442,6 +1442,9 @@ pub enum ContextMenuAction {
     CopyBlockCommands,
     CopyBlockOutputs,
     CopyBlockFilteredOutputs,
+    DeleteCommandBlock {
+        block_index: BlockIndex,
+    },
     OpenShareBlockModal {
         block_index: BlockIndex,
     },
@@ -1574,6 +1577,9 @@ impl fmt::Debug for ContextMenuAction {
             CopyBlocks => f.write_str("CopyBlocks"),
             CopyBlockCommands => f.write_str("CopyBlockCommands"),
             CopyBlockOutputs => f.write_str("CopyBlockOutputs"),
+            DeleteCommandBlock { block_index } => {
+                write!(f, "DeleteCommandBlock {{ block_index: {block_index} }}")
+            }
             OpenShareBlockModal { block_index } => {
                 write!(f, "OpenShareModal {{ block_index: {block_index} }}")
             }
@@ -1753,6 +1759,9 @@ pub enum Event {
     Escape,
     Exited,
     BlockListCleared,
+    BlockRemoved {
+        block_id: BlockId,
+    },
     ShareModalOpened(BlockIndex),
     SendNotification(BlockNotification),
     BlockCompleted {
@@ -17909,6 +17918,32 @@ impl TerminalView {
 
         if matches!(
             menu_source,
+            BlockListMenuSource::BlockOverflowButton { .. }
+                | BlockListMenuSource::BlockKeybinding { .. }
+                | BlockListMenuSource::RegularBlockRightClick { .. }
+        ) && self.selected_blocks.is_singleton()
+            && !model.shared_session_status().is_sharer_or_viewer()
+        {
+            if let Some(block_index) = self
+                .selected_blocks
+                .tail()
+                .filter(|index| model.block_list().can_remove_command_block(*index))
+            {
+                if !items.is_empty() {
+                    items.push(MenuItem::Separator);
+                }
+                items.push(
+                    MenuItemFields::new(crate::i18n::ui_str("Delete command block"))
+                        .with_on_select_action(TerminalAction::ContextMenu(
+                            ContextMenuAction::DeleteCommandBlock { block_index },
+                        ))
+                        .into_item(),
+                );
+            }
+        }
+
+        if matches!(
+            menu_source,
             BlockListMenuSource::RegularBlockRightClick { .. }
                 | BlockListMenuSource::RegularTextRightClick { .. }
                 | BlockListMenuSource::RichContentBlockRightClick { .. }
@@ -22015,6 +22050,68 @@ impl TerminalView {
         ctx.notify();
     }
 
+    fn delete_command_block(&mut self, block_index: BlockIndex, ctx: &mut ViewContext<Self>) {
+        let can_remove = {
+            let model = self.model.lock();
+            !model.shared_session_status().is_sharer_or_viewer()
+                && model.block_list().can_remove_command_block(block_index)
+        };
+        if !can_remove {
+            return;
+        }
+
+        let rerun_find = self.find_model.as_ref(ctx).is_find_bar_open();
+        self.clear_selected_blocks(ctx);
+
+        let Some(block_id) = self
+            .model
+            .lock()
+            .block_list_mut()
+            .remove_command_block(block_index)
+        else {
+            return;
+        };
+
+        self.bookmarked_blocks = std::mem::take(&mut self.bookmarked_blocks)
+            .into_iter()
+            .filter_map(|(index, state)| {
+                if index == block_index {
+                    None
+                } else if index > block_index {
+                    Some((BlockIndex(index.0 - 1), state))
+                } else {
+                    Some((index, state))
+                }
+            })
+            .collect();
+        self.block_list_mouse_states.label_mouse_states.clear();
+        self.block_list_mouse_states.bookmark_mouse_states.clear();
+        self.block_list_mouse_states.filter_mouse_states.clear();
+        self.hovered_block_index = None;
+        self.mouse_down_block_index = None;
+
+        if let Some(filter_index) = self.active_filter_editor_block_index {
+            if filter_index == block_index {
+                self.close_block_filter_editor(ctx);
+            } else if filter_index > block_index {
+                self.active_filter_editor_block_index = Some(BlockIndex(filter_index.0 - 1));
+            }
+        }
+
+        if rerun_find {
+            let options = self.find_options_from_find_bar(ctx);
+            self.run_find_immediately(options, ctx);
+        } else {
+            self.find_model
+                .update(ctx, |find_model, ctx| find_model.clear_matches(ctx));
+        }
+
+        self.redetermine_terminal_focus(ctx);
+        self.update_scroll_position_locking(ScrollPositionUpdate::AfterResize, ctx);
+        ctx.emit(Event::BlockRemoved { block_id });
+        ctx.notify();
+    }
+
     fn is_navigated_away_from_window(&self, ctx: &mut ViewContext<Self>) -> bool {
         let active_window = ctx.windows().active_window();
         Some(ctx.window_id()) != active_window
@@ -25513,6 +25610,7 @@ impl TerminalView {
             CopyBlocks => self.context_menu_copy_blocks(ctx),
             CopyBlockCommands => self.context_menu_copy_block_commands(ctx),
             CopyBlockOutputs => self.context_menu_copy_block_outputs(ctx),
+            DeleteCommandBlock { block_index } => self.delete_command_block(*block_index, ctx),
             OpenShareBlockModal { block_index } => {
                 self.context_menu_open_share_block_modal(*block_index, ctx)
             }

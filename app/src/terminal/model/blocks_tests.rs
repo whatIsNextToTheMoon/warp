@@ -1744,6 +1744,42 @@ fn test_conversation_scoped_rich_content_hidden_outside_fullscreen_agent_view() 
 }
 
 #[test]
+fn test_remove_single_completed_command_block() {
+    let mut block_list =
+        new_bootstrapped_block_list(None, None, ChannelEventListener::new_for_test());
+
+    let first_index = insert_block(&mut block_list, "first", "first output");
+    let second_index = insert_block(&mut block_list, "second", "second output");
+    let first_id = block_list.block_at(first_index).unwrap().id().clone();
+    let second_id = block_list.block_at(second_index).unwrap().id().clone();
+    let active_id = block_list.active_block_id().clone();
+    let original_len = block_list.blocks().len();
+
+    assert!(block_list.can_remove_command_block(first_index));
+    assert!(!block_list.can_remove_command_block(block_list.active_block_index()));
+
+    let conversation_id = AIConversationId::new();
+    let action_id: AIAgentActionId = "agent-action".to_owned().into();
+    block_list
+        .block_at_mut(second_index)
+        .unwrap()
+        .set_agent_interaction_mode(AgentInteractionMetadata::new_hidden(
+            action_id,
+            conversation_id,
+        ));
+    assert!(!block_list.can_remove_command_block(second_index));
+
+    assert_eq!(
+        block_list.remove_command_block(first_index),
+        Some(first_id.clone())
+    );
+    assert_eq!(block_list.blocks().len(), original_len - 1);
+    assert!(block_list.block_index_for_id(&first_id).is_none());
+    assert_eq!(block_list.block_index_for_id(&second_id), Some(first_index));
+    assert_eq!(block_list.active_block_id(), &active_id);
+}
+
+#[test]
 fn test_clear_user_executed_command_blocks_for_conversation() {
     let mut block_list =
         new_bootstrapped_block_list(None, None, ChannelEventListener::new_for_test());

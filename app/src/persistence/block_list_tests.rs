@@ -11,13 +11,14 @@ use diesel::{Connection, ExpressionMethods, QueryDsl, RunQueryDsl};
 use diesel_migrations::MigrationHarness;
 
 use super::{
-    process_ai_queries_for_nld_history_match, process_ai_queries_for_uparrow_prompt,
-    read_recent_ai_queries, upsert_ai_query_with_limit,
+    delete_block, process_ai_queries_for_nld_history_match, process_ai_queries_for_uparrow_prompt,
+    read_recent_ai_queries, save_block, upsert_ai_query_with_limit,
 };
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{AIAgentExchangeId, AIAgentInput, UserQueryMode};
 use crate::ai::blocklist::{AIQueryHistoryOutputStatus, PersistedAIInput, PersistedAIInputType};
 use crate::ai::llms::LLMId;
+use crate::terminal::model::block::SerializedBlock;
 
 /// Builds an in-memory SQLite database with all migrations applied.
 fn test_connection() -> SqliteConnection {
@@ -88,6 +89,42 @@ fn first_query_text(query: &PersistedAIInput) -> &str {
     match query.inputs.first().expect("query should have an input") {
         PersistedAIInputType::Query { text, .. } => text,
     }
+}
+
+#[test]
+fn delete_block_removes_only_the_target_block_in_the_target_pane() {
+    let mut conn = test_connection();
+    let target_pane = vec![1, 2, 3];
+    let other_pane = vec![4, 5, 6];
+    let first = SerializedBlock::new_for_test(b"first".to_vec(), b"one".to_vec());
+    let second = SerializedBlock::new_for_test(b"second".to_vec(), b"two".to_vec());
+
+    save_block(&mut conn, target_pane.clone(), &first, true).expect("first block should save");
+    save_block(&mut conn, target_pane.clone(), &second, true).expect("second block should save");
+    save_block(&mut conn, other_pane.clone(), &first, true)
+        .expect("same block ID should save in another pane");
+
+    delete_block(
+        &mut conn,
+        target_pane.clone(),
+        first.id.as_str().to_string(),
+    )
+    .expect("target block should delete");
+
+    use crate::persistence::schema::blocks::dsl::{block_id, blocks, pane_leaf_uuid};
+    let target_ids = blocks
+        .filter(pane_leaf_uuid.eq(target_pane))
+        .select(block_id)
+        .load::<String>(&mut conn)
+        .expect("target pane blocks should load");
+    let other_ids = blocks
+        .filter(pane_leaf_uuid.eq(other_pane))
+        .select(block_id)
+        .load::<String>(&mut conn)
+        .expect("other pane blocks should load");
+
+    assert_eq!(target_ids, vec![second.id.as_str().to_string()]);
+    assert_eq!(other_ids, vec![first.id.as_str().to_string()]);
 }
 
 #[test]

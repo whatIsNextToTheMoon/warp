@@ -703,6 +703,7 @@
   "Delete": "删除",
   "Delete All Left": "删除左侧全部内容",
   "Delete All Right": "删除右侧全部内容",
+  "Delete command block": "删除命令块",
   "Delete MCP": "删除 MCP",
   "Delete Word Left": "向左删除单词",
   "Delete Word Left Within an Executing Command": "在执行中的命令内向左删除单词",

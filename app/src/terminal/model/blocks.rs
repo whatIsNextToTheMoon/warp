@@ -1584,6 +1584,33 @@ impl BlockList {
         self.event_proxy.send_wakeup_event();
     }
 
+    /// Returns whether a completed user command block can be removed without
+    /// disrupting the active command or agent-owned command state.
+    pub fn can_remove_command_block(&self, block_index: BlockIndex) -> bool {
+        if block_index == self.active_block_index() {
+            return false;
+        }
+
+        self.block_at(block_index).is_some_and(|block| {
+            block.finished()
+                && !block.is_background()
+                && !block.is_static()
+                && !block.is_in_band_command_block()
+                && block.agent_interaction_metadata().is_none()
+        })
+    }
+
+    /// Removes one completed user command block and returns its stable ID.
+    pub fn remove_command_block(&mut self, block_index: BlockIndex) -> Option<BlockId> {
+        if !self.can_remove_command_block(block_index) {
+            return None;
+        }
+
+        let block_id = self.block_at(block_index)?.id().clone();
+        self.remove_command_blocks_at_indices(vec![block_index]);
+        Some(block_id)
+    }
+
     pub fn remove_command_blocks_for_conversation(&mut self, conversation_id: AIConversationId) {
         let active_block_index = self.active_block_index();
 

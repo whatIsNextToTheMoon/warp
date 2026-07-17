@@ -356,6 +356,21 @@ pub(super) fn delete_blocks(conn: &mut SqliteConnection, pane_id: Vec<u8>) -> Re
     })
 }
 
+pub(super) fn delete_block(
+    conn: &mut SqliteConnection,
+    pane_id: Vec<u8>,
+    target_block_id: String,
+) -> Result<(), Error> {
+    use schema::blocks::dsl::*;
+    diesel::delete(
+        blocks
+            .filter(pane_leaf_uuid.eq(pane_id))
+            .filter(block_id.eq(target_block_id)),
+    )
+    .execute(conn)?;
+    Ok(())
+}
+
 pub(super) fn update_block_agent_view_visibility(
     conn: &mut SqliteConnection,
     target_block_id: &str,

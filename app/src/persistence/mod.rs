@@ -334,6 +334,10 @@ pub struct FinishedCommandMetadata {
 pub enum ModelEvent {
     SaveBlock(BlockCompleted),
     DeleteBlocks(Vec<u8>),
+    DeleteBlock {
+        pane_id: Vec<u8>,
+        block_id: String,
+    },
     Snapshot(AppState),
     UpsertWorkflows(Vec<CloudWorkflow>),
     UpsertNotebooks(Vec<CloudNotebook>),

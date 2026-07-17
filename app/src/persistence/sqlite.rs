@@ -53,8 +53,8 @@ use super::agent::{
     upsert_agent_conversation,
 };
 use super::block_list::{
-    delete_ai_conversation, delete_blocks, save_block, update_block_agent_view_visibility,
-    upsert_ai_query,
+    delete_ai_conversation, delete_block, delete_blocks, save_block,
+    update_block_agent_view_visibility, upsert_ai_query,
 };
 use super::model::{
     self, ActiveMCPServer, CurrentUserInformation, MCPEnvironmentVariables, NewActiveMCPServer,
@@ -641,6 +641,9 @@ fn handle_model_event(event: ModelEvent, connection: &mut SqliteConnection) -> a
             // Delete the blocks even if the setting is off so users can still remove
             // panes and have their data deleted locally.
             delete_blocks(connection, pane_id).context("error deleting blocks")
+        }
+        ModelEvent::DeleteBlock { pane_id, block_id } => {
+            delete_block(connection, pane_id, block_id).context("error deleting block")
         }
         ModelEvent::Snapshot(app_state) => {
             save_app_state(connection, &app_state).context("error saving app state")
