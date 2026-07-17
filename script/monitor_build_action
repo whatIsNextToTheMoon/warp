@@ -1,0 +1,406 @@
+#!/usr/bin/env zsh
+
+set -euo pipefail
+
+readonly DEFAULT_WORKFLOW='.github/workflows/build-appimage.yml'
+readonly DEFAULT_INTERVAL=30
+
+typeset REPO=''
+typeset SHA=''
+typeset RUN_ID=''
+typeset WORKFLOW="$DEFAULT_WORKFLOW"
+typeset INTERVAL="$DEFAULT_INTERVAL"
+typeset TOKEN=''
+typeset AUTH_SOURCE='anonymous API access'
+typeset API_ROOT="${GITHUB_API_URL:-https://api.github.com}"
+
+usage() {
+  cat <<'EOF'
+Monitor the GitHub Actions build for a commit and download failed job logs.
+
+Usage:
+  script/monitor_build_action [options]
+
+Options:
+  --sha SHA              Commit SHA to monitor (default: current HEAD)
+  --run-id ID            Monitor an existing workflow run directly
+  --workflow PATH|NAME   Workflow path or name
+                         (default: .github/workflows/build-appimage.yml)
+  --interval SECONDS     Poll interval (default: 30)
+  --repo OWNER/REPO      GitHub repository (default: inferred from origin)
+  -h, --help             Show this help
+
+Authentication:
+  GITHUB_TOKEN and GH_TOKEN are checked first. If neither is set, the script
+  asks the configured Git credential helper for github.com credentials. The
+  token is never printed or written to disk.
+
+Failed logs are saved under .git/warp-action-logs/<run-id>/.
+EOF
+}
+
+die() {
+  print -u2 -r -- "error: $*"
+  exit 2
+}
+
+need_value() {
+  (( $# >= 2 )) || die "$1 requires a value"
+  [[ -n "$2" ]] || die "$1 requires a non-empty value"
+}
+
+while (( $# > 0 )); do
+  case "$1" in
+    --sha)
+      need_value "$@"
+      SHA="$2"
+      shift 2
+      ;;
+    --run-id)
+      need_value "$@"
+      RUN_ID="$2"
+      shift 2
+      ;;
+    --workflow)
+      need_value "$@"
+      WORKFLOW="$2"
+      shift 2
+      ;;
+    --interval)
+      need_value "$@"
+      INTERVAL="$2"
+      shift 2
+      ;;
+    --repo)
+      need_value "$@"
+      REPO="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      die "unknown option: $1"
+      ;;
+  esac
+done
+
+for command_name in git curl jq rg; do
+  command -v "$command_name" >/dev/null 2>&1 || die "required command not found: $command_name"
+done
+
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || die 'run this inside a Git repository'
+cd "$REPO_ROOT"
+
+infer_repo() {
+  local remote_url
+  remote_url="$(git remote get-url origin 2>/dev/null)" || return 1
+  remote_url="${remote_url%.git}"
+
+  if [[ "$remote_url" =~ 'github\.com[/:]([^/]+)/([^/]+)$' ]]; then
+    print -r -- "${match[1]}/${match[2]}"
+    return 0
+  fi
+
+  return 1
+}
+
+if [[ -z "$REPO" ]]; then
+  REPO="$(infer_repo)" || die 'could not infer OWNER/REPO from the origin remote; use --repo'
+fi
+
+[[ "$REPO" =~ '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' ]] || die "invalid repository: $REPO"
+[[ "$INTERVAL" =~ '^[0-9]*[1-9][0-9]*$' ]] || die '--interval must be a positive integer'
+
+if [[ -n "$RUN_ID" ]]; then
+  [[ "$RUN_ID" == <-> ]] || die '--run-id must be numeric'
+else
+  if [[ -z "$SHA" ]]; then
+    SHA="$(git rev-parse HEAD)"
+  fi
+  [[ "$SHA" =~ '^[0-9a-fA-F]{7,40}$' ]] || die '--sha must be a 7-40 character hexadecimal commit SHA'
+  SHA="$(git rev-parse "$SHA^{commit}" 2>/dev/null)" || die "commit not found locally: $SHA"
+fi
+
+load_token() {
+  local credential_output=''
+  local credential_key=''
+  local credential_value=''
+
+  if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+    TOKEN="$GITHUB_TOKEN"
+    AUTH_SOURCE='GITHUB_TOKEN'
+    return
+  fi
+
+  if [[ -n "${GH_TOKEN:-}" ]]; then
+    TOKEN="$GH_TOKEN"
+    AUTH_SOURCE='GH_TOKEN'
+    return
+  fi
+
+  if credential_output="$(printf 'protocol=https\nhost=github.com\n\n' | git credential fill 2>/dev/null)"; then
+    while IFS='=' read -r credential_key credential_value; do
+      if [[ "$credential_key" == password ]]; then
+        TOKEN="$credential_value"
+        AUTH_SOURCE='Git credential helper'
+        break
+      fi
+    done <<< "$credential_output"
+  fi
+
+  credential_output=''
+}
+
+load_token
+
+typeset -a API_HEADERS
+API_HEADERS=(
+  --header 'Accept: application/vnd.github+json'
+  --header 'X-GitHub-Api-Version: 2022-11-28'
+)
+if [[ -n "$TOKEN" ]]; then
+  API_HEADERS+=(--header "Authorization: Bearer $TOKEN")
+fi
+
+api_get() {
+  local url="$1"
+  curl \
+    --silent \
+    --show-error \
+    --fail-with-body \
+    --retry 3 \
+    --retry-delay 2 \
+    --retry-all-errors \
+    "${API_HEADERS[@]}" \
+    "$url"
+}
+
+api_download() {
+  local url="$1"
+  local output_path="$2"
+  curl \
+    --location \
+    --silent \
+    --show-error \
+    --fail-with-body \
+    --retry 3 \
+    --retry-delay 2 \
+    --retry-all-errors \
+    "${API_HEADERS[@]}" \
+    --output "$output_path" \
+    "$url"
+}
+
+urlencode() {
+  jq -rn --arg value "$1" '$value | @uri'
+}
+
+find_run() {
+  local response=''
+  local encoded_sha
+  local run_json
+
+  encoded_sha="$(urlencode "$SHA")"
+  if ! response="$(api_get "$API_ROOT/repos/$REPO/actions/runs?head_sha=$encoded_sha&per_page=100")"; then
+    return 2
+  fi
+
+  if ! run_json="$(
+    jq -ce \
+      --arg sha "$SHA" \
+      --arg workflow "$WORKFLOW" \
+      '[.workflow_runs[]
+        | select(.head_sha == $sha)
+        | select(
+            .path == $workflow
+            or .name == $workflow
+            or .path == (".github/workflows/" + $workflow)
+          )]
+       | sort_by(.created_at, .run_attempt)
+       | last' <<< "$response" 2>/dev/null
+  )"; then
+    return 1
+  fi
+
+  print -r -- "$run_json"
+}
+
+fetch_run() {
+  api_get "$API_ROOT/repos/$REPO/actions/runs/$RUN_ID"
+}
+
+fetch_jobs() {
+  api_get "$API_ROOT/repos/$REPO/actions/runs/$RUN_ID/jobs?per_page=100"
+}
+
+print_jobs() {
+  local jobs_json="$1"
+
+  jq -r '
+    def current_step:
+      ([.steps[]? | select(.status == "in_progress") | .name][0]
+       // [.steps[]? | select(.status == "queued") | .name][0]
+       // [.steps[]? | select(.conclusion == "failure") | .name][-1]
+       // [.steps[]? | select(.status == "completed") | .name][-1]
+       // "");
+    .jobs
+    | sort_by(.id)[]
+    | (current_step) as $step
+    | "  - \(.name): \(.status)"
+      + (if .conclusion then "/\(.conclusion)" else "" end)
+      + (if $step != "" then " | \($step)" else "" end)
+  ' <<< "$jobs_json"
+}
+
+jobs_snapshot() {
+  local jobs_json="$1"
+
+  jq -c '
+    def current_step:
+      ([.steps[]? | select(.status == "in_progress") | .name][0]
+       // [.steps[]? | select(.status == "queued") | .name][0]
+       // [.steps[]? | select(.conclusion == "failure") | .name][-1]
+       // [.steps[]? | select(.status == "completed") | .name][-1]
+       // "");
+    [.jobs
+     | sort_by(.id)[]
+     | {id, status, conclusion, step: current_step}]
+  ' <<< "$jobs_json"
+}
+
+download_failed_logs() {
+  local jobs_json="$1"
+  local log_root
+  local job_id
+  local job_name
+  local job_conclusion
+  local safe_name
+  local log_path
+  local partial_path
+  local matches
+  local downloaded=0
+
+  log_root="$(git rev-parse --git-path "warp-action-logs/$RUN_ID")"
+  mkdir -p "$log_root"
+
+  while IFS=$'\t' read -r job_id job_name job_conclusion; do
+    [[ -n "$job_id" ]] || continue
+    safe_name="$(print -rn -- "$job_name" | tr -cs 'A-Za-z0-9._-' '_')"
+    [[ -n "$safe_name" ]] || safe_name='job'
+    log_path="$log_root/${safe_name}-${job_id}.log"
+    partial_path="$log_path.part"
+
+    print -r -- "Downloading $job_name ($job_conclusion) log..."
+    if api_download "$API_ROOT/repos/$REPO/actions/jobs/$job_id/logs" "$partial_path"; then
+      mv -f "$partial_path" "$log_path"
+      (( downloaded += 1 ))
+      print -r -- "  saved: $log_path"
+
+      if matches="$(
+        sed $'s/\033\\[[0-9;]*[[:alpha:]]//g' "$log_path" \
+          | rg --color never -n \
+            'error\[[A-Z][0-9]+\]:|(^|[[:space:]])error:|fatal:|Error:|ERROR:|##\[error\]' \
+          | sed -n '1,12p'
+      )"; then
+        print -r -- '  earliest error markers:'
+        while IFS= read -r match_line; do
+          print -r -- "    $match_line"
+        done <<< "$matches"
+      else
+        print -r -- '  no common error markers found'
+      fi
+    else
+      rm -f "$partial_path"
+      print -u2 -r -- "warning: could not download log for job $job_id"
+    fi
+  done < <(
+    jq -r '
+      .jobs[]
+      | select(.conclusion != null and .conclusion != "success" and .conclusion != "skipped")
+      | [.id, .name, .conclusion]
+      | @tsv
+    ' <<< "$jobs_json"
+  )
+
+  if (( downloaded == 0 )); then
+    print -r -- 'No failed job logs were available.'
+  fi
+}
+
+print -r -- "Repository: $REPO"
+print -r -- "Authentication: $AUTH_SOURCE"
+
+if [[ -z "$RUN_ID" ]]; then
+  print -r -- "Waiting for workflow '$WORKFLOW' at $SHA..."
+  while true; do
+    typeset discovered_run=''
+    if discovered_run="$(find_run)"; then
+      RUN_ID="$(jq -r '.id' <<< "$discovered_run")"
+      break
+    else
+      find_result=$?
+      if (( find_result == 2 )); then
+        print -u2 -r -- "warning: GitHub API query failed; retrying in ${INTERVAL}s"
+      fi
+    fi
+    sleep "$INTERVAL"
+  done
+fi
+
+typeset run_json=''
+until run_json="$(fetch_run)"; do
+  print -u2 -r -- "warning: could not fetch run $RUN_ID; retrying in ${INTERVAL}s"
+  sleep "$INTERVAL"
+done
+
+RUN_URL="$(jq -r '.html_url' <<< "$run_json")"
+RUN_NAME="$(jq -r '.name' <<< "$run_json")"
+RUN_SHA="$(jq -r '.head_sha' <<< "$run_json")"
+print -r -- "Run: $RUN_NAME #$RUN_ID"
+print -r -- "Commit: $RUN_SHA"
+print -r -- "URL: $RUN_URL"
+
+typeset previous_snapshot=''
+typeset jobs_json='{"jobs":[]}'
+typeset run_status=''
+typeset run_conclusion=''
+typeset current_snapshot=''
+
+while true; do
+  if ! run_json="$(fetch_run)"; then
+    print -u2 -r -- "warning: could not refresh run $RUN_ID; retrying in ${INTERVAL}s"
+    sleep "$INTERVAL"
+    continue
+  fi
+
+  if ! jobs_json="$(fetch_jobs)"; then
+    print -u2 -r -- "warning: could not fetch jobs for run $RUN_ID; retrying in ${INTERVAL}s"
+    sleep "$INTERVAL"
+    continue
+  fi
+
+  current_snapshot="$(jobs_snapshot "$jobs_json")"
+  if [[ "$current_snapshot" != "$previous_snapshot" ]]; then
+    print -r -- "[$(date '+%Y-%m-%d %H:%M:%S')]"
+    print_jobs "$jobs_json"
+    previous_snapshot="$current_snapshot"
+  fi
+
+  run_status="$(jq -r '.status' <<< "$run_json")"
+  if [[ "$run_status" == completed ]]; then
+    run_conclusion="$(jq -r '.conclusion // "unknown"' <<< "$run_json")"
+    break
+  fi
+
+  sleep "$INTERVAL"
+done
+
+print -r -- "Conclusion: $run_conclusion"
+if [[ "$run_conclusion" == success ]]; then
+  exit 0
+fi
+
+download_failed_logs "$jobs_json"
+exit 1
