@@ -1,9 +1,10 @@
+use pathfinder_color::ColorU;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
 use warpui::fonts::Cache as FontCache;
 use warpui::units::{IntoLines, Lines, Pixels};
 
-use super::{active_or_next_match, CachedBackgroundColor};
+use super::{active_or_next_match, CachedBackgroundColor, ColorSampler};
 use crate::terminal::grid_size_util::calculate_grid_baseline_position;
 use crate::terminal::model::index::Point;
 use crate::terminal::model::selection::SelectionPoint;
@@ -11,6 +12,61 @@ use crate::terminal::{grid_renderer, SizeInfo};
 
 fn rect_from_points(min_x: f32, min_y: f32, max_x: f32, max_y: f32) -> RectF {
     RectF::from_points(vec2f(min_x, min_y), vec2f(max_x, max_y))
+}
+
+fn sample_row(sampler: &mut ColorSampler, row: usize, color: ColorU) {
+    for _ in 0..16 {
+        sampler.sample(row, color);
+    }
+}
+
+#[test]
+fn test_color_sampler_prefers_trailing_rows_for_adjacent_ui() {
+    let panel_background = ColorU::new(240, 240, 240, 255);
+    let terminal_background = ColorU::new(20, 20, 20, 255);
+    let mut sampler = ColorSampler::new();
+    sampler.reset(7);
+
+    for row in 0..7 {
+        sample_row(&mut sampler, row, panel_background);
+    }
+    for row in 7..10 {
+        sample_row(&mut sampler, row, terminal_background);
+    }
+
+    assert_eq!(sampler.most_common(), Some(panel_background));
+    assert_eq!(sampler.trailing_most_common(), Some(terminal_background));
+}
+
+#[test]
+fn test_color_sampler_reset_clears_trailing_samples() {
+    let old_color = ColorU::new(240, 240, 240, 255);
+    let new_color = ColorU::new(20, 20, 20, 255);
+    let mut sampler = ColorSampler::new();
+    sampler.reset(0);
+    sample_row(&mut sampler, 0, old_color);
+
+    sampler.reset(5);
+    sample_row(&mut sampler, 5, new_color);
+
+    assert_eq!(sampler.most_common(), Some(new_color));
+    assert_eq!(sampler.trailing_most_common(), Some(new_color));
+}
+
+#[test]
+fn test_color_sampler_keeps_transparent_trailing_background_distinct() {
+    let panel_background = ColorU::new(240, 240, 240, 255);
+    let mut sampler = ColorSampler::new();
+    sampler.reset(2);
+    sample_row(&mut sampler, 0, panel_background);
+    sample_row(&mut sampler, 1, panel_background);
+    sample_row(&mut sampler, 2, ColorU::transparent_black());
+
+    assert_eq!(sampler.most_common(), Some(panel_background));
+    assert_eq!(
+        sampler.trailing_most_common(),
+        Some(ColorU::transparent_black())
+    );
 }
 
 // TODO(CORE-2002): Make test non-Mac specific by switching to using bundled Roboto font.

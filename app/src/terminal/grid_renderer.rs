@@ -53,6 +53,10 @@ const UNDERLINE_THICKNESS_SCALE_FACTOR: f32 = 0.15;
 /// Diameter of the circle at the top of the selection cursor.
 const SELECTION_CURSOR_TOP_DIAMETER: f32 = 5.;
 
+/// Number of rows nearest the bottom edge to sample separately for UI rendered directly below
+/// the terminal grid. Using a few rows avoids letting a single status row dominate the sample.
+pub(super) const TRAILING_BG_SAMPLE_ROWS: usize = 3;
+
 /// Stores count of occurrences of distinct colors as a grid is rendered, which we can use to
 /// compute the most common background color of a grid and color-match other UI elements against
 /// it.
@@ -60,6 +64,9 @@ const SELECTION_CURSOR_TOP_DIAMETER: f32 = 5.;
 pub struct ColorSampler {
     counts: HashMap<ColorU, usize>,
     total_samples: usize,
+    trailing_counts: HashMap<ColorU, usize>,
+    trailing_total_samples: usize,
+    trailing_start_row: usize,
 }
 
 impl ColorSampler {
@@ -67,25 +74,31 @@ impl ColorSampler {
         Self {
             counts: HashMap::new(),
             total_samples: 0,
+            trailing_counts: HashMap::new(),
+            trailing_total_samples: 0,
+            trailing_start_row: 0,
         }
     }
 
-    pub fn sample(&mut self, color: ColorU) {
+    pub fn sample(&mut self, row: usize, color: ColorU) {
         self.total_samples += 1;
         // Sample every 8th color (cell).
-        if !self.total_samples.is_multiple_of(8) {
-            return;
+        if self.total_samples.is_multiple_of(8) {
+            *self
+                .counts
+                .entry(normalize_sampled_color(color))
+                .or_default() += 1;
         }
 
-        let color = if color.is_fully_transparent() {
-            // Sample all fully transparent colors as the same color even if they have differing
-            // rgb values, cause that makes no difference in the rendered "color".
-            ColorU::transparent_black()
-        } else {
-            color
-        };
-
-        *self.counts.entry(color).or_default() += 1;
+        if row >= self.trailing_start_row {
+            self.trailing_total_samples += 1;
+            if self.trailing_total_samples.is_multiple_of(8) {
+                *self
+                    .trailing_counts
+                    .entry(normalize_sampled_color(color))
+                    .or_default() += 1;
+            }
+        }
     }
 
     pub fn most_common(&self) -> Option<ColorU> {
@@ -95,9 +108,28 @@ impl ColorSampler {
             .map(|(&color, _)| color)
     }
 
-    pub fn reset(&mut self) {
+    pub fn trailing_most_common(&self) -> Option<ColorU> {
+        self.trailing_counts
+            .iter()
+            .max_by_key(|(_, &count)| count)
+            .map(|(&color, _)| color)
+    }
+
+    pub fn reset(&mut self, trailing_start_row: usize) {
         self.counts.clear();
         self.total_samples = 0;
+        self.trailing_counts.clear();
+        self.trailing_total_samples = 0;
+        self.trailing_start_row = trailing_start_row;
+    }
+}
+
+fn normalize_sampled_color(color: ColorU) -> ColorU {
+    if color.is_fully_transparent() {
+        // Fully transparent colors render identically even when their RGB components differ.
+        ColorU::transparent_black()
+    } else {
+        color
     }
 }
 
@@ -743,6 +775,7 @@ fn render_grid_without_ligatures<'a>(
             if cell.is_empty() {
                 if let Some(sampler) = bg_color_sampler.as_deref_mut() {
                     sampler.sample(
+                        offset_row,
                         cached_background_color
                             .as_ref()
                             .map(|cached_color| cached_color.background_color)
@@ -911,7 +944,7 @@ fn render_cell(
         obfuscate_mode,
     );
     if let Some(sampler) = bg_color_sampler {
-        sampler.sample(cell_colors.background_color);
+        sampler.sample(offset_row, cell_colors.background_color);
     }
     cached_background_color = maybe_draw_background(
         cached_background_color,
@@ -1148,7 +1181,7 @@ fn render_grid_with_ligatures<'a>(
                         // tmux's status line during startup, do not dominate the inferred
                         // background used by surrounding UI.
                         for _ in 0..grid.columns() {
-                            sampler.sample(ColorU::transparent_black());
+                            sampler.sample(offset_row, ColorU::transparent_black());
                         }
                     }
                     continue;
@@ -1291,7 +1324,7 @@ fn render_grid_with_ligatures<'a>(
                     // `NamedBackground` is rendered with 0 alpha (transparent), as the terminal
                     // background itself is rendered by the terminal view, not as part of grid
                     // rendering.
-                    sampler.sample(ColorU::transparent_black());
+                    sampler.sample(offset_row, ColorU::transparent_black());
                 }
 
                 if let Some(cached) = cached_background_color.take() {
@@ -1355,7 +1388,7 @@ fn render_grid_with_ligatures<'a>(
                 obfuscate_secrets,
             );
             if let Some(sampler) = bg_color_sampler.as_mut() {
-                sampler.sample(cell_colors.background_color);
+                sampler.sample(offset_row, cell_colors.background_color);
             }
             cached_background_color = maybe_draw_background(
                 cached_background_color,

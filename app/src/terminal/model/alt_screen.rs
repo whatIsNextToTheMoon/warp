@@ -460,10 +460,16 @@ impl AltScreen {
         })
     }
 
+    /// Infers the background for UI adjacent to the bottom of the alt-screen grid.
+    ///
+    /// Prefer the trailing rows so a large transient panel elsewhere on screen cannot recolor the
+    /// CLI input/footer. A transparent trailing background intentionally resolves to `None`,
+    /// allowing callers to use the Warp theme rather than an unrelated full-screen sample.
     pub fn inferred_bg_color(&self) -> Option<ColorU> {
-        self.bg_color_sampler
-            .lock()
-            .most_common()
+        let sampler = self.bg_color_sampler.lock();
+        sampler
+            .trailing_most_common()
+            .or_else(|| sampler.most_common())
             .filter(|color| !color.is_fully_transparent())
     }
 }
