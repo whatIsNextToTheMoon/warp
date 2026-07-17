@@ -422,10 +422,10 @@ use shared_session::{
 use std::any::Any;
 use std::borrow::Cow;
 use std::cell::RefCell;
-use std::collections::hash_map::Entry;
+use std::collections::hash_map::{DefaultHasher, Entry};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
-use std::hash::Hash;
+use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -437,6 +437,7 @@ use std::time::Duration;
 use sum_tree::SeekBias;
 use vec1::vec1;
 use warp_core::context_flag::ContextFlag;
+use warp_core::execution_mode::AppExecutionMode;
 use warp_core::user_preferences::GetUserPreferences as _;
 use warp_errors::{report_error, report_if_error};
 #[cfg(feature = "local_fs")]
@@ -762,6 +763,9 @@ pub const NOTIFICATIONS_TROUBLESHOOT_URL: &str =
 
 const DEBOUNCE_PERIOD: Duration = Duration::from_millis(40);
 const FIND_QUERY_DEBOUNCE_PERIOD: Duration = Duration::from_millis(1000);
+/// Maximum frequency for persisting a changing active command block while output is streaming.
+/// Completed blocks still take the existing immediate persistence path.
+const ACTIVE_BLOCK_PERSIST_INTERVAL: Duration = Duration::from_secs(2);
 
 /// Key used in user preferences to persist the "don't show again" choice for the OSC 52
 /// clipboard blocked banner.
@@ -1765,6 +1769,11 @@ pub enum Event {
     ShareModalOpened(BlockIndex),
     SendNotification(BlockNotification),
     BlockCompleted {
+        block: Arc<SerializedBlock>,
+        is_local: bool,
+    },
+    /// A crash-resilient, in-progress snapshot of the active command and its current output.
+    ActiveBlockSnapshot {
         block: Arc<SerializedBlock>,
         is_local: bool,
     },
@@ -2807,6 +2816,10 @@ pub struct TerminalView {
     current_prompt: ModelHandle<PromptType>,
 
     model_event_sender: Option<SyncSender<persistence::ModelEvent>>,
+    /// Last active-block persistence attempt, used to avoid writing on every terminal wakeup.
+    last_active_block_persist_attempt: Option<Instant>,
+    /// Content fingerprint of the last queued active-block snapshot.
+    last_active_block_persisted_fingerprint: Option<u64>,
 
     /// The child views that represent rich content. These can be inserted into the block list with
     /// the `insert_rich_content` helper function.
@@ -4480,6 +4493,8 @@ impl TerminalView {
             is_focused_and_active: true,
             current_prompt,
             model_event_sender,
+            last_active_block_persist_attempt: None,
+            last_active_block_persisted_fingerprint: None,
             block_filter_editor,
             active_filter_editor_block_index: None,
             rich_content_views: Vec::new(),
@@ -10102,6 +10117,7 @@ impl TerminalView {
                 self.update_codex_alt_screen_display_mode(&model, ctx, "terminal-wakeup");
             }
         }
+        self.maybe_persist_active_block_for_restore(false, ctx);
         ctx.notify();
     }
 
@@ -11660,9 +11676,9 @@ impl TerminalView {
             return None;
         }
 
-        // Session restoration only reloads blocks that have both timestamps. Snapshot an
-        // active command as completed during normal shutdown so the newest visible scrollback
-        // survives closing Warp with the window close button.
+        // Session restoration only reloads blocks that have both timestamps. Snapshot an active
+        // command as completed so periodic/crash and normal-shutdown snapshots can both be
+        // restored as visible scrollback.
         let now = chrono::Local::now();
         if serialized_block.start_ts.is_none() {
             serialized_block.start_ts = Some(now);
@@ -11678,6 +11694,40 @@ impl TerminalView {
         );
 
         Some((Arc::new(serialized_block), is_local))
+    }
+
+    fn maybe_persist_active_block_for_restore(&mut self, force: bool, ctx: &mut ViewContext<Self>) {
+        if !AppExecutionMode::as_ref(ctx).can_save_session()
+            || !*GeneralSettings::as_ref(ctx).restore_session
+        {
+            return;
+        }
+
+        let now = Instant::now();
+        if !force
+            && self
+                .last_active_block_persist_attempt
+                .is_some_and(|last| now.duration_since(last) < ACTIVE_BLOCK_PERSIST_INTERVAL)
+        {
+            return;
+        }
+        self.last_active_block_persist_attempt = Some(now);
+
+        let Some((block, is_local)) = self.active_block_snapshot_for_restore(ctx) else {
+            return;
+        };
+        let mut hasher = DefaultHasher::new();
+        block.id.as_str().hash(&mut hasher);
+        block.stylized_command.hash(&mut hasher);
+        block.stylized_output.hash(&mut hasher);
+        block.did_execute.hash(&mut hasher);
+        let fingerprint = hasher.finish();
+        if self.last_active_block_persisted_fingerprint == Some(fingerprint) {
+            return;
+        }
+
+        self.last_active_block_persisted_fingerprint = Some(fingerprint);
+        ctx.emit(Event::ActiveBlockSnapshot { block, is_local });
     }
 
     /// Returns true if the block is considered remote.
@@ -12474,6 +12524,11 @@ impl TerminalView {
                     .block_list_mut()
                     .active_block_mut()
                     .set_prompt_snapshot(prompt_snapshot);
+
+                // Persist the command as soon as execution begins. Subsequent output wakeups
+                // update this row at a bounded frequency, so crash recovery does not depend on
+                // receiving BlockCompleted or running the normal shutdown callbacks.
+                self.maybe_persist_active_block_for_restore(true, ctx);
 
                 // Clear any previously active AM query suggestion banners and hidden blocks.
                 self.clear_prompt_suggestions(ctx);
@@ -18305,6 +18360,19 @@ impl TerminalView {
                 .into_item(),
         );
 
+        if self.last_command_for_reinput().is_some() {
+            items.push(
+                MenuItemFields::new(crate::i18n::ui_str("Restore last command"))
+                    .with_on_select_action(TerminalAction::RestoreLastCommand)
+                    .with_key_shortcut_label(keybinding_name_to_display_string(
+                        "terminal:restore_last_command",
+                        ctx,
+                    ))
+                    .with_disabled(is_editor_disabled)
+                    .into_item(),
+            );
+        }
+
         if FeatureFlag::CreatingSharedSessions.is_enabled()
             && ContextFlag::CreateSharedSession.is_enabled()
         {
@@ -21823,6 +21891,25 @@ impl TerminalView {
             input.replace_buffer_content((command).trim(), ctx);
             ctx.focus_self();
         });
+    }
+
+    fn last_command_for_reinput(&self) -> Option<String> {
+        let model = self.model.lock();
+        if model.shared_session_status().is_reader() {
+            return None;
+        }
+        let block_list = model.block_list();
+        let block_index = block_list.last_matching_block_by_index(BlockFilter::commands())?;
+        let command = block_list.block_at(block_index)?.command_to_string();
+        (!command.trim().is_empty()).then_some(command)
+    }
+
+    fn restore_last_command(&mut self, ctx: &mut ViewContext<Self>) {
+        let Some(command) = self.last_command_for_reinput() else {
+            return;
+        };
+        self.input_command(ctx, command);
+        self.focus_input_box(ctx);
     }
 
     fn reinput_commands(&mut self, as_root: bool, ctx: &mut ViewContext<Self>) {
@@ -27215,6 +27302,7 @@ impl TypedActionView for TerminalView {
             | OpenShareModal
             | ReinputCommands
             | ReinputCommandsWithSudo
+            | RestoreLastCommand
             | ClearBuffer
             | Focus
             | ShowFindBar
@@ -27539,6 +27627,7 @@ impl TypedActionView for TerminalView {
             OpenShareModal => self.open_share_block_modal(ctx),
             ReinputCommands => self.reinput_commands(false, ctx),
             ReinputCommandsWithSudo => self.reinput_commands(true, ctx),
+            RestoreLastCommand => self.restore_last_command(ctx),
             ClearBuffer => self.clear_buffer(ctx),
             Focus => self.redetermine_global_focus(ctx),
             FocusInputAndClearSelection => self.focus_input_and_clear_selections(ctx),

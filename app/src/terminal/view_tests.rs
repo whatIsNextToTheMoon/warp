@@ -4225,6 +4225,69 @@ fn test_reinput_blocks() {
     })
 }
 
+#[test]
+fn test_restore_last_command_uses_current_pane_history() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        terminal.update(&mut app, |view, ctx| {
+            let mut model = view.model.lock();
+            model.simulate_block("whoami", "user");
+            model.simulate_block("ls", "file");
+            drop(model);
+
+            view.handle_action(&TerminalAction::RestoreLastCommand, ctx);
+            assert_eq!(view.input().as_ref(ctx).buffer_text(ctx), "ls");
+        });
+    })
+}
+
+#[test]
+fn test_restore_last_command_uses_restored_block_history() {
+    use crate::ai::blocklist::SerializedBlockListItem;
+    use crate::terminal::model::block::SerializedBlock;
+
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let restored_blocks = [SerializedBlockListItem::Command {
+            block: Box::new(SerializedBlock::new_for_test(
+                "whoami".into(),
+                "user".into(),
+            )),
+        }];
+        let terminal = add_window_with_terminal(&mut app, Some(&restored_blocks));
+
+        terminal.update(&mut app, |view, ctx| {
+            view.handle_action(&TerminalAction::RestoreLastCommand, ctx);
+            assert_eq!(view.input().as_ref(ctx).buffer_text(ctx), "whoami");
+        });
+    })
+}
+
+#[test]
+fn test_active_block_snapshot_captures_running_command_for_crash_restore() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        terminal.update(&mut app, |view, ctx| {
+            view.model
+                .lock()
+                .simulate_long_running_block("sleep 10", "still running");
+
+            let (snapshot, _is_local) = view
+                .active_block_snapshot_for_restore(ctx)
+                .expect("running command should produce a persistence snapshot");
+            assert!(snapshot.did_execute);
+            assert!(snapshot.start_ts.is_some());
+            assert!(snapshot.completed_ts.is_some());
+            assert!(String::from_utf8_lossy(&snapshot.stylized_command).contains("sleep 10"));
+            assert!(String::from_utf8_lossy(&snapshot.stylized_output).contains("still running"));
+        });
+    })
+}
+
 fn run_find_test(input_mode: InputMode) {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);

@@ -2,7 +2,10 @@
 #[cfg(feature = "local_fs")]
 use crate::pane_group::CodeSource;
 use std::sync::mpsc::TrySendError;
-use std::{collections::HashMap, sync::mpsc::SyncSender};
+use std::{
+    collections::HashMap,
+    sync::{mpsc::SyncSender, Arc},
+};
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use url::Url;
@@ -287,6 +290,53 @@ impl TerminalPane {
                 report_error!(
                     anyhow::Error::new(err).context("Error sending block deleted event"),
                     extra: { "terminal_id" => ?self.terminal_view(ctx).id() }
+                );
+            }
+        }
+    }
+
+    fn persist_block_for_restore(
+        &self,
+        block: Arc<crate::terminal::model::block::SerializedBlock>,
+        is_local: bool,
+        terminal_pane_id: TerminalPaneId,
+        ctx: &mut ViewContext<PaneGroup>,
+    ) {
+        if !*GeneralSettings::as_ref(ctx).restore_session
+            || !AppExecutionMode::as_ref(ctx).can_save_session()
+        {
+            return;
+        }
+        let Some(sender) = &self.model_event_sender else {
+            return;
+        };
+        let event = ModelEvent::SaveBlock(BlockCompleted {
+            pane_id: self.session_uuid(),
+            block,
+            is_local,
+        });
+
+        // Queue immediately when possible. If the bounded writer channel is full, move the
+        // blocking send off the UI thread; preserving the newest snapshot is more important than
+        // dropping it when the process may be killed before normal shutdown.
+        match sender.try_send(event) {
+            Ok(()) => {}
+            Err(TrySendError::Disconnected(_)) => {
+                log::error!(
+                    "SQLite writer channel disconnected; could not persist block for terminal id {terminal_pane_id:?}"
+                );
+            }
+            Err(TrySendError::Full(event)) => {
+                let sender = sender.clone();
+                let _ = ctx.spawn(
+                    async move { sender.send(event) },
+                    move |_, result, _| {
+                        if let Err(err) = result {
+                            log::error!(
+                                "Error sending block snapshot event for terminal id {terminal_pane_id:?} {err:?}"
+                            );
+                        }
+                    },
                 );
             }
         }
@@ -1065,45 +1115,12 @@ fn handle_terminal_view_event(
             Event::BlockCompleted { block, is_local } => {
                 match group.terminal_session_by_id(pane_id) {
                     Some(pane) => {
-                        if *GeneralSettings::as_ref(ctx).restore_session
-                            && AppExecutionMode::as_ref(ctx).can_save_session()
-                        {
-                            if let Some(sender) = &group.model_event_sender {
-                                let block_completed_event = ModelEvent::SaveBlock(BlockCompleted {
-                                    pane_id: pane.session_uuid(),
-                                    block: block.clone(),
-                                    is_local: *is_local,
-                                });
-
-                                // Best-effort: enqueue immediately so short-lived sessions (or
-                                // abrupt termination) are more likely to persist the last block.
-                                //
-                                // If the queue is full, fall back to the old async send to avoid
-                                // blocking the UI thread.
-                                match sender.try_send(block_completed_event) {
-                                    Ok(()) => {}
-                                    Err(TrySendError::Disconnected(_)) => {
-                                        log::error!(
-                                            "SQLite writer channel disconnected; could not persist block for terminal id {terminal_pane_id:?}"
-                                        );
-                                    }
-                                    Err(TrySendError::Full(event)) => {
-                                        let sender_clone = sender.clone();
-                                        let _ = ctx.spawn(
-                                            async move {
-                                                // Sending over a sync sender can block the current thread, so we do this async.
-                                                sender_clone.send(event)
-                                            },
-                                            move |_, res, _| {
-                                                if let Err(err) = res {
-                                                    log::error!("Error sending block completed event for terminal id {terminal_pane_id:?} {err:?}");
-                                                }
-                                            },
-                                        );
-                                    }
-                                }
-                            }
-                        }
+                        pane.persist_block_for_restore(
+                            block.clone(),
+                            *is_local,
+                            terminal_pane_id,
+                            ctx,
+                        );
                         ctx.emit(pane_group::Event::ActiveSessionChanged);
                     }
                     None => {
@@ -1113,6 +1130,11 @@ fn handle_terminal_view_event(
                         );
                     }
                 };
+            }
+            Event::ActiveBlockSnapshot { block, is_local } => {
+                if let Some(pane) = group.terminal_session_by_id(pane_id) {
+                    pane.persist_block_for_restore(block.clone(), *is_local, terminal_pane_id, ctx);
+                }
             }
             Event::SessionBootstrapped => {
                 ctx.emit(pane_group::Event::ActiveSessionChanged);
@@ -2185,8 +2207,6 @@ fn handle_ai_history_event(
     is_shared_ambient_agent_session: bool,
     ctx: &mut ViewContext<PaneGroup>,
 ) {
-    use std::sync::Arc;
-
     use crate::ai::blocklist::{
         AIQueryHistoryOutputStatus, PersistedAIInput, PersistedAIInputType,
     };

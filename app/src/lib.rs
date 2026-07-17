@@ -2546,6 +2546,12 @@ pub(crate) fn app_callbacks(
             }
             ctx.dispatch_global_action("root_view:update_quake_mode_state", &update_quake_mode_arg);
 
+            // Persist before the app is backgrounded. External termination commonly happens
+            // after focus moves to a system monitor or another terminal, so this captures the
+            // latest pane layout and active command output even when shutdown callbacks never run.
+            ctx.dispatch_global_action("workspace:persist_active_blocks_for_restore", &());
+            ctx.dispatch_global_action("workspace:save_app", &());
+
             let auth_state = AuthStateProvider::as_ref(ctx).get();
             ctx.record_app_blur(
                 auth_state.user_id().map(|uid| uid.as_string()),

@@ -1620,6 +1620,8 @@
   "Regex toggle": "正则开关",
   "Reinput Selected Commands": "将所选命令重新输入",
   "Reinput Selected Commands as Root": "以 root 身份重新输入所选命令",
+  "Restore Last Command": "恢复上次命令",
+  "Restore last command": "恢复上次命令",
   "Reject": "拒绝",
   "Relevant file search in the current directory is not available": "当前目录不可使用相关文件搜索",
   "Reload Credits": "续充点数",

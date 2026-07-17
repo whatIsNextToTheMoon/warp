@@ -393,6 +393,12 @@ pub fn init(app: &mut AppContext) {
             id!("Terminal") & ne!("TerminalView_BlockSelectionCardinality", "None"),
         ),
         EditableBinding::new(
+            "terminal:restore_last_command",
+            "Restore last command",
+            TerminalAction::RestoreLastCommand,
+        )
+        .with_context_predicate(id!("Terminal")),
+        EditableBinding::new(
             "terminal:find",
             "Find in Terminal",
             TerminalAction::ShowFindBar,
