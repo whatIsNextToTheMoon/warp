@@ -18302,6 +18302,9 @@ impl TerminalView {
         &self,
         ctx: &mut ViewContext<Self>,
     ) -> Vec<MenuItem<TerminalAction>> {
+        // `last_command_for_reinput` locks the terminal model, so evaluate it before holding the
+        // model guard used to build the rest of the menu. `parking_lot::Mutex` is not reentrant.
+        let has_last_command = self.last_command_for_reinput().is_some();
         let model = self.model.lock();
         let mut items = Vec::new();
 
@@ -18360,7 +18363,7 @@ impl TerminalView {
                 .into_item(),
         );
 
-        if self.last_command_for_reinput().is_some() {
+        if has_last_command {
             items.push(
                 MenuItemFields::new(crate::i18n::ui_str("Restore last command"))
                     .with_on_select_action(TerminalAction::RestoreLastCommand)

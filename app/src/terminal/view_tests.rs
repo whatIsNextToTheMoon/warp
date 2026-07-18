@@ -4244,6 +4244,28 @@ fn test_restore_last_command_uses_current_pane_history() {
 }
 
 #[test]
+fn test_input_context_menu_includes_restore_last_command() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        terminal.update(&mut app, |view, ctx| {
+            view.model.lock().simulate_block("whoami", "user");
+
+            let items = view.input_context_menu_items(ctx);
+            let labels = items
+                .iter()
+                .filter_map(|item| item.fields().map(|fields| fields.label()))
+                .collect::<Vec<_>>();
+            assert!(
+                labels.contains(&"Restore last command"),
+                "Expected `Restore last command` menu item, got {labels:?}"
+            );
+        });
+    })
+}
+
+#[test]
 fn test_restore_last_command_uses_restored_block_history() {
     use crate::ai::blocklist::SerializedBlockListItem;
     use crate::terminal::model::block::SerializedBlock;
