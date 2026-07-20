@@ -15,14 +15,16 @@ pub fn render_shell_process_terminated_banner(
             InlineBannerStyle::CallToAction,
             appearance,
             InlineBannerContent {
-                title: "Shell process exited prematurely!".to_string(),
+                title: crate::i18n::ui_str("Shell process exited prematurely!"),
                 header_icon: Some(InlineBannerIcon {
                     asset_path: "bundled/svg/warning.svg",
                     aspect_ratio: 1.,
                     color_override: Some(appearance.theme().foreground().into_solid()),
                 }),
                 content: Some(vec![Text::new(
-                    "The output from Warp's initialization script is visible above to assist with debugging.",
+                    crate::i18n::ui_str(
+                        "The output from Warp's initialization script is visible above to assist with debugging.",
+                    ),
                     appearance.ui_font_family(),
                     appearance.ui_font_size(),
                 )]),
@@ -34,7 +36,7 @@ pub fn render_shell_process_terminated_banner(
             InlineBannerStyle::LowPriority,
             appearance,
             InlineBannerContent {
-                title: "Shell process exited".to_string(),
+                title: crate::i18n::ui_str("Shell process exited"),
                 header_icon: Some(InlineBannerIcon {
                     asset_path: "bundled/svg/info.svg",
                     aspect_ratio: 1.,

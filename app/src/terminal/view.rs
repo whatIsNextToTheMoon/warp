@@ -8887,6 +8887,11 @@ impl TerminalView {
         ctx.emit(Event::ShutdownPty);
     }
 
+    /// Stops the foreground process while preserving the shell for undo-close.
+    pub(crate) fn interrupt_active_process_for_undo_close(&mut self, ctx: &mut ViewContext<Self>) {
+        self.user_write_ctrl_c_to_pty(ctx);
+    }
+
     pub(crate) fn stop_local_agent_conversation(
         &mut self,
         conversation_id: AIConversationId,

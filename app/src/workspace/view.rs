@@ -11833,7 +11833,11 @@ impl Workspace {
                             .active_block()
                             .is_active_and_long_running()
                         {
-                            terminal_view.shutdown_pty(ctx);
+                            if add_to_undo_stack {
+                                terminal_view.interrupt_active_process_for_undo_close(ctx);
+                            } else {
+                                terminal_view.shutdown_pty(ctx);
+                            }
                         }
                     },
                     ctx,
