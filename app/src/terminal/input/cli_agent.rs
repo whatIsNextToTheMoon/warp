@@ -1,6 +1,5 @@
-use warp_core::ui::color::blend::Blend as _;
-use warp_core::ui::color::contrast::MinimumAllowedContrast;
 use warp_core::ui::color::ContrastingColor;
+use warp_core::ui::color::blend::Blend as _;
 use warp_core::ui::color::contrast::MinimumAllowedContrast;
 use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
