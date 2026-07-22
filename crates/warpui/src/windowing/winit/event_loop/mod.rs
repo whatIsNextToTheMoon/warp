@@ -11,7 +11,7 @@ use futures_util::future::LocalBoxFuture;
 use futures_util::stream::AbortHandle;
 use instant::{Duration, Instant};
 use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use warp_errors::report_error;
 #[cfg(target_family = "wasm")]
 use wasm_bindgen::JsCast;
@@ -24,12 +24,13 @@ use winit::keyboard::{self, KeyCode};
 use winit::window::WindowId as WinitWindowId;
 
 use self::key_events::convert_keyboard_input_event;
+use super::CustomEvent;
 use super::app::ClipboardEvent;
 use super::window::DEFAULT_TITLEBAR_HEIGHT;
 #[cfg(windows)]
-use super::windows::{add_network_connection_listener, WindowsNetworkConnectionPoint};
-use super::CustomEvent;
+use super::windows::{WindowsNetworkConnectionPoint, add_network_connection_listener};
 use crate::actions::StandardAction;
+use crate::r#async::Timer;
 use crate::event::ModifiersState;
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 use crate::notification::RequestPermissionsOutcome;
@@ -37,7 +38,6 @@ use crate::platform::app::{
     AppCallbackDispatcher, ApproveTerminateResult, TerminationRequestSource,
 };
 use crate::platform::{self, NotificationInfo, OperatingSystem, TerminationMode, WindowContext};
-use crate::r#async::Timer;
 use crate::rendering::wgpu::renderer;
 use crate::windowing::winit::app::RequestPermissionsCallback;
 use crate::windowing::winit::window::MIN_WINDOW_SIZE;
@@ -101,7 +101,7 @@ const LONG_PRESS_DURATION: Duration = Duration::from_millis(500);
 const MOMENTUM_DECAY: f32 = 0.968; // Every interval, velocity is multiplied by this factor.
 const MOMENTUM_DECAY_INTERVAL: f32 = 0.008; // Time period (seconds) over which MOMENTUM_DECAY is applied
 const MOMENTUM_FRAME_INTERVAL: Duration = Duration::from_millis(8); //Controls how often the momentum scroll tick fires.
-                                                                    // Higher values means it fires less often (choppier)
+// Higher values means it fires less often (choppier)
 const MOMENTUM_THRESHOLD: f32 = 50.0; // Min-velocity to start momentum scroll, Android standards
 const MOMENTUM_MIN_VELOCITY: f32 = 1.0; // When velocity falls below this, scrolling stops. 1.0 is subpixel
 const MOMENTUM_MAX_VELOCITY: f32 = 2000.0; // Hard cap on momentum initial velocity (px/s)
@@ -186,13 +186,6 @@ struct ImeMarkedTextState {
 enum ImePositionRefresh {
     NotNeeded,
     AfterNextFrame,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct LastImeCursorPosition {
-    position: (f64, f64),
-    size: (f64, f64),
-    updated_at: Instant,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -629,7 +622,12 @@ pub(super) struct EventLoop {
     proxy: EventLoopProxy<CustomEvent>,
     ime_enabled_window_id: Option<WinitWindowId>,
     ime_position_refresh: ImePositionRefresh,
-    last_ime_cursor_position: Option<LastImeCursorPosition>,
+    /// Last IME cursor area sent to winit, keyed by the target window. On Wayland, used to skip
+    /// redundant `set_ime_cursor_area` calls (which can re-trigger IME events on some compositors,
+    /// notably KDE Plasma). The window id is part of the key so focusing another Warp window with
+    /// the same logical rect still updates the newly focused surface. On X11 this is still recorded
+    /// but identical areas are not skipped so the position nudge can run.
+    last_ime_cursor_area: Option<(WindowId, LogicalPosition<f64>, LogicalSize<f64>)>,
     /// Whether to downrank non-NVIDIA vulkan adapters. This is set to true when we detect a DRI3
     /// error that occurs when trying to present against a non-NVIDIA Vulkan adapter when the
     /// PRIME Profile is set to "Performance" mode.  It's not fully clear why this error occurs. Our
@@ -660,7 +658,7 @@ impl EventLoop {
             proxy,
             ime_enabled_window_id: None,
             ime_position_refresh: ImePositionRefresh::NotNeeded,
-            last_ime_cursor_position: None,
+            last_ime_cursor_area: None,
             downrank_non_nvidia_vulkan_adapters: false,
             #[cfg(target_family = "wasm")]
             soft_keyboard_manager: None,
@@ -1067,12 +1065,11 @@ impl EventLoop {
                     size.height = MIN_WINDOW_SIZE.height;
                     request_new_size = true;
                 }
-                if request_new_size {
-                    if let Err(err) =
+                if request_new_size
+                    && let Err(err) =
                         inner_size_writer.request_inner_size(size.to_physical(scale_factor))
-                    {
-                        log::warn!("unable to correct window size: {err:#}");
-                    }
+                {
+                    log::warn!("unable to correct window size: {err:#}");
                 }
             }
             Event::WindowEvent { window_id, event } => self.handle_window_event(window_id, event),
@@ -1137,7 +1134,9 @@ impl EventLoop {
 
         #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         if crate::windowing::winit::linux::take_encountered_bad_match_from_dri3_fence_from_fd() {
-            log::warn!("Encountered a DRI3FenceFromFd error, forcing use of the NVIDIA GPU and recreating resources...");
+            log::warn!(
+                "Encountered a DRI3FenceFromFd error, forcing use of the NVIDIA GPU and recreating resources..."
+            );
             self.downrank_non_nvidia_vulkan_adapters = true;
 
             self.ui_app.update(|ctx| {
@@ -1252,10 +1251,11 @@ impl EventLoop {
 
                 let mut window_callbacks = self.callbacks.for_window(window.as_ref());
                 let result = window_callbacks.dispatch_event(event);
-                if !result.handled && !cmd_pressed {
-                    if let Some(chars) = chars {
-                        window_callbacks.dispatch_event(TypedCharacters { chars });
-                    }
+                if !result.handled
+                    && !cmd_pressed
+                    && let Some(chars) = chars
+                {
+                    window_callbacks.dispatch_event(TypedCharacters { chars });
                 }
             }
             ConvertedEvent::WindowMoved { new_position } => {
@@ -1448,13 +1448,12 @@ impl EventLoop {
                 // the appropriate Warp-side event (ModifierKeyChanged).
                 if let (None, keyboard::PhysicalKey::Code(keycode)) =
                     (&event.text, &event.physical_key)
+                    && let Ok(mapped_keycode) = try_from_winit_keycode(keycode)
                 {
-                    if let Ok(mapped_keycode) = try_from_winit_keycode(keycode) {
-                        return Some(ConvertedEvent::ModifierKeyChanged {
-                            key_code: mapped_keycode,
-                            state: event.state,
-                        });
-                    }
+                    return Some(ConvertedEvent::ModifierKeyChanged {
+                        key_code: mapped_keycode,
+                        state: event.state,
+                    });
                 }
 
                 let event_text = event.text.as_ref().map(|text| text.to_string());
@@ -1652,20 +1651,19 @@ impl EventLoop {
 
         // Drop the renderer before we actually clean up the window, to ensure
         // that the window outlives the `wgpu` surface that references it.
-        if let Some(WindowState { window_id, .. }) = window_state {
-            if let Some(window) = self
+        if let Some(WindowState { window_id, .. }) = window_state
+            && let Some(window) = self
                 .ui_app
                 .read(|ctx| ctx.windows().platform_window(window_id))
-            {
-                downcast_window(window.as_ref())
-                    .drop_renderer(Box::new(window_target.owned_display_handle()));
-            }
+        {
+            downcast_window(window.as_ref())
+                .drop_renderer(Box::new(window_target.owned_display_handle()));
         }
 
         if self.ime_enabled_window_id == Some(winit_window_id) {
             self.ime_enabled_window_id = None;
             self.ime_position_refresh = ImePositionRefresh::NotNeeded;
-            self.last_ime_cursor_position = None;
+            self.last_ime_cursor_area = None;
         }
 
         self.callbacks.window_will_close(window_id)
@@ -1694,21 +1692,33 @@ impl EventLoop {
     fn handle_ime_event(&mut self, winit_window_id: WinitWindowId, event: ImeEvent) {
         match event {
             winit::event::Ime::Enabled => {
+                let was_enabled = self.ime_enabled_window_id == Some(winit_window_id);
                 self.ime_enabled_window_id = Some(winit_window_id);
-                self.last_ime_cursor_position = None;
-                if let Some(window_state) = self.state.windows.get_mut(&winit_window_id) {
-                    window_state.ime_marked_text = None;
-                    window_state
-                        .ime_marked_text_storm_guard
-                        .reset(Instant::now());
+                // Only push a cursor-position update on the disabled→enabled edge. Re-emitting on
+                // every `Enabled` (which some Wayland compositors send after each
+                // `set_ime_cursor_area`) previously fed an infinite Enabled → update_ime_position →
+                // set_ime_cursor_area → Enabled loop on KDE Plasma.
+                log::debug!("IME enabled (was_enabled={was_enabled})");
+                if !was_enabled {
+                    if let Some(window_state) = self.state.windows.get_mut(&winit_window_id) {
+                        window_state.ime_marked_text = None;
+                        window_state
+                            .ime_marked_text_storm_guard
+                            .reset(Instant::now());
+                    }
+                    self.ui_app
+                        .update(|ctx| ctx.report_active_cursor_position_update());
                 }
-                self.ui_app
-                    .update(|ctx| ctx.report_active_cursor_position_update());
             }
             winit::event::Ime::Preedit(preedit_text, cursor_position) => {
                 if self.ime_enabled_window_id != Some(winit_window_id) {
                     return;
                 }
+
+                log::debug!(
+                    "IME preedit: text_len={} cursor={cursor_position:?}",
+                    preedit_text.len()
+                );
 
                 let Some(window_state) = self.state.windows.get_mut(&winit_window_id) else {
                     return;
@@ -1784,6 +1794,8 @@ impl EventLoop {
                 }
             }
             winit::event::Ime::Commit(chars) => {
+                log::debug!("IME commit: chars_len={}", chars.len());
+
                 let Some(window_state) = self.state.windows.get_mut(&winit_window_id) else {
                     return;
                 };
@@ -1821,7 +1833,7 @@ impl EventLoop {
                 if self.ime_enabled_window_id == Some(winit_window_id) {
                     self.ime_enabled_window_id = None;
                     self.ime_position_refresh = ImePositionRefresh::NotNeeded;
-                    self.last_ime_cursor_position = None;
+                    self.last_ime_cursor_area = None;
                 }
 
                 let Some(window_state) = self.state.windows.get_mut(&winit_window_id) else {
@@ -1844,6 +1856,8 @@ impl EventLoop {
                         .dispatch_event(ClearMarkedText);
                     self.ime_position_refresh = ImePositionRefresh::AfterNextFrame;
                 }
+                log::debug!("IME disabled");
+                self.last_ime_cursor_area = None;
             }
         };
     }
@@ -1868,27 +1882,26 @@ impl EventLoop {
         let winit_window = downcast_window(window.as_ref());
         // There is some state on the [`winit::window::Window`] that needs to be kept
         // in sync with the cursor position in order for drag-resizing windows to work.
-        if let crate::Event::MouseMoved { .. } = event {
-            if !winit_window.is_decorated() {
-                winit_window.update_drag_resize_state(window_state.last_cursor_position);
-            }
+        if let crate::Event::MouseMoved { .. } = event
+            && !winit_window.is_decorated()
+        {
+            winit_window.update_drag_resize_state(window_state.last_cursor_position);
         }
 
         // Check if we should start a window drag-resize. If so, do that instead of
         // passing the event into warpui. Skip for touch events as drag_resize_window
         // doesn't work properly with touch input on Windows.
-        if let crate::event::Event::LeftMouseDown { .. } = event {
-            if !winit_window.is_decorated()
-                && winit_window.try_drag_resize()
-                && window_state.last_touch_purpose.is_none()
-            {
-                // If we initiated a drag via the method
-                // [`winit::window::Window::drag_resize_window`], we will not
-                // receive a MouseInput event when the button is release, so we
-                // pre-emptively set this back to None.
-                window_state.current_mouse_button_pressed = None;
-                return;
-            }
+        if let crate::event::Event::LeftMouseDown { .. } = event
+            && !winit_window.is_decorated()
+            && winit_window.try_drag_resize()
+            && window_state.last_touch_purpose.is_none()
+        {
+            // If we initiated a drag via the method
+            // [`winit::window::Window::drag_resize_window`], we will not
+            // receive a MouseInput event when the button is release, so we
+            // pre-emptively set this back to None.
+            window_state.current_mouse_button_pressed = None;
+            return;
         }
         let dispatch_result = self
             .callbacks
@@ -1897,30 +1910,27 @@ impl EventLoop {
 
         // If the app didn't handle the event, warpui might still want to do something
         // with it if it's a click within the "titlebar region" at the top.
-        if !dispatch_result.handled {
-            if let crate::event::Event::LeftMouseDown {
+        if !dispatch_result.handled
+            && let crate::event::Event::LeftMouseDown {
                 click_count,
                 position,
                 ..
             } = event
-            {
-                // The WASM "window" does not support dragging or maximization.
-                let titlebar_height = winit_window.titlebar_height();
-                if position.y() < titlebar_height && !cfg!(target_family = "wasm") {
-                    // Double-clicking the titlebar does maximize/restore.
-                    if click_count >= 2 {
-                        window.toggle_maximized();
-                    } else if window_state.last_touch_purpose.is_none() {
-                        // Single-click drag moves the window. Skip for touch events as
-                        // drag_window doesn't work properly with touch input on Windows.
-                        // We won't receive MouseInput::Released after drag_window.
-                        match winit_window.drag_window() {
-                            Ok(_) => window_state.current_mouse_button_pressed = None,
-                            Err(err) => {
-                                report_error!(
-                                    anyhow::Error::new(err).context("error dragging window")
-                                )
-                            }
+        {
+            // The WASM "window" does not support dragging or maximization.
+            let titlebar_height = winit_window.titlebar_height();
+            if position.y() < titlebar_height && !cfg!(target_family = "wasm") {
+                // Double-clicking the titlebar does maximize/restore.
+                if click_count >= 2 {
+                    window.toggle_maximized();
+                } else if window_state.last_touch_purpose.is_none() {
+                    // Single-click drag moves the window. Skip for touch events as
+                    // drag_window doesn't work properly with touch input on Windows.
+                    // We won't receive MouseInput::Released after drag_window.
+                    match winit_window.drag_window() {
+                        Ok(_) => window_state.current_mouse_button_pressed = None,
+                        Err(err) => {
+                            report_error!(anyhow::Error::new(err).context("error dragging window"))
                         }
                     }
                 }
@@ -2113,18 +2123,15 @@ impl EventLoop {
                 LogicalPosition::new(cursor_rect.origin_x() as f64, cursor_area_y as f64);
             let size =
                 LogicalSize::new(cursor_area_width as f64, cursor_area_height.max(1.) as f64);
-            let now = Instant::now();
-            let position_key = (position.x, position.y);
-            let size_key = (size.width, size.height);
-            if self.last_ime_cursor_position.is_some_and(|last| {
-                last.position == position_key
-                    && last.size == size_key
-                    && now.duration_since(last.updated_at) < Duration::from_millis(16)
-            }) {
+
+            // Repeated Wayland cursor-area updates can trigger another IME Enabled event on some
+            // compositors. X11 still receives every update so the position nudge below can bypass
+            // winit's cached cursor area after a window move or resize.
+            let next_area = (active_window_id, position, size);
+            if is_wayland && self.last_ime_cursor_area == Some(next_area) {
                 if should_debug_ime_position() {
                     log::warn!(
-                        "IME position skipped duplicate: wayland={} pos=({:.1},{:.1}) size=({:.1},{:.1})",
-                        is_wayland,
+                        "IME position skipped duplicate: wayland=true pos=({:.1},{:.1}) size=({:.1},{:.1})",
                         position.x,
                         position.y,
                         size.width,
@@ -2133,6 +2140,7 @@ impl EventLoop {
                 }
                 return;
             }
+            self.last_ime_cursor_area = Some(next_area);
 
             if should_debug_ime_position() {
                 log::warn!(
@@ -2148,13 +2156,21 @@ impl EventLoop {
                     size.height,
                     active_cursor_position.font_size
                 );
+            } else {
+                log::debug!(
+                    "Updating IME cursor area for window={active_window_id:?} position=({:.1}, {:.1}) size=({:.1}, {:.1}) is_wayland={is_wayland}",
+                    position.x,
+                    position.y,
+                    size.width,
+                    size.height,
+                );
+            }
+
+            if !is_wayland {
+                winit_window
+                    .set_ime_position(LogicalPosition::new(position.x, position.y + 1.), size);
             }
             winit_window.set_ime_position(position, size);
-            self.last_ime_cursor_position = Some(LastImeCursorPosition {
-                position: position_key,
-                size: size_key,
-                updated_at: now,
-            });
         } else if should_debug_ime_position() {
             log::warn!("IME position skipped: no active cursor position");
         }
@@ -2207,7 +2223,7 @@ impl EventLoop {
     /// when focused. The manager is only created on mobile devices.
     #[cfg(target_family = "wasm")]
     fn initialize_soft_keyboard(&mut self) {
-        use crate::platform::wasm::{is_mobile_device, SoftKeyboardInput, SoftKeyboardManager};
+        use crate::platform::wasm::{SoftKeyboardInput, SoftKeyboardManager, is_mobile_device};
 
         if !is_mobile_device() {
             log::info!("Not a mobile device, skipping soft keyboard initialization");
@@ -2235,8 +2251,10 @@ impl EventLoop {
                 self.soft_keyboard_manager = Some(manager);
             }
             Err(err) => {
-                report_error!(anyhow::anyhow!("{err:?}")
-                    .context("Failed to initialize soft keyboard manager"));
+                report_error!(
+                    anyhow::anyhow!("{err:?}")
+                        .context("Failed to initialize soft keyboard manager")
+                );
             }
         }
     }
@@ -2270,8 +2288,8 @@ impl EventLoop {
     /// synchronously during event processing may not work reliably on iOS Safari.
     #[cfg(target_family = "wasm")]
     fn refocus_canvas() {
-        use wasm_bindgen::prelude::Closure;
         use wasm_bindgen::JsCast;
+        use wasm_bindgen::prelude::Closure;
 
         // Defer focus to next frame to ensure we're outside the current event processing.
         let callback = Closure::once(Box::new(|| {
@@ -2279,10 +2297,9 @@ impl EventLoop {
                 .query_selector("canvas")
                 .ok()
                 .flatten()
+                && let Ok(html_element) = canvas.dyn_into::<web_sys::HtmlElement>()
             {
-                if let Ok(html_element) = canvas.dyn_into::<web_sys::HtmlElement>() {
-                    let _ = html_element.focus();
-                }
+                let _ = html_element.focus();
             }
         }) as Box<dyn FnOnce()>);
 
@@ -2374,12 +2391,12 @@ impl EventLoop {
     fn handle_visual_viewport_resize(&mut self, _width: f32, height: f32) {
         log::debug!("Visual viewport resized, height = {}px", height);
 
-        if let Some(container) = gloo::utils::document().get_element_by_id("wasm-container") {
-            if let Some(html_element) = container.dyn_ref::<web_sys::HtmlElement>() {
-                let _ = html_element
-                    .style()
-                    .set_property("height", &format!("{}px", height));
-            }
+        if let Some(container) = gloo::utils::document().get_element_by_id("wasm-container")
+            && let Some(html_element) = container.dyn_ref::<web_sys::HtmlElement>()
+        {
+            let _ = html_element
+                .style()
+                .set_property("height", &format!("{}px", height));
         }
     }
 }

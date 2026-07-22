@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::os::unix::prelude::*;
 use std::process::Child;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use itertools::Itertools;
 use mio::Interest;
@@ -10,13 +11,15 @@ use signal_hook_mio::v1_0::Signals;
 use warp_cli::TerminalServerArgs;
 use warp_errors::report_error;
 
-use super::{api, logging, protocol, RECV_SOCKET_FILENO, SEND_SOCKET_FILENO};
+use super::{RECV_SOCKET_FILENO, SEND_SOCKET_FILENO, api, logging, protocol};
 use crate::terminal::local_tty::server::protocol::NonblockingSocketFd;
 use crate::terminal::local_tty::{self};
 use crate::terminal::platform;
 
 const RECV_SOCKET_TOKEN: mio::Token = mio::Token(0);
 const SIGNALS_TOKEN: mio::Token = mio::Token(1);
+const GRACEFUL_CHILD_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(500);
+const CHILD_SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 /// A helper structure for holding onto child processes and ensuring that
 /// all children are killed when the structure is dropped.
@@ -55,23 +58,45 @@ impl Children {
         }
         terminated_children
     }
+
+    /// Give interactive shells a chance to run their normal SIGHUP cleanup,
+    /// including forwarding the hangup to their jobs. The timeout is shared by
+    /// all children so application shutdown cannot be delayed indefinitely.
+    fn shutdown_gracefully(&mut self) {
+        for child in self.0.values() {
+            let pid = nix::unistd::Pid::from_raw(child.id() as i32);
+            if let Err(err) = nix::sys::signal::kill(pid, nix::sys::signal::SIGHUP) {
+                log::warn!("Failed to send SIGHUP to child shell {}: {err}", child.id());
+            }
+        }
+
+        let deadline = Instant::now() + GRACEFUL_CHILD_SHUTDOWN_TIMEOUT;
+        while !self.0.is_empty() && Instant::now() < deadline {
+            self.0.retain(|pid, child| match child.try_wait() {
+                Ok(Some(_)) => false,
+                Ok(None) => true,
+                Err(err) => {
+                    log::warn!("Failed to check child shell {pid} during shutdown: {err}");
+                    true
+                }
+            });
+            if !self.0.is_empty() {
+                std::thread::sleep(CHILD_SHUTDOWN_POLL_INTERVAL);
+            }
+        }
+
+        for (pid, child) in &mut self.0 {
+            log::info!("Child shell {pid} did not exit after SIGHUP; forcing termination");
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        self.0.clear();
+    }
 }
 
 impl std::ops::Drop for Children {
     fn drop(&mut self) {
-        // Explicitly kill all children on drop.
-        for child in self.0.values_mut() {
-            // Send SIGHUP instead of SIGKILL (which is what `child.kill()`
-            // sends) so that the shell process can properly clean up
-            // foreground jobs.  SIGKILL cannot be ignored or caught, and kills
-            // the receiving process immediately.
-            let pid = nix::unistd::Pid::from_raw(child.id() as i32);
-            let _ = nix::sys::signal::kill(pid, nix::sys::signal::SIGHUP);
-            // Ensure we consume the child's exit code to avoid it becoming
-            // a zombie.
-            // See: https://doc.rust-lang.org/std/process/struct.Child.html#warning
-            let _ = child.wait();
-        }
+        self.shutdown_gracefully();
     }
 }
 
@@ -204,9 +229,9 @@ impl EventLoop {
                                     },
                                     Option::<RawFd>::None,
                                 ) {
-                                    report_error!(err.context(
-                                        "Failed to notify host process about terminated children"
-                                    ));
+                                    log::error!(
+                                        "Failed to notify host process about terminated children: {err:#}"
+                                    );
                                 }
                             }
                         }
@@ -232,9 +257,9 @@ impl EventLoop {
             let result = match protocol::try_receive_message(self.recv_socket_fd) {
                 Ok(result) => result,
                 Err(err) => {
-                    report_error!(err.context(
-                        "Encountered unexpected error receiving message from host process"
-                    ));
+                    log::error!(
+                        "Encountered unexpected error receiving message from host process: {err:#}"
+                    );
                     log::info!("Shutting down terminal server...");
                     return None;
                 }
@@ -262,7 +287,7 @@ impl EventLoop {
                             Ok(pty_spawn_info.result)
                         }
                         Err(err) => {
-                            report_error!(&err);
+                            log::error!("Failed to spawn shell: {err:#}");
                             Err(err)
                         }
                     };
@@ -278,28 +303,30 @@ impl EventLoop {
                         },
                         leader_fd,
                     ) {
-                        report_error!(err.context(
-                            "Encountered unexpected error sending message to host process"
-                        ));
+                        log::error!(
+                            "Encountered unexpected error sending message to host process: {err:#}"
+                        );
                         log::info!("Shutting down terminal server...");
                         return None;
                     };
 
                     // Close the leader file descriptor now that the host
                     // process is holding a copy of it.
-                    if let Some(leader_fd) = leader_fd {
-                        if let Err(err) = nix::unistd::close(leader_fd) {
-                            report_error!(anyhow::Error::new(err).context(
-                                "Failed to close leader fd after sending it back to host process"
-                            ));
-                        }
+                    if let Some(leader_fd) = leader_fd
+                        && let Err(err) = nix::unistd::close(leader_fd)
+                    {
+                        log::warn!(
+                            "Failed to close leader fd after sending it back to host process: {err:#}"
+                        );
                     }
                 }
                 api::Message::KillChildRequest { pid } => {
                     let result = match self.children.remove(&pid) {
                         Some(mut child) => child.kill().and_then(|_| child.wait()),
                         None => {
-                            log::info!("Did not find child shell process with pid {pid}; assuming it has already terminated.");
+                            log::info!(
+                                "Did not find child shell process with pid {pid}; assuming it has already terminated."
+                            );
                             Ok(std::process::ExitStatus::default())
                         }
                     };
@@ -309,12 +336,24 @@ impl EventLoop {
                         api::Message::KillChildResponse { error_msg },
                         Option::<RawFd>::None,
                     ) {
-                        report_error!(err.context(
-                            "Encountered unexpected error sending message to host process"
-                        ));
+                        log::error!(
+                            "Encountered unexpected error sending message to host process: {err:#}"
+                        );
                         log::info!("Shutting down terminal server...");
                         return None;
                     };
+                }
+                api::Message::ShutdownRequest => {
+                    log::info!("Gracefully shutting down terminal child processes...");
+                    self.children.shutdown_gracefully();
+                    if let Err(err) = protocol::send_message(
+                        RECV_SOCKET_FILENO,
+                        api::Message::ShutdownResponse,
+                        Option::<RawFd>::None,
+                    ) {
+                        log::error!("Failed to send terminal server shutdown response: {err:#}");
+                    }
+                    return None;
                 }
                 api::Message::SpawnShellResponse { .. } => {
                     report_error!(
@@ -323,6 +362,9 @@ impl EventLoop {
                 }
                 api::Message::KillChildResponse { .. } => {
                     report_error!("Terminal server received unexpected KillChildResponse message!");
+                }
+                api::Message::ShutdownResponse => {
+                    report_error!("Terminal server received unexpected ShutdownResponse message!");
                 }
                 api::Message::WriteLogRequest { .. } => {
                     report_error!("Terminal server received unexpected WriteLogRequest message!");

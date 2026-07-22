@@ -44,6 +44,11 @@ pub(super) enum Message {
     /// an error that occurred during the operation, if any.  Should only be
     /// sent from server -> client.
     KillChildResponse { error_msg: Option<String> },
+    /// A message sent from client -> server requesting a bounded graceful
+    /// shutdown of every child shell before the server exits.
+    ShutdownRequest,
+    /// The response for a `ShutdownRequest`. Should only be sent from server -> client.
+    ShutdownResponse,
     /// A message sent from server -> client requesting that a log message be
     /// written to the host application's log.  This has no matching response
     /// message - these requests are fire-and-forget from the server to the

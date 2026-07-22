@@ -69,7 +69,6 @@ __pycache__/
 
 # Project notes
 .note/
-
 # Local AppImage build artifacts
 *.AppImage
 *.AppImage.prev-*
@@ -79,3 +78,5 @@ squashfs-root/
 
 # Local plaintext credential store (DO NOT COMMIT)
 .git-credentials
+
+.claude/scheduled_tasks.lock

@@ -73,9 +73,7 @@ impl PtyHandle for DirectPtyHandle {
     }
 
     fn kill(&mut self) -> Result<()> {
-        // The logic to kill the process and file handles are fully contained in
-        // EventedPty::kill().
-        Ok(())
+        self.child.kill()
     }
 }
 /// Invokes the provided callback function without crash reporting enabled.
@@ -158,12 +156,14 @@ impl PtySpawner {
     /// Does any work necessary to clean up state in advance of the app
     /// terminating.
     pub fn prepare_for_app_termination(&mut self) {
-        // Drop the backing `TerminalServer`, if one exists, killing the child
-        // process.
+        // Ask the backing `TerminalServer`, if one exists, to gracefully stop
+        // child shells before falling back to forceful cleanup.
         #[cfg(unix)]
-        if let Some(server) = self.server.take() {
+        if let Some(mut server) = self.server.take() {
             log::info!("Tearing down terminal server...");
-            drop(server);
+            if let Err(err) = server.shutdown() {
+                log::warn!("Failed to gracefully shut down terminal server: {err:#}");
+            }
         }
     }
 
@@ -304,7 +304,7 @@ fn is_e2big(err: &anyhow::Error) -> bool {
 /// env var / secret configurations (E2BIG on Linux, socket overflow on macOS).
 #[cfg(unix)]
 fn log_env_var_diagnostics(extra_env_vars: &HashMap<OsString, OsString>) {
-    report_error!("Shell spawn env var diagnostics (names and sizes only, no values):");
+    log::error!("Shell spawn env var diagnostics (names and sizes only, no values):");
 
     // Log the additional env vars supplied via PtyOptions.
     let mut extra: Vec<(&OsString, usize)> = extra_env_vars
@@ -312,15 +312,9 @@ fn log_env_var_diagnostics(extra_env_vars: &HashMap<OsString, OsString>) {
         .map(|(k, v)| (k, k.len() + v.len() + 2))
         .collect();
     extra.sort_by_key(|(_, size)| Reverse(*size));
-    report_error!(
-        "PtyOptions env_vars",
-        extra: { "entries" => %extra_env_vars.len() }
-    );
+    log::error!("PtyOptions env_vars entries={}", extra_env_vars.len());
     for (key, size) in extra.iter().take(20) {
-        report_error!(
-            "PtyOptions env var entry",
-            extra: { "key" => ?key, "bytes" => %size }
-        );
+        log::error!("PtyOptions env var entry key={key:?} bytes={size}");
     }
 
     // Log the largest vars from the inherited process environment.
@@ -332,14 +326,11 @@ fn log_env_var_diagnostics(extra_env_vars: &HashMap<OsString, OsString>) {
         .collect();
     inherited.sort_by_key(|(_, size)| Reverse(*size));
     let total: usize = inherited.iter().map(|(_, s)| s).sum();
-    report_error!(
-        "Inherited process env summary",
-        extra: { "vars" => %inherited.len(), "bytes" => %total }
+    log::error!(
+        "Inherited process env summary vars={} bytes={total}",
+        inherited.len()
     );
     for (key, size) in inherited.iter().take(20) {
-        report_error!(
-            "Inherited process env entry",
-            extra: { "key" => ?key, "bytes" => %size }
-        );
+        log::error!("Inherited process env entry key={key:?} bytes={size}");
     }
 }

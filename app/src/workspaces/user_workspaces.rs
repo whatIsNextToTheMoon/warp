@@ -122,7 +122,7 @@ pub struct CreateTeamResponse {
 }
 
 impl UserWorkspaces {
-    #[cfg(test)]
+    #[cfg(any(test, all(feature = "tui", feature = "test-util")))]
     pub fn mock(
         team_client: Arc<dyn TeamClient>,
         workspace_client: Arc<dyn WorkspaceClient>,
@@ -625,6 +625,9 @@ impl UserWorkspaces {
     /// a GEAP credential mint is rooted in the user's Warp session, so without one
     /// there is nothing to mint from.
     pub fn is_gemini_enterprise_credentials_enabled(&self, app: &AppContext) -> bool {
+        if !FeatureFlag::GeminiEnterprise.is_enabled() {
+            return false;
+        }
         if AuthStateProvider::as_ref(app)
             .get()
             .is_anonymous_or_logged_out()
@@ -903,10 +906,9 @@ impl UserWorkspaces {
                         .workspaces
                         .iter()
                         .any(|w| w.uid == current_workspace.uid)
+                        && let Some(workspace_uid) = workspaces.first().map(|w| w.uid)
                     {
-                        if let Some(workspace_uid) = workspaces.first().map(|w| w.uid) {
-                            self.set_current_workspace_uid(workspace_uid, ctx);
-                        }
+                        self.set_current_workspace_uid(workspace_uid, ctx);
                     }
                 } else if let Some(workspace_uid) = workspaces.first().map(|w| w.uid) {
                     self.set_current_workspace_uid(workspace_uid, ctx);

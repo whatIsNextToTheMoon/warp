@@ -26,7 +26,7 @@ use crate::ai::blocklist::agent_view::toolbar_item::AgentToolbarItemKind;
 use crate::appearance::Appearance;
 use crate::context_chips::display_chip::{chip_container, udi_font_size};
 use crate::context_chips::renderer::{ChipDragState, Renderer as ContextChipRenderer};
-use crate::context_chips::{spacing, ChipAvailability, ContextChipKind};
+use crate::context_chips::{ChipAvailability, ContextChipKind, spacing};
 use crate::ui_components::icons;
 
 const USED_CHIPS_POSITION_ID: &str = "chip_cfg_used";
@@ -598,10 +598,10 @@ impl ChipConfigurator {
     ) -> Option<ChipLocation> {
         if chips_count == 0 {
             let target_id = Self::drop_target_position_id(chip_index_to_location(0));
-            if let Some(target_pos) = ctx.element_position_by_id(target_id) {
-                if target_pos.intersects(dragged_position) {
-                    return Some(chip_index_to_location(0));
-                }
+            if let Some(target_pos) = ctx.element_position_by_id(target_id)
+                && target_pos.intersects(dragged_position)
+            {
+                return Some(chip_index_to_location(0));
             }
             return None;
         }
@@ -779,13 +779,13 @@ impl ChipConfigurator {
         if let Some(state) = &self.current_dragging_state {
             let expected = state.current_location;
             let target_id = Self::drop_target_position_id(expected);
-            if let Some(target_pos) = ctx.element_position_by_id(target_id) {
-                if !target_pos.intersects(drop_position) {
-                    self.remove_and_insert_chip_at_location(
-                        state.current_location,
-                        state.original_location,
-                    );
-                }
+            if let Some(target_pos) = ctx.element_position_by_id(target_id)
+                && !target_pos.intersects(drop_position)
+            {
+                self.remove_and_insert_chip_at_location(
+                    state.current_location,
+                    state.original_location,
+                );
             }
         }
         self.current_dragging_state = None;

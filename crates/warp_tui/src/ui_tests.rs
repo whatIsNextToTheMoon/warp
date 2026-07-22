@@ -1,7 +1,7 @@
 use warp::appearance::Appearance;
+use warpui_core::App;
 use warpui_core::elements::tui::{TuiBufferExt, TuiRect};
 use warpui_core::presenter::tui::TuiPresenter;
-use warpui_core::App;
 
 use super::{compact_footer_path, conversation_restoring};
 
@@ -29,12 +29,17 @@ fn conversation_loader_is_centered_and_animated() {
         app.read(|app_ctx| {
             let element = conversation_restoring(app_ctx);
             let mut presenter = TuiPresenter::new();
-            let frame = presenter.present_element(element, TuiRect::new(0, 0, 40, 7), app_ctx);
+            let frame = presenter.present_element(element, TuiRect::new(0, 0, 60, 7), app_ctx);
             let lines = frame.buffer.to_lines();
             let label = lines
                 .iter()
                 .find(|line| line.contains("Loading session..."))
                 .expect("loading label should render");
+            assert!(
+                lines.iter().any(|line| {
+                    line.contains("Esc or Ctrl-C to cancel and start a new session")
+                })
+            );
 
             assert!(
                 label.find("Loading session...").is_some_and(|x| x > 0),

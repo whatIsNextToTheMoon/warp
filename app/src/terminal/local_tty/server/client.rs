@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::os::unix::prelude::*;
 use std::sync::Arc;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use parking_lot::Mutex;
 
 use super::{api, protocol};
@@ -62,7 +62,9 @@ impl TerminalServerClient {
                 bail!("Terminal server failed to spawn a shell: {message}");
             }
             Some(_) => {
-                bail!("Got response message other than SpawnShellResponse after sending a SpawnShellRequest message!");
+                bail!(
+                    "Got response message other than SpawnShellResponse after sending a SpawnShellRequest message!"
+                );
             }
             None => {
                 bail!("Received error reading message back from terminal server");
@@ -87,7 +89,9 @@ impl TerminalServerClient {
             Option::<RawFd>::None,
         ) {
             if error.downcast_ref::<nix::Error>() == Some(&nix::Error::EPIPE) {
-                log::warn!("Received EPIPE when trying to kill child shell process; assuming the terminal server has terminated.");
+                log::warn!(
+                    "Received EPIPE when trying to kill child shell process; assuming the terminal server has terminated."
+                );
                 return Ok(());
             } else {
                 return Err(error);
@@ -101,11 +105,33 @@ impl TerminalServerClient {
                 None => Ok(()),
             },
             Some(_) => {
-                bail!("Got response message other than KillChildResponse after sending a KillChildRequest message!");
+                bail!(
+                    "Got response message other than KillChildResponse after sending a KillChildRequest message!"
+                );
             }
             None => {
                 bail!("Received error reading message back from terminal server");
             }
+        }
+    }
+
+    /// Asks the server to give all child shells a brief opportunity to exit
+    /// cleanly before forcefully cleaning up any that remain.
+    pub fn shutdown(&self) -> Result<()> {
+        let fd = self.socket_fd.lock();
+
+        protocol::send_message(
+            fd.as_fd(),
+            api::Message::ShutdownRequest,
+            Option::<RawFd>::None,
+        )?;
+
+        match protocol::receive_message(fd.as_fd())? {
+            Some(api::Message::ShutdownResponse) => Ok(()),
+            Some(_) => bail!(
+                "Got response other than ShutdownResponse after sending a ShutdownRequest message!"
+            ),
+            None => bail!("Received error reading shutdown response from terminal server"),
         }
     }
 

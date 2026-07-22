@@ -209,13 +209,27 @@ impl TerminalServer {
     pub fn client(&self) -> &Arc<TerminalServerClient> {
         &self.client
     }
+
+    /// Requests a bounded graceful shutdown of child shells and waits for the
+    /// terminal server to exit. `Drop` remains the forceful fallback if the
+    /// request/response exchange fails.
+    pub fn shutdown(&mut self) -> Result<()> {
+        self.client.shutdown()?;
+        self.server
+            .wait()
+            .context("Failed to wait for terminal server shutdown")?;
+        Ok(())
+    }
 }
 
 impl Drop for TerminalServer {
     fn drop(&mut self) {
-        // Kill the server child process and wait for it to terminate.
-        let _ = self.server.kill();
-        let _ = self.server.wait();
+        // Kill the server child process and wait for it to terminate when a
+        // graceful shutdown was not completed first.
+        if !matches!(self.server.try_wait(), Ok(Some(_))) {
+            let _ = self.server.kill();
+            let _ = self.server.wait();
+        }
     }
 }
 
