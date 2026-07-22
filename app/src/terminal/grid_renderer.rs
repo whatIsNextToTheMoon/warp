@@ -112,7 +112,7 @@ impl ColorSampler {
     pub fn trailing_most_common(&self) -> Option<ColorU> {
         self.trailing_counts
             .iter()
-            .max_by_key(|(_, &count)| count)
+            .max_by_key(|&(_, &count)| count)
             .map(|(&color, _)| color)
     }
 
