@@ -3,8 +3,9 @@ use std::convert::TryInto;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::mpsc::SyncSender;
+use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender};
 use std::sync::{Arc, Once};
+use std::time::{Duration, Instant};
 use std::{fs, thread};
 
 use ai::project_context::model::ProjectRulePath;
@@ -123,6 +124,7 @@ diesel::define_sql_function! {
 // events to queue.
 const CHANNEL_SIZE: usize = 1024;
 const COMMANDS_COUNT_LIMIT: i64 = 10000;
+const SNAPSHOT_BATCH_DURATION: Duration = Duration::from_millis(300);
 
 const WARP_SQLITE_FILE_NAME: &str = "warp.sqlite";
 
@@ -221,16 +223,16 @@ fn establish_connection(database_url: &str, read_only: bool) -> Result<SqliteCon
     "#,
     )?;
 
-    // Enable WAL mode, checkpointing whenever the log is at least 500 pages long (in theory,
-    // around 2MB). In addition, SQLite will automatically checkpoint when the app closes its
-    // database connection.
-    // The auto-checkpoint interval is lowered from the default of 1000 because all writes
-    // already run in a background thread and can afford to checkpoint slightly more often.
-    // At the default value, the WAL can grow larger than a typical database (for our usage).
+    // In WAL mode, NORMAL keeps transactions atomic and the database consistent while avoiding
+    // an fsync for every commit. A power loss can still roll back the most recent transactions.
+    // Use a larger checkpoint interval to avoid frequent small checkpoints on mechanical disks,
+    // then truncate the retained WAL after checkpoints to keep its steady-state size bounded.
     conn.batch_execute(
         r#"
         PRAGMA journal_mode=WAL;
-        PRAGMA wal_autocheckpoint=500;
+        PRAGMA synchronous=NORMAL;
+        PRAGMA wal_autocheckpoint=4000;
+        PRAGMA journal_size_limit=16777216;
     "#,
     )
     .context("Failed to enable WAL")?;
@@ -536,6 +538,37 @@ fn reconstruct_database(path: &Path) -> Result<SqliteConnection> {
     setup_database(path)
 }
 
+fn collect_event_batch(rx: &Receiver<ModelEvent>, first_event: ModelEvent) -> Vec<ModelEvent> {
+    let should_batch_snapshots = matches!(first_event, ModelEvent::Snapshot(_));
+    let mut events = vec![first_event];
+
+    if should_batch_snapshots {
+        let deadline = Instant::now() + SNAPSHOT_BATCH_DURATION;
+        loop {
+            let timeout = deadline.saturating_duration_since(Instant::now());
+            if timeout.is_zero() {
+                break;
+            }
+
+            match rx.recv_timeout(timeout) {
+                Ok(event) => {
+                    let is_terminate = matches!(event, ModelEvent::Terminate);
+                    events.push(event);
+                    if is_terminate {
+                        break;
+                    }
+                }
+                Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => break,
+            }
+        }
+    }
+
+    // Include anything that raced with the timeout or a termination request. The next loop
+    // iteration also drains events which arrive while this batch is being persisted.
+    events.extend(rx.try_iter());
+    deduplicate_events(events)
+}
+
 fn start_writer(conn: SqliteConnection, database_path: PathBuf) -> Result<WriterHandles> {
     let (tx, rx) = std::sync::mpsc::sync_channel(CHANNEL_SIZE);
     let mut current_conn = conn;
@@ -569,14 +602,11 @@ fn start_writer(conn: SqliteConnection, database_path: PathBuf) -> Result<Writer
                     }
                 } else {
                     match rx.recv() {
-                        Ok(event) => {
-                            // Wait for there to be at least one event, but collect any other pending
-                            // events too. This way, we can start dropping redundant events if the
-                            // writer thread is falling behind.
-                            let mut events = vec![event];
-                            events.extend(rx.try_iter());
-                            deduplicate_events(events)
-                        }
+                        // Snapshot events rewrite the complete app state. Collect rapid window and
+                        // layout updates for a short, fixed interval so only the latest state is
+                        // written. The fixed deadline guarantees continuous activity cannot defer
+                        // persistence indefinitely.
+                        Ok(event) => collect_event_batch(&rx, event),
                         Err(_) => {
                             log::warn!(
                                 "SQLite event sender has closed; terminating SQLite writer thread."
