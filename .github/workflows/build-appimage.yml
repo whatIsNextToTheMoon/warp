@@ -143,7 +143,7 @@ jobs:
         # Upload artifacts as Release assets so downloads are typically faster
         # and more reliable than the Actions UI. Keep only the latest 3 OSS
         # releases to avoid clutter.
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@v3.0.1
         with:
           tag_name: ${{ steps.rel.outputs.tag }}
           name: ${{ steps.rel.outputs.tag }}
