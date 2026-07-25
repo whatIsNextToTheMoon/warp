@@ -1,4 +1,4 @@
-use ::ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent, ApiKeys};
+use ::ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent, ApiKeys, CustomEndpointParams};
 #[cfg(not(target_family = "wasm"))]
 use ::ai::grok_subscription::oauth::{self, ManualCodeExchange};
 use chrono::{DateTime, Local};
@@ -93,15 +93,15 @@ use crate::settings::{
     AgentModeCodingPermissionsType, AgentModeCommandExecutionDenylist,
     AgentModeCommandExecutionPredicate, AgentModeQuerySuggestionsEnabled, AwsBedrockAutoLogin,
     AwsBedrockCredentialsEnabled, CanUseWarpCreditsForFallback, CodeSettings,
-    CodebaseContextEnabled, FileBasedMcpEnabled, GitOperationsAutogenEnabled,
-    IncludeAgentCommandsInHistory, InputSettings, IntelligentAutosuggestionsEnabled,
-    LongRunningCommandSubmissionMode, MemoryEnabled, NLDInTerminalEnabled,
-    NaturalLanguageAutosuggestionsEnabled, OrchestrationMessageDisplayMode, PromptSubmissionMode,
-    RuleSuggestionsEnabled, SharedBlockTitleGenerationEnabled, ShouldRenderCLIAgentToolbar,
-    ShouldRenderUseAgentToolbarForUserCommands, ShouldShowOzUpdatesInZeroState, ShowAgentTips,
-    ShowConversationHistory, ShowHintText, ThinkingDisplayMode, TreatManualCodexAsPlainTerminal,
-    VoiceInputEnabled, WarpDriveContextEnabled,
-    GeminiEnterpriseCredentialsEnabled,
+    CodebaseContextEnabled, FileBasedMcpEnabled, GeminiEnterpriseCredentialsEnabled,
+    GitOperationsAutogenEnabled, IncludeAgentCommandsInHistory, InputSettings,
+    IntelligentAutosuggestionsEnabled, LongRunningCommandSubmissionMode, MemoryEnabled,
+    NLDInTerminalEnabled, NaturalLanguageAutosuggestionsEnabled, OrchestrationMessageDisplayMode,
+    PromptSubmissionMode, RuleSuggestionsEnabled, SharedBlockTitleGenerationEnabled,
+    ShouldRenderCLIAgentToolbar, ShouldRenderUseAgentToolbarForUserCommands,
+    ShouldShowOzUpdatesInZeroState, ShowAgentTips, ShowConversationHistory, ShowHintText,
+    ThinkingDisplayMode, TreatManualCodexAsPlainTerminal, VoiceInputEnabled,
+    WarpDriveContextEnabled,
 };
 use crate::terminal::CLIAgent;
 use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent};
@@ -2456,6 +2456,7 @@ impl AISettingsPageView {
                 name,
                 url,
                 api_key,
+                schema,
                 models,
             } => {
                 if !Self::can_use_custom_inference_controls(ctx) {
@@ -2464,10 +2465,13 @@ impl AISettingsPageView {
                 }
                 ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
                     manager.add_custom_endpoint(
-                        name.clone(),
-                        url.clone(),
-                        api_key.clone(),
-                        models.clone(),
+                        CustomEndpointParams {
+                            name: name.clone(),
+                            url: url.clone(),
+                            api_key: api_key.clone(),
+                            models: models.clone(),
+                            schema: *schema,
+                        },
                         ctx,
                     );
                 });
@@ -2495,6 +2499,7 @@ impl AISettingsPageView {
                 name,
                 url,
                 api_key,
+                schema,
                 models,
             } => {
                 if !Self::can_use_custom_inference_controls(ctx) {
@@ -2504,10 +2509,13 @@ impl AISettingsPageView {
                 ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
                     manager.save_custom_endpoint(
                         *index,
-                        name.clone(),
-                        url.clone(),
-                        api_key.clone(),
-                        models.clone(),
+                        CustomEndpointParams {
+                            name: name.clone(),
+                            url: url.clone(),
+                            api_key: api_key.clone(),
+                            models: models.clone(),
+                            schema: *schema,
+                        },
                         ctx,
                     );
                 });
@@ -4051,9 +4059,11 @@ impl TypedActionView for AISettingsPageView {
             }
             AISettingsPageAction::ToggleTreatManualCodexAsPlainTerminal => {
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings
-                        .treat_manual_codex_as_plain_terminal
-                        .toggle_and_save_value(ctx));
+                    report_if_error!(
+                        settings
+                            .treat_manual_codex_as_plain_terminal
+                            .toggle_and_save_value(ctx)
+                    );
                 });
                 ctx.notify();
             }
@@ -7080,11 +7090,9 @@ impl AIFactWidget {
         );
 
         let rules_description = vec![
-            FormattedTextFragment::plain_text(
-                crate::i18n::ui_str(
-                    "Rules help the Warp Agent follow your conventions, whether for codebases or specific workflows. ",
-                ),
-            ),
+            FormattedTextFragment::plain_text(crate::i18n::ui_str(
+                "Rules help the Warp Agent follow your conventions, whether for codebases or specific workflows. ",
+            )),
             FormattedTextFragment::hyperlink(
                 crate::i18n::ui_str("Learn more"),
                 "https://docs.warp.dev/agent-platform/capabilities/rules",
@@ -7250,11 +7258,9 @@ impl VoiceWidget {
         ));
 
         let voice_input_description_text_fragments = vec![
-            FormattedTextFragment::plain_text(
-                crate::i18n::ui_str(
-                    "Voice input allows you to control Warp by speaking directly to your terminal (powered by ",
-                ),
-            ),
+            FormattedTextFragment::plain_text(crate::i18n::ui_str(
+                "Voice input allows you to control Warp by speaking directly to your terminal (powered by ",
+            )),
             FormattedTextFragment::hyperlink(crate::i18n::ui_str("Wispr Flow"), WISPR_FLOW_URL),
             FormattedTextFragment::plain_text(")."),
         ];
@@ -8745,15 +8751,19 @@ impl ApiKeysWidget {
         };
 
         if show_provider_keys {
-            add_paragraph(vec![FormattedTextFragment::plain_text(crate::i18n::ui_str(
-                "Use your own API keys from model providers for Warp Agent. API keys are used to make requests to your chosen model provider. Using auto models or models you do not have available API keys for will consume Warp credits.",
-            ))]);
+            add_paragraph(vec![FormattedTextFragment::plain_text(
+                crate::i18n::ui_str(
+                    "Use your own API keys from model providers for Warp Agent. API keys are used to make requests to your chosen model provider. Using auto models or models you do not have available API keys for will consume Warp credits.",
+                ),
+            )]);
         }
 
         if show_custom_endpoints {
-            add_paragraph(vec![FormattedTextFragment::plain_text(crate::i18n::ui_str(
-                "Add custom endpoints to use third-party models. Custom endpoints must support the OpenAI-compatible Chat Completions API.",
-            ))]);
+            add_paragraph(vec![FormattedTextFragment::plain_text(
+                crate::i18n::ui_str(
+                    "Add custom endpoints to use third-party models. Custom endpoints must support OpenAI Chat Completions, OpenAI Responses, or Anthropic Messages.",
+                ),
+            )]);
         }
 
         if show_provider_keys || show_custom_endpoints {

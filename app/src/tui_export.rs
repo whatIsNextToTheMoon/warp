@@ -9,6 +9,11 @@ pub use ::ai::agent::{
 pub use ai::agent::action::{RunAgentsAgentRunConfig, RunAgentsExecutionMode, RunAgentsRequest};
 pub use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationConfigStatus};
 pub use repo_metadata::repositories::RepoDetectionSource;
+#[cfg(feature = "voice_input")]
+pub use voice_input::{
+    StartListeningError, VoiceInput, VoiceInputLifecycle, VoiceInputLifecycleState,
+    VoiceInputState, VoiceInputToggledFrom, VoiceSession, VoiceSessionResult,
+};
 pub use warp_cli::agent::Harness;
 use warp_completer::completer::{CompletionContext as _, TopLevelCommandCaseSensitivity};
 use warp_completer::signatures::CommandRegistry;
@@ -30,8 +35,8 @@ pub use crate::ai::agent::{
     FileGlobV2Result, GrepResult, ImageContext, MessageId, ReceivedMessageDisplay,
     RenderableAIError, RequestCommandOutputResult, RunAgentsAgentOutcomeKind, RunAgentsResult,
     SearchCodebaseFailureReason, SearchCodebaseResult, ServerOutputId, Shared, ShellCommandDelay,
-    StartAgentExecutionMode, SuggestNewConversationResult, SummarizationType, TodoOperation,
-    UserQueryMode,
+    StartAgentExecutionMode, StopRecordingResult, SuggestNewConversationResult, SummarizationType,
+    TodoOperation, UserQueryMode,
 };
 pub use crate::ai::agent_conversations_model::{
     AgentConversationEntry, AgentConversationEntryId, AgentConversationListEntryState,
@@ -65,6 +70,7 @@ pub use crate::ai::blocklist::history_model::{
     AIQueryHistory, BlocklistAIHistoryEvent, BlocklistAIHistoryModel, CloudConversationData,
     ConversationStatusUpdate,
 };
+pub use crate::ai::blocklist::inline_action::code_diff_view::convert_file_edits_to_file_diffs;
 pub use crate::ai::blocklist::orchestration_event_streamer::{
     OrchestrationEventStreamer, OrchestrationEventStreamerEvent, register_agent_event_consumer,
     unregister_agent_event_consumer,
@@ -120,6 +126,8 @@ pub use crate::ai::orchestration::{
     resolve_auth_secret_selection_for_harness, resolve_default_environment_id,
     resolve_default_host_slug, should_show_auth_secret_picker,
 };
+#[cfg(feature = "voice_input")]
+pub use crate::ai::request_usage_model::AIRequestUsageModel;
 pub use crate::ai::skills::{SkillManager, SkillReference};
 pub use crate::appearance::Appearance;
 pub use crate::banner::BannerState;
@@ -132,11 +140,17 @@ pub use crate::code_review::git_repo_model::{
 };
 pub use crate::completer::SessionContext;
 pub use crate::persistence::PersistenceWriter;
+pub use crate::prefix::longest_common_prefix;
 pub use crate::search::slash_command_menu::static_commands::commands::{
     self as slash_commands, COMMAND_REGISTRY,
 };
+pub use crate::search::slash_command_menu::static_commands::{
+    SlashCommandKind, SlashCommandSurfaces,
+};
 pub use crate::search::slash_command_menu::{SlashCommandId, StaticCommand};
 pub use crate::server::server_api::ServerApiProvider;
+#[cfg(feature = "voice_input")]
+pub use crate::server::server_api::TranscribeError;
 pub use crate::server::server_api::ai::{
     AIClient, AgentConfigSnapshot, SpawnAgentRequest, SpawnAgentResponse,
 };
@@ -162,11 +176,11 @@ pub use crate::terminal::input::slash_command_model::{
 pub use crate::terminal::input::slash_commands::{
     AcceptSlashCommandOrSavedPrompt, InlineItem, SlashCommandDataSource, SlashCommandMixer,
     SlashCommandSelectionBehavior, TuiDataSourceArgs as TuiSlashCommandDataSourceArgs,
-    TuiSlashCommand, TuiSlashCommandDataSource, TuiZeroStateDataSource, UpdatedActiveCommands,
+    TuiSlashCommandDataSource, TuiZeroStateDataSource, UpdatedActiveCommands,
     build_slash_command_mixer, record_autodetection_toggle_from_slash_command,
     record_saved_prompt_accepted, record_static_slash_command_accepted, saved_prompt_text_for_id,
     should_close_slash_command_menu_for_exact_match, slash_command_is_submitted_as_prompt,
-    slash_command_is_supported_in_tui, slash_command_query, slash_command_selection_behavior,
+    slash_command_query, slash_command_selection_behavior,
 };
 pub use crate::terminal::local_tty::{
     TerminalManager as LocalTtyTerminalManager, TerminalManagerInit, TerminalSurfaceInit,
@@ -212,6 +226,9 @@ pub use crate::util::image::{
 };
 pub use crate::util::repo_detection::{RepoDetectionSessionType, detect_possible_git_repo};
 pub use crate::util::time_format::format_elapsed_seconds;
+#[cfg(feature = "voice_input")]
+pub use crate::voice::transcriber::{Transcriber, VoiceTranscriber};
+pub use crate::workspaces::user_workspaces::UserWorkspaces;
 
 /// Builds the live-shell completion context used to parse TUI input for NLD.
 pub fn tui_completion_session_context(
