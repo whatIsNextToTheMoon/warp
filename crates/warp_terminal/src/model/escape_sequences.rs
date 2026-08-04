@@ -138,6 +138,17 @@ pub mod C1 {
     }
 }
 
+/// Wraps an escape sequence in a tmux DCS passthrough, doubling inner escapes
+/// so tmux forwards the sequence to the hosting terminal rather than
+/// intercepting it.
+pub fn tmux_passthrough(sequence: &str) -> String {
+    let esc = char::from(C0::ESC);
+    let escaped = sequence.replace(esc, "\x1b\x1b");
+    let dcs = C1::to_utf8(C1::DCS);
+    let st = C1::to_utf8(C1::ST);
+    format!("{dcs}tmux;{escaped}{st}")
+}
+
 /// Escape sequences used to control 'bracketed paste' mode.
 ///
 /// If the shell supports bracketed paste mode, these control sequences should be inserted at the
@@ -574,6 +585,11 @@ fn keystroke_to_c0_control_code(
             ("6", C0::RS),
             ("7", C0::US),
             ("8", C0::DEL),
+            // Not in the VT-220 table, but xterm and every terminal since encode `ctrl-/` as US,
+            // and editors bind against it (Vim/Neovim's `<C-/>`). Unlike the other control-code
+            // punctuation (`ctrl-[`, `ctrl-\`, `ctrl-]`, ...), no platform keyboard layer folds
+            // `ctrl-/` into a control byte for us, so it has to be mapped here. See GH#4620.
+            ("/", C0::US),
         ]);
     }
 

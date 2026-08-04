@@ -20,28 +20,28 @@ use crate::launch_configs::launch_config;
 use crate::linear::LinearIssueWork;
 use crate::notebooks::manager::NotebookSource;
 use crate::onboarding::OnboardingIntention;
+use crate::settings::AISettings;
 use crate::settings::cloud_preferences_syncer::{
     CloudPreferencesSyncer, CloudPreferencesSyncerEvent,
 };
-use crate::settings::AISettings;
 
 use crate::persistence::ModelEvent;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::SyncId;
-use crate::server::server_api::auth::UserAuthenticationError;
 use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::auth::UserAuthenticationError;
 use crate::server::telemetry::LaunchConfigUiLocation;
 use crate::settings::QuakeModeSettings;
+use crate::settings_view::OpenTeamsSettingsModalArgs;
+use crate::settings_view::SettingsSection;
 use crate::settings_view::custom_inference_modal::CustomEndpointModal;
 use crate::settings_view::flags;
 use crate::settings_view::mcp_servers_page::MCPServersSettingsPage;
-use crate::settings_view::OpenTeamsSettingsModalArgs;
-use crate::settings_view::SettingsSection;
 use crate::terminal::available_shells::AvailableShell;
 use crate::terminal::general_settings::GeneralSettings;
 use crate::terminal::keys_settings::KeysSettings;
 use crate::terminal::shell::ShellType;
-use crate::terminal::view::{cell_size_and_padding, TerminalAction};
+use crate::terminal::view::{TerminalAction, cell_size_and_padding};
 use crate::themes::theme::{AnsiColorIdentifier, Blend, Fill};
 use crate::uri::{OpenMCPSettingsArgs, OpenSettingsArgs};
 use crate::util::bindings::{self, is_binding_pty_compliant};
@@ -51,24 +51,24 @@ use crate::window_settings::WindowSettings;
 use crate::workspace::WorkspaceAction;
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
+use crate::{ChannelState, features::FeatureFlag};
 use crate::{
+    GlobalResourceHandles, GlobalResourceHandlesProvider, safe_error, send_telemetry_from_app_ctx,
+};
+use crate::{
+    UpdateQuakeModeEventArg,
     app_state::{AppState, PaneUuid, WindowSnapshot},
     autoupdate::{RequestType, UpdateReady},
     changelog_model::ChangelogRequestType,
     pane_group::{NewTerminalOptions, PanesLayout},
     send_telemetry_from_ctx,
     server::{server_api::ServerTime, telemetry::TelemetryEvent},
-    UpdateQuakeModeEventArg,
 };
 use crate::{
     auth::auth_override_warning_modal::{AuthOverrideWarningModal, AuthOverrideWarningModalEvent},
     auth::auth_view_modal::{AuthView, AuthViewVariant},
     server::server_api::ServerApi,
-    workspace::{view::OnboardingTutorial, PaneViewLocator, Workspace, WorkspaceRegistry},
-};
-use crate::{features::FeatureFlag, ChannelState};
-use crate::{
-    safe_error, send_telemetry_from_app_ctx, GlobalResourceHandles, GlobalResourceHandlesProvider,
+    workspace::{PaneViewLocator, Workspace, WorkspaceRegistry, view::OnboardingTutorial},
 };
 use anyhow::Result;
 use cfg_if::cfg_if;
@@ -76,13 +76,13 @@ use itertools::Itertools;
 use lazy_static::lazy_static;
 use parking_lot::Mutex;
 use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use serde::{Deserialize, Serialize};
 use session_sharing_protocol::common::SessionId;
 use settings::Setting as _;
 use std::path::Path;
-use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
+use std::sync::mpsc::SyncSender;
 use std::{collections::HashMap, path::PathBuf};
 use url::Url;
 use warp_core::context_flag::ContextFlag;
@@ -95,11 +95,11 @@ use warpui::elements::{
     Border, ChildAnchor, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Stack,
 };
 use warpui::rendering::OnGPUDeviceSelected;
-use warpui::{id, AddWindowOptions, DisplayId, EntityId, SingletonEntity};
+use warpui::{AddWindowOptions, DisplayId, EntityId, SingletonEntity, id};
 use warpui::{
+    AppContext, Element, Entity, TypedActionView, View, ViewContext, ViewHandle, WindowId,
     platform::{WindowBounds, WindowStyle},
     presenter::ChildView,
-    AppContext, Element, Entity, TypedActionView, View, ViewContext, ViewHandle, WindowId,
 };
 use warpui::{FocusContext, NextNewWindowsHasThisWindowsBoundsUponClose};
 

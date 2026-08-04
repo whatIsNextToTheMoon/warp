@@ -77,6 +77,20 @@ pub fn init() {
         // lookup isn't possible (e.g. "Create foo…" or "Failed to export bar").
         //
         // Keep this intentionally small and conservative to avoid translating user content.
+        if let Some(provider) = trimmed.strip_suffix(" API key") {
+            return Some(Cow::Owned(format!("{provider} API 密钥")));
+        }
+        if let Some(error) = trimmed.strip_prefix("Failed to read attachment: ") {
+            return Some(Cow::Owned(format!("读取附件失败：{error}")));
+        }
+        if let Some(error) = trimmed.strip_prefix("Failed to decode attachment: ") {
+            return Some(Cow::Owned(format!("解码附件失败：{error}")));
+        }
+        if let Some(file_name) = trimmed.strip_suffix(" exceeds the 10 MB attachment limit") {
+            return Some(Cow::Owned(format!(
+                "{file_name} 超过了 10 MB 的附件大小限制"
+            )));
+        }
         if let Some(rest) = trimmed.strip_prefix("Create ") {
             if let Some(name) = rest.strip_suffix('…') {
                 return Some(Cow::Owned(format!("创建 {name}…")));
