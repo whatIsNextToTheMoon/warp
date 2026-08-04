@@ -27,7 +27,7 @@ use crate::settings::cloud_preferences_syncer::{
 
 use crate::persistence::ModelEvent;
 use crate::server::cloud_objects::update_manager::UpdateManager;
-use crate::server::ids::SyncId;
+use crate::server::ids::{ServerId, SyncId};
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::auth::UserAuthenticationError;
 use crate::server::telemetry::LaunchConfigUiLocation;
