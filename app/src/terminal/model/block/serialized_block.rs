@@ -19,6 +19,34 @@ use crate::terminal::model::block::{
 use crate::terminal::model::session::SessionId;
 use crate::util::extensions::TrimStringExt;
 
+/// Maximum stylized terminal output stored for one completed block.
+///
+/// Large command output expands substantially when reconstructed as a terminal grid, so the line
+/// limit alone is not a sufficient persistence or memory bound.
+pub(crate) const MAX_PERSISTED_STYLIZED_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
+
+fn truncate_stylized_output_to_bytes(output: String, max_bytes: usize) -> Vec<u8> {
+    if output.len() <= max_bytes {
+        return output.into_bytes();
+    }
+
+    let mut start = output.len() - max_bytes;
+    while !output.is_char_boundary(start) {
+        start += 1;
+    }
+
+    // Prefer starting at a complete line. If the only newline is the final byte, retain the
+    // partial long line instead of turning non-empty output into an empty block.
+    if let Some(newline) = output[start..].find('\n') {
+        let line_start = start + newline + 1;
+        if line_start < output.len() {
+            start = line_start;
+        }
+    }
+
+    output[start..].as_bytes().to_vec()
+}
+
 /// Serialization-stable representation of [`AgentViewVisibility`].
 ///
 /// This type decouples the persisted format from the in-app format, allowing
@@ -151,7 +179,8 @@ pub struct SerializedBlock {
 
     /// The output lines with their corresponding escape sequences so it can be rendered outside of
     /// the terminal.
-    /// They are truncated to MAX_SERIALIZED_STYLIZED_OUTPUT_LINES lines.
+    /// They are bounded by both MAX_SERIALIZED_STYLIZED_OUTPUT_LINES and
+    /// MAX_PERSISTED_STYLIZED_OUTPUT_BYTES.
     #[serde(with = "serde_bytes")]
     pub stylized_output: Vec<u8>,
 
@@ -275,8 +304,9 @@ impl From<&Block> for SerializedBlock {
             .contents_to_string_with_secrets_unobfuscated(
                 true, /*include_escape_sequences*/
                 Some(MAX_SERIALIZED_STYLIZED_OUTPUT_LINES),
-            )
-            .into_bytes();
+            );
+        let stylized_output =
+            truncate_stylized_output_to_bytes(stylized_output, MAX_PERSISTED_STYLIZED_OUTPUT_BYTES);
         let ps1 =
             (!block.is_prompt_empty()).then(|| hex::encode(block.prompt_contents_to_string(true)));
         let rprompt = (!block.rprompt_grid().is_empty()).then(|| {

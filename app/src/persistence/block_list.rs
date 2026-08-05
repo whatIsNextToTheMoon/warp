@@ -14,7 +14,9 @@ use super::{model, schema};
 use crate::ai::blocklist::{PersistedAIInput, PersistedAIInputType, SerializedBlockListItem};
 use crate::app_state::PaneUuid;
 use crate::persistence::schema::ai_queries;
-use crate::terminal::model::block::{SerializedAgentViewVisibility, SerializedBlock};
+use crate::terminal::model::block::{
+    MAX_PERSISTED_STYLIZED_OUTPUT_BYTES, SerializedAgentViewVisibility, SerializedBlock,
+};
 
 /// Upper bound on how many terminal blocks we persist per session/pane.
 ///
@@ -24,6 +26,9 @@ use crate::terminal::model::block::{SerializedAgentViewVisibility, SerializedBlo
 ///
 /// Note: this is still bounded to avoid unbounded SQLite growth.
 const MAX_TERMINAL_BLOCKS_TO_PERSIST_PER_SESSION: i64 = 1000;
+
+/// Upper bound on restored stylized output retained for one session/pane.
+const MAX_PERSISTED_STYLIZED_OUTPUT_BYTES_PER_SESSION: i64 = 16 * 1024 * 1024;
 
 type PersistedBlocks = HashMap<PaneUuid, Vec<SerializedBlockListItem>>;
 
@@ -213,8 +218,8 @@ fn upsert_ai_query_with_limit(
     })?)
 }
 
-/// Returns the most recent [`MAX_BLOCK_COUNT_PER_SESSION`] block list items for each session. The
-/// items are in chronological order.
+/// Returns the most recent [`MAX_TERMINAL_BLOCKS_TO_PERSIST_PER_SESSION`] block list items for each
+/// session. The items are in chronological order.
 pub(super) fn get_all_restored_blocks(
     conn: &mut SqliteConnection,
 ) -> Result<PersistedBlocks, diesel::result::Error> {
@@ -258,51 +263,70 @@ pub(super) fn save_block(
     block: &SerializedBlock,
     is_local_block: bool,
 ) -> Result<(), Error> {
+    save_block_with_limits(
+        conn,
+        pane_id,
+        block,
+        is_local_block,
+        MAX_TERMINAL_BLOCKS_TO_PERSIST_PER_SESSION,
+        MAX_PERSISTED_STYLIZED_OUTPUT_BYTES_PER_SESSION,
+    )
+}
+
+fn save_block_with_limits(
+    conn: &mut SqliteConnection,
+    pane_id: Vec<u8>,
+    block: &SerializedBlock,
+    is_local_block: bool,
+    max_blocks: i64,
+    max_output_bytes: i64,
+) -> Result<(), Error> {
     use schema::blocks::dsl::*;
     conn.transaction::<_, Error, _>(|conn| {
-        let block_id_to_replace = block.id.as_str().to_string();
-        diesel::delete(
-            schema::blocks::dsl::blocks
-                .filter(pane_leaf_uuid.eq(pane_id.clone()))
-                .filter(block_id.eq(block_id_to_replace)),
-        )
-        .execute(conn)?;
+        let new_block = create_block(pane_id.clone(), block, is_local_block);
+        diesel::insert_into(schema::blocks::dsl::blocks)
+            .values(&new_block)
+            .on_conflict((pane_leaf_uuid, block_id))
+            .do_update()
+            .set(&new_block)
+            .execute(conn)?;
 
-        let saved_blocks_count: i64 = schema::blocks::dsl::blocks
-            .filter(pane_leaf_uuid.eq(pane_id.clone()))
+        let saved_block_sizes = schema::blocks::dsl::blocks
+            .filter(pane_leaf_uuid.eq(&pane_id))
             .filter(id.is_not_null())
-            .filter(is_background.ne(true))
-            .count()
-            .first(conn)?;
+            .select((id, stylized_output_bytes))
+            .order(id.desc())
+            .limit(max_blocks.saturating_add(1).max(1))
+            .load::<(Option<i32>, i64)>(conn)?;
 
-        // add 1 because we are about to save a new block
-        let diff = saved_blocks_count - MAX_TERMINAL_BLOCKS_TO_PERSIST_PER_SESSION + 1;
-        if diff > 0 {
-            // Find the oldest block to keep.
-            let last_kept_id: Option<i32> = schema::blocks::dsl::blocks
-                .filter(pane_leaf_uuid.eq(pane_id.clone()))
-                .filter(id.is_not_null())
-                .filter(is_background.ne(true))
-                .select(id)
-                .order(id.asc())
-                .offset(diff)
-                .limit(1)
-                .first(conn)?;
-
-            if let Some(last_kept_id) = last_kept_id {
-                diesel::delete(
-                    schema::blocks::dsl::blocks
-                        .filter(id.lt(last_kept_id))
-                        .filter(pane_leaf_uuid.eq(pane_id.clone())),
-                )
-                .execute(conn)?;
+        let per_block_limit = MAX_PERSISTED_STYLIZED_OUTPUT_BYTES as i64;
+        let mut retained_output_bytes = 0_i64;
+        let mut retained_blocks = 0_i64;
+        let mut first_id_to_delete = None;
+        for (saved_id, output_bytes) in saved_block_sizes {
+            let Some(saved_id) = saved_id else {
+                continue;
+            };
+            let output_bytes = output_bytes.clamp(0, per_block_limit);
+            if retained_blocks >= max_blocks
+                || retained_output_bytes.saturating_add(output_bytes) > max_output_bytes
+            {
+                first_id_to_delete = Some(saved_id);
+                break;
             }
+            retained_blocks += 1;
+            retained_output_bytes = retained_output_bytes.saturating_add(output_bytes);
         }
 
-        let block = create_block(pane_id, block, is_local_block);
-        diesel::insert_into(schema::blocks::dsl::blocks)
-            .values(block)
+        if let Some(first_id_to_delete) = first_id_to_delete {
+            diesel::delete(
+                schema::blocks::dsl::blocks
+                    .filter(pane_leaf_uuid.eq(&pane_id))
+                    .filter(id.le(first_id_to_delete)),
+            )
             .execute(conn)?;
+        }
+
         Ok(())
     })
 }
@@ -344,6 +368,7 @@ fn create_block<'a>(
             .agent_view_visibility
             .as_ref()
             .and_then(|v| serde_json::to_string(v).ok()),
+        stylized_output_bytes: i64::try_from(block.stylized_output.len()).unwrap_or(i64::MAX),
     }
 }
 

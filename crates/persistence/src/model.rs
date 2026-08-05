@@ -706,8 +706,9 @@ pub struct NewPaneNode {
     pub is_leaf: bool,
 }
 
-#[derive(Insertable)]
+#[derive(AsChangeset, Insertable)]
 #[diesel(table_name = blocks)]
+#[diesel(treat_none_as_null = true)]
 pub struct NewBlock<'a> {
     pub block_id: &'a str,
     // Note that there is no pane leaf UUID foreign key relationship because there's no good way to
@@ -738,6 +739,7 @@ pub struct NewBlock<'a> {
     pub ai_metadata: Option<&'a String>,
     pub is_local: Option<bool>,
     pub agent_view_visibility: Option<String>,
+    pub stylized_output_bytes: i64,
 }
 
 #[derive(Identifiable, Queryable, Selectable, Associations)]
@@ -771,6 +773,7 @@ pub struct Block {
     pub ai_metadata: Option<String>,
     pub is_local: Option<bool>,
     pub agent_view_visibility: Option<String>,
+    pub stylized_output_bytes: i64,
 }
 
 #[derive(Insertable)]

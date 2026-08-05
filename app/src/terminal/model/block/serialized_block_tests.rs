@@ -61,3 +61,21 @@ fn from_json_accepts_integer_array_bytes() {
     assert_eq!(block.stylized_command, b"echo hello");
     assert_eq!(block.stylized_output, b"hello world");
 }
+
+#[test]
+fn stylized_output_byte_cap_keeps_utf8_and_prefers_complete_recent_lines() {
+    let output = "old line\n中文末尾".to_string();
+
+    let truncated = truncate_stylized_output_to_bytes(output, 13);
+
+    assert_eq!(String::from_utf8(truncated).unwrap(), "中文末尾");
+}
+
+#[test]
+fn stylized_output_byte_cap_keeps_a_partial_single_long_line() {
+    let output = "abcdefghij\n".to_string();
+
+    let truncated = truncate_stylized_output_to_bytes(output, 5);
+
+    assert_eq!(truncated, b"ghij\n");
+}

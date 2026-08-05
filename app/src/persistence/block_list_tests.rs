@@ -12,7 +12,7 @@ use diesel_migrations::MigrationHarness;
 
 use super::{
     delete_block, process_ai_queries_for_nld_history_match, process_ai_queries_for_uparrow_prompt,
-    read_recent_ai_queries, save_block, upsert_ai_query_with_limit,
+    read_recent_ai_queries, save_block, save_block_with_limits, upsert_ai_query_with_limit,
 };
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{AIAgentExchangeId, AIAgentInput, UserQueryMode};
@@ -125,6 +125,137 @@ fn delete_block_removes_only_the_target_block_in_the_target_pane() {
 
     assert_eq!(target_ids, vec![second.id.as_str().to_string()]);
     assert_eq!(other_ids, vec![first.id.as_str().to_string()]);
+}
+
+#[test]
+fn save_block_upserts_in_place_for_the_same_pane_and_block_id() {
+    let mut conn = test_connection();
+    let pane = vec![1, 2, 3];
+    let first = SerializedBlock::new_for_test(b"command".to_vec(), b"old".to_vec());
+    let mut updated = first.clone();
+    updated.stylized_output = b"updated output".to_vec();
+
+    save_block(&mut conn, pane.clone(), &first, true).expect("first block should save");
+    save_block(&mut conn, pane.clone(), &updated, true).expect("block should update");
+
+    use crate::persistence::schema::blocks::dsl::{
+        blocks, pane_leaf_uuid, stylized_output, stylized_output_bytes,
+    };
+    let saved = blocks
+        .filter(pane_leaf_uuid.eq(pane))
+        .select((stylized_output, stylized_output_bytes))
+        .load::<(Vec<u8>, i64)>(&mut conn)
+        .expect("saved block should load");
+
+    assert_eq!(saved, vec![(b"updated output".to_vec(), 14)]);
+}
+
+#[test]
+fn save_block_evicts_oldest_blocks_over_the_byte_budget() {
+    let mut conn = test_connection();
+    let pane = vec![1, 2, 3];
+    let blocks_to_save = [
+        SerializedBlock::new_for_test(b"first".to_vec(), vec![b'a'; 4]),
+        SerializedBlock::new_for_test(b"second".to_vec(), vec![b'b'; 4]),
+        SerializedBlock::new_for_test(b"third".to_vec(), vec![b'c'; 4]),
+    ];
+
+    for block in &blocks_to_save {
+        save_block_with_limits(&mut conn, pane.clone(), block, true, 1000, 8)
+            .expect("block should save within bounded history");
+    }
+
+    use crate::persistence::schema::blocks::dsl::{block_id, blocks, id, pane_leaf_uuid};
+    let saved_ids = blocks
+        .filter(pane_leaf_uuid.eq(pane))
+        .select(block_id)
+        .order_by(id.asc())
+        .load::<String>(&mut conn)
+        .expect("saved block IDs should load");
+
+    assert_eq!(
+        saved_ids,
+        blocks_to_save[1..]
+            .iter()
+            .map(|block| block.id.as_str().to_string())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn save_block_evicts_oldest_blocks_over_the_count_budget() {
+    let mut conn = test_connection();
+    let pane = vec![1, 2, 3];
+    let blocks_to_save = [
+        SerializedBlock::new_for_test(b"first".to_vec(), b"one".to_vec()),
+        SerializedBlock::new_for_test(b"second".to_vec(), b"two".to_vec()),
+        SerializedBlock::new_for_test(b"third".to_vec(), b"three".to_vec()),
+    ];
+
+    for block in &blocks_to_save {
+        save_block_with_limits(&mut conn, pane.clone(), block, true, 2, i64::MAX)
+            .expect("block should save within bounded history");
+    }
+
+    use crate::persistence::schema::blocks::dsl::{block_id, blocks, id, pane_leaf_uuid};
+    let saved_ids = blocks
+        .filter(pane_leaf_uuid.eq(pane))
+        .select(block_id)
+        .order_by(id.asc())
+        .load::<String>(&mut conn)
+        .expect("saved block IDs should load");
+
+    assert_eq!(
+        saved_ids,
+        blocks_to_save[1..]
+            .iter()
+            .map(|block| block.id.as_str().to_string())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn block_queries_use_the_composite_indexes() {
+    #[derive(diesel::QueryableByName)]
+    struct QueryPlanRow {
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        detail: String,
+    }
+
+    let mut conn = test_connection();
+    let plans = [
+        (
+            "EXPLAIN QUERY PLAN DELETE FROM blocks WHERE pane_leaf_uuid = x'010203' AND block_id = 'block'",
+            "blocks_pane_leaf_uuid_block_id_idx",
+        ),
+        (
+            "EXPLAIN QUERY PLAN SELECT id, stylized_output_bytes FROM blocks WHERE pane_leaf_uuid = x'010203' ORDER BY id DESC LIMIT 1001",
+            "blocks_pane_leaf_uuid_id_idx",
+        ),
+        (
+            "EXPLAIN QUERY PLAN DELETE FROM blocks WHERE pane_leaf_uuid = x'010203' AND id <= 10",
+            "blocks_pane_leaf_uuid_id_idx",
+        ),
+    ];
+
+    for (query, expected_index) in plans {
+        let details = diesel::sql_query(query)
+            .load::<QueryPlanRow>(&mut conn)
+            .expect("query plan should load")
+            .into_iter()
+            .map(|row| row.detail)
+            .collect::<Vec<_>>();
+        assert!(
+            details
+                .iter()
+                .all(|detail| !detail.starts_with("SCAN blocks")),
+            "query should use a blocks index: {details:?}"
+        );
+        assert!(
+            details.iter().any(|detail| detail.contains(expected_index)),
+            "query should use {expected_index}: {details:?}"
+        );
+    }
 }
 
 #[test]
