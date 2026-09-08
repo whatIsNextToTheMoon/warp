@@ -20,7 +20,45 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  regression_tests:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_BUILD_JOBS: "2"
+      RUSTFLAGS: "-C debuginfo=0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      WARP_SHELL_PATH: /usr/bin/zsh
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+      - name: Install regression test dependencies
+        run: |
+          sudo apt-get update
+          ./script/linux/install_build_deps
+          sudo apt-get install -y zsh fish xvfb libegl1-mesa libgl1-mesa-dri
+      - name: Cache regression tests
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: oss-regression-tests
+          cache-on-failure: true
+          cache-workspace-crates: true
+      - name: Install nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+      - name: Run editor and terminal regressions
+        run: >-
+          xvfb-run -a cargo nextest run --locked -p warp -p warp_files --lib
+          -E 'test(editor_file_reader::tests::) or test(symbol_pair) or test(test_autocomplete_symbols)
+          or test(rejected_editor_content) or test(custom_title_preserves_live_spinner)
+          or test(completion_sources_resolution_tests)'
+
   arch_package:
+    needs: regression_tests
     runs-on: ubuntu-22.04
     env:
       CARGO_TERM_COLOR: always

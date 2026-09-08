@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::ops::Not as _;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -67,15 +68,17 @@ use crate::settings::{
     AtContextMenuInTerminalMode, AutocompleteSymbols, AutosuggestionKeybindingHint,
     ChangelogSettings, CloudPreferencesSettings, CodeEditorLineNumberMode,
     CodeEditorLineNumberModeSetting, CodeSettings, CommandCorrections, CompletionsOpenWhileTyping,
-    CopyOnSelect, CtrlTabBehavior, DefaultSessionMode, EnableSlashCommandsInTerminal,
-    ErrorUnderliningEnabled, ExtraMetaKeys, GPUSettings, GlobalHotkeyMode, HistoryOpenWhileTyping,
-    InputSettings, InputSettingsChangedEvent, LinuxSelectionClipboard, MiddleClickPasteEnabled,
-    MouseScrollMultiplier, OutlineCodebaseSymbolsForAtContextMenu, PreferLowPowerGPU,
-    PreferredGraphicsBackend, QuakeModeSettings, ScrollSettings, ScrollSettingsChangedEvent,
-    SelectionSettings, ShowAutosuggestionIgnoreButton, ShowChangelogAfterUpdate,
-    ShowTerminalInputMessageBar, SshSettings, SyntaxHighlighting, TabBehavior,
-    UserNativeRedirectPreference, VimModeEnabled, VimStatusBar, VimUnnamedSystemClipboard,
-    DEFAULT_QUAKE_MODE_SIZE_PERCENTAGES, QUAKE_WINDOW_AUTOHIDE_SUPPORTED,
+    CopyOnSelect, CtrlTabBehavior, DEFAULT_QUAKE_MODE_SIZE_PERCENTAGES, DefaultSessionMode,
+    EnableSlashCommandsInTerminal, ErrorUnderliningEnabled, ExtraMetaKeys, GPUSettings,
+    GlobalHotkeyMode, HistoryOpenWhileTyping, InputSettings, InputSettingsChangedEvent,
+    LinuxSelectionClipboard, MiddleClickPasteEnabled, MouseScrollMultiplier,
+    NativeShellCompletionsEnabled, OutlineCodebaseSymbolsForAtContextMenu, PreferLowPowerGPU,
+    PreferredGraphicsBackend, QUAKE_WINDOW_AUTOHIDE_SUPPORTED, QuakeModeSettings,
+    RightClickBehavior, RightClickBehaviorSetting, ScrollSettings, ScrollSettingsChangedEvent,
+    SelectionSettings, SelectionSettingsChangedEvent, ShowAutosuggestionIgnoreButton,
+    ShowChangelogAfterUpdate, ShowTerminalInputMessageBar, SshSettings, SyntaxHighlighting,
+    TabBehavior, UserNativeRedirectPreference, VimModeEnabled, VimStatusBar,
+    VimUnnamedSystemClipboard, WarpCompletionsEnabled,
 };
 use crate::terminal::alt_screen_reporting::{
     AltScreenReporting, FocusReportingEnabled, MouseReportingEnabled, ScrollReportingEnabled,
@@ -237,6 +240,24 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
                 .history_open_while_typing
                 .is_supported_on_current_platform(),
         ),
+        ToggleSettingActionPair::new(
+            "warp completions",
+            builder(SettingsAction::FeaturesPageToggle(
+                FeaturesPageAction::ToggleWarpCompletions,
+            )),
+            context,
+            flags::WARP_COMPLETIONS_CONTEXT_FLAG,
+        )
+        .with_enabled(|| FeatureFlag::NativeShellCompletions.is_enabled()),
+        ToggleSettingActionPair::new(
+            "native shell completions",
+            builder(SettingsAction::FeaturesPageToggle(
+                FeaturesPageAction::ToggleNativeShellCompletions,
+            )),
+            context,
+            flags::NATIVE_SHELL_COMPLETIONS_CONTEXT_FLAG,
+        )
+        .with_enabled(|| FeatureFlag::NativeShellCompletions.is_enabled()),
         ToggleSettingActionPair::new(
             "command corrections",
             builder(SettingsAction::FeaturesPageToggle(
@@ -767,6 +788,8 @@ pub enum FeaturesPageAction {
     ToggleLinkTooltip,
     ToggleCompletionsOpenWhileTyping,
     ToggleHistoryOpenWhileTyping,
+    ToggleWarpCompletions,
+    ToggleNativeShellCompletions,
     ToggleCommandCorrections,
     ToggleErrorUnderlining,
     ToggleSyntaxHighlighting,
@@ -821,6 +844,7 @@ pub enum FeaturesPageAction {
     SetGlobalHotkeyMode(GlobalHotkeyMode),
     SetTabBehavior(TabBehavior),
     SetCtrlTabBehavior(CtrlTabBehavior),
+    SetRightClickBehavior(RightClickBehavior),
     SetPreferredGraphicsBackend(Option<GraphicsBackend>),
     SetNewTabPlacement(NewTabPlacement),
     SetOsc52ClipboardAccess(Osc52ClipboardAccess),
@@ -842,7 +866,6 @@ pub enum FeaturesPageAction {
     TogglePreserveInputFocusOnBlockSelection,
     ToggleAgentInAppNotifications,
     MakeWarpDefaultTerminal,
-    SetCodeEditorLineNumberMode(CodeEditorLineNumberMode),
 }
 
 lazy_static! {
@@ -977,6 +1000,14 @@ impl FeaturesPageAction {
             Self::ToggleHistoryOpenWhileTyping => TelemetryEvent::FeaturesPageAction {
                 action: "ToggleHistoryOpenWhileTyping".to_string(),
                 value: to_string(*input_settings.history_open_while_typing.value()),
+            },
+            Self::ToggleWarpCompletions => TelemetryEvent::FeaturesPageAction {
+                action: "ToggleWarpCompletions".to_string(),
+                value: to_string(*input_settings.warp_completions_enabled.value()),
+            },
+            Self::ToggleNativeShellCompletions => TelemetryEvent::FeaturesPageAction {
+                action: "ToggleNativeShellCompletions".to_string(),
+                value: to_string(*input_settings.native_shell_completions_enabled.value()),
             },
             Self::ToggleCommandCorrections => TelemetryEvent::FeaturesPageAction {
                 action: "ToggleCommandCorrections".to_string(),
@@ -1240,10 +1271,6 @@ impl FeaturesPageAction {
                 action: "ToggleVimStatusBar".to_string(),
                 value: to_string(*AppEditorSettings::as_ref(ctx).vim_status_bar.value()),
             },
-            Self::SetCodeEditorLineNumberMode(mode) => TelemetryEvent::FeaturesPageAction {
-                action: "SetCodeEditorLineNumberMode".to_string(),
-                value: format!("{mode:?}"),
-            },
             Self::SetTabBehavior(tab_behavior) => TelemetryEvent::FeaturesPageAction {
                 action: "SetTabBehavior".to_string(),
                 value: format!("{tab_behavior:?}"),
@@ -1252,6 +1279,12 @@ impl FeaturesPageAction {
                 action: "SetCtrlTabBehavior".to_string(),
                 value: format!("{ctrl_tab_behavior:?}"),
             },
+            Self::SetRightClickBehavior(right_click_behavior) => {
+                TelemetryEvent::FeaturesPageAction {
+                    action: "SetRightClickBehavior".to_string(),
+                    value: format!("{right_click_behavior:?}"),
+                }
+            }
             Self::SetNewTabPlacement(new_tab_placement) => TelemetryEvent::FeaturesPageAction {
                 action: "SetNewTabPlacement".to_string(),
                 value: format!("{new_tab_placement:?}"),
@@ -1434,7 +1467,7 @@ pub struct FeaturesPageView {
 
     button_mouse_states: MouseStateHandles,
     ctrl_tab_behavior_dropdown: ViewHandle<Dropdown<FeaturesPageAction>>,
-    code_editor_line_number_mode_dropdown: ViewHandle<Dropdown<FeaturesPageAction>>,
+    right_click_behavior_dropdown: ViewHandle<Dropdown<FeaturesPageAction>>,
 
     global_hotkey_dropdown: ViewHandle<Dropdown<FeaturesPageAction>>,
     activation_hotkey_keybinding_editor_state: KeybindingEditorState,
@@ -1461,8 +1494,6 @@ pub struct FeaturesPageView {
     mouse_scroll_input_editor: ViewHandle<EditorView>,
     valid_mouse_scroll_multiplier: bool,
 
-    #[cfg(feature = "local_fs")]
-    external_editor_view: ViewHandle<features::ExternalEditorView>,
     word_boundary_editor: ViewHandle<EditorView>,
 
     tab_behavior_dropdown: ViewHandle<Dropdown<FeaturesPageAction>>,
@@ -1504,6 +1535,15 @@ impl TypedActionView for FeaturesPageView {
                         keys_settings
                             .ctrl_tab_behavior
                             .set_value(*ctrl_tab_behavior, ctx)
+                    );
+                });
+            }
+            SetRightClickBehavior(right_click_behavior) => {
+                SelectionSettings::handle(ctx).update(ctx, |selection_settings, ctx| {
+                    report_if_error!(
+                        selection_settings
+                            .right_click_behavior
+                            .set_value(*right_click_behavior, ctx)
                     );
                 });
             }
@@ -1908,9 +1948,29 @@ impl TypedActionView for FeaturesPageView {
             }
             ToggleHistoryOpenWhileTyping => {
                 InputSettings::handle(ctx).update(ctx, |input_settings, ctx| {
-                    report_if_error!(input_settings
-                        .history_open_while_typing
-                        .toggle_and_save_value(ctx));
+                    report_if_error!(
+                        input_settings
+                            .history_open_while_typing
+                            .toggle_and_save_value(ctx)
+                    );
+                });
+            }
+            ToggleWarpCompletions => {
+                InputSettings::handle(ctx).update(ctx, |input_settings, ctx| {
+                    report_if_error!(
+                        input_settings
+                            .warp_completions_enabled
+                            .toggle_and_save_value(ctx)
+                    );
+                });
+            }
+            ToggleNativeShellCompletions => {
+                InputSettings::handle(ctx).update(ctx, |input_settings, ctx| {
+                    report_if_error!(
+                        input_settings
+                            .native_shell_completions_enabled
+                            .toggle_and_save_value(ctx)
+                    );
                 });
             }
             ToggleCommandCorrections => {
@@ -2260,16 +2320,6 @@ impl TypedActionView for FeaturesPageView {
                     default_terminal.make_warp_default(ctx);
                 });
             }
-            SetCodeEditorLineNumberMode(mode) => {
-                AppEditorSettings::handle(ctx).update(ctx, |editor_settings, ctx| {
-                    report_if_error!(
-                        editor_settings
-                            .code_editor_line_number_mode
-                            .set_value(*mode, ctx)
-                    );
-                    ctx.notify();
-                });
-            }
             ToggleAsyncFind => {
                 TerminalSettings::handle(ctx).update(ctx, |terminal_settings, ctx| {
                     report_if_error!(
@@ -2306,13 +2356,7 @@ impl FeaturesPageView {
         );
 
         // Listen for model changes on all the settings that are used in this view.
-        ctx.subscribe_to_model(&AppEditorSettings::handle(ctx), |me, _, _, ctx| {
-            Self::update_code_editor_line_number_mode_dropdown(
-                me.code_editor_line_number_mode_dropdown.clone(),
-                ctx,
-            );
-            ctx.notify();
-        });
+        ctx.subscribe_to_model(&AppEditorSettings::handle(ctx), |_, _, _, ctx| ctx.notify());
 
         ctx.subscribe_to_model(&SelectionSettings::handle(ctx), |_, _, _, ctx| ctx.notify());
         ctx.subscribe_to_model(&AltScreenReporting::handle(ctx), |_, _, _, ctx| {
@@ -2538,9 +2582,6 @@ impl FeaturesPageView {
             }
         });
 
-        #[cfg(feature = "local_fs")]
-        let external_editor_view = ctx.add_typed_action_view(features::ExternalEditorView::new);
-
         let global_hotkey_mode =
             KeysSettings::handle(ctx).read(ctx, |settings, ctx| settings.global_hotkey_mode(ctx));
         let global_hotkey_dropdown = ctx.add_typed_action_view(|ctx| {
@@ -2555,11 +2596,8 @@ impl FeaturesPageView {
         let ctrl_tab_behavior_dropdown = ctx.add_typed_action_view(Dropdown::new);
         Self::update_ctrl_tab_behavior_dropdown(ctrl_tab_behavior_dropdown.clone(), ctx);
 
-        let code_editor_line_number_mode_dropdown = ctx.add_typed_action_view(Dropdown::new);
-        Self::update_code_editor_line_number_mode_dropdown(
-            code_editor_line_number_mode_dropdown.clone(),
-            ctx,
-        );
+        let right_click_behavior_dropdown = ctx.add_typed_action_view(Dropdown::new);
+        Self::update_right_click_behavior_dropdown(right_click_behavior_dropdown.clone(), ctx);
 
         ctx.subscribe_to_model(&KeysSettings::handle(ctx), |me, _, event, ctx| {
             if matches!(
@@ -2567,6 +2605,16 @@ impl FeaturesPageView {
                 KeysSettingsChangedEvent::CtrlTabBehaviorSetting { .. }
             ) {
                 Self::update_ctrl_tab_behavior_dropdown(me.ctrl_tab_behavior_dropdown.clone(), ctx);
+            }
+            ctx.notify();
+        });
+
+        ctx.subscribe_to_model(&SelectionSettings::handle(ctx), |me, _, event, ctx| {
+            if let SelectionSettingsChangedEvent::RightClickBehaviorSetting { .. } = event {
+                Self::update_right_click_behavior_dropdown(
+                    me.right_click_behavior_dropdown.clone(),
+                    ctx,
+                );
             }
             ctx.notify();
         });
@@ -2789,14 +2837,12 @@ impl FeaturesPageView {
             max_block_size_input_editor: block_size_editor,
             valid_max_block_size: true,
 
-            #[cfg(feature = "local_fs")]
-            external_editor_view,
             word_boundary_editor,
             global_hotkey_dropdown,
 
             tab_behavior_dropdown,
             ctrl_tab_behavior_dropdown,
-            code_editor_line_number_mode_dropdown,
+            right_click_behavior_dropdown,
             graphics_backend_dropdown,
             new_tab_placement_dropdown,
             osc52_clipboard_access_dropdown,
@@ -2850,20 +2896,6 @@ impl FeaturesPageView {
             general_widgets.push(Box::new(SingleInstanceModeWidget::default()));
         }
 
-        #[cfg(feature = "local_fs")]
-        {
-            if !FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
-                let external_editor_settings =
-                    crate::util::file::external_editor::EditorSettings::as_ref(ctx);
-                if external_editor_settings
-                    .open_file_editor
-                    .is_supported_on_current_platform()
-                {
-                    general_widgets.push(Box::new(ExternalEditorWidget::default()));
-                }
-            }
-        }
-
         if general_settings
             .show_warning_before_quitting
             .is_supported_on_current_platform()
@@ -2899,12 +2931,6 @@ impl FeaturesPageView {
             .is_supported_on_current_platform()
         {
             general_widgets.push(Box::new(MouseScrollMultiplierWidget::default()));
-        }
-
-        if FeatureFlag::AutoOpenCodeReviewPane.is_enabled()
-            && !FeatureFlag::OpenWarpNewSettingsModes.is_enabled()
-        {
-            general_widgets.push(Box::new(AutoOpenCodeReviewPaneWidget::default()));
         }
 
         if DefaultTerminal::can_warp_become_default() {
@@ -2986,13 +3012,6 @@ impl FeaturesPageView {
         let mut text_editing_widgets: Vec<Box<dyn SettingsWidget<View = Self>>> =
             vec![Box::new(AutocompleteSymbolsWidget::default())];
         if app_editor_settings
-            .code_editor_line_number_mode
-            .is_supported_on_current_platform()
-        {
-            text_editing_widgets.push(Box::new(CodeEditorLineNumberModeWidget::default()));
-        }
-
-        if app_editor_settings
             .vim_mode
             .is_supported_on_current_platform()
         {
@@ -3014,7 +3033,10 @@ impl FeaturesPageView {
         {
             editor_widgets.push(Box::new(SyntaxHighlightingWidget::default()))
         }
-        if input_settings
+        if FeatureFlag::NativeShellCompletions.is_enabled() {
+            editor_widgets.push(Box::new(WarpCompletionsWidget::default()));
+            editor_widgets.push(Box::new(NativeShellCompletionsWidget::default()));
+        } else if input_settings
             .completions_open_while_typing
             .is_supported_on_current_platform()
         {
@@ -3047,6 +3069,13 @@ impl FeaturesPageView {
             .is_supported_on_current_platform()
         {
             editor_widgets.push(Box::new(MiddleClickPasteWidget::default()));
+        }
+
+        if selection_settings
+            .right_click_behavior
+            .is_supported_on_current_platform()
+        {
+            editor_widgets.push(Box::new(RightClickBehaviorWidget::default()));
         }
 
         editor_widgets.push(Box::new(AutosuggestionKeybindingHintWidget::default()));
@@ -3183,41 +3212,6 @@ impl FeaturesPageView {
         PageType::new_categorized(categories, None)
     }
 
-    fn update_code_editor_line_number_mode_dropdown(
-        dropdown: ViewHandle<Dropdown<FeaturesPageAction>>,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        dropdown.update(ctx, |dropdown, ctx| {
-            let values = [
-                CodeEditorLineNumberMode::Absolute,
-                CodeEditorLineNumberMode::Relative,
-            ];
-
-            let current_value = *AppEditorSettings::as_ref(ctx)
-                .code_editor_line_number_mode
-                .value();
-
-            let selected_index = values
-                .iter()
-                .position(|val| *val == current_value)
-                .unwrap_or(0);
-
-            dropdown.set_items(
-                values
-                    .into_iter()
-                    .map(|val| {
-                        DropdownItem::new(
-                            val.dropdown_item_label(),
-                            FeaturesPageAction::SetCodeEditorLineNumberMode(val),
-                        )
-                    })
-                    .collect(),
-                ctx,
-            );
-            dropdown.set_selected_by_index(selected_index, ctx);
-        });
-    }
-
     fn update_ctrl_tab_behavior_dropdown(
         dropdown: ViewHandle<Dropdown<FeaturesPageAction>>,
         ctx: &mut ViewContext<Self>,
@@ -3248,6 +3242,41 @@ impl FeaturesPageView {
                         DropdownItem::new(
                             val.as_dropdown_label(),
                             FeaturesPageAction::SetCtrlTabBehavior(val),
+                        )
+                    })
+                    .collect(),
+                ctx,
+            );
+            dropdown.set_selected_by_index(selected_index, ctx);
+        });
+    }
+
+    fn update_right_click_behavior_dropdown(
+        dropdown: ViewHandle<Dropdown<FeaturesPageAction>>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        dropdown.update(ctx, |dropdown, ctx| {
+            let values = vec![RightClickBehavior::ContextMenu, RightClickBehavior::Paste];
+
+            let current_value = *SelectionSettings::as_ref(ctx).right_click_behavior;
+
+            let selected_index = values
+                .iter()
+                .position(|val| *val == current_value)
+                .unwrap_or_else(|| {
+                    report_error!(
+                        "Could not find current right-click behavior value in dropdown option list"
+                    );
+                    0
+                });
+
+            dropdown.set_items(
+                values
+                    .into_iter()
+                    .map(|val| {
+                        DropdownItem::new(
+                            val.as_dropdown_label(),
+                            FeaturesPageAction::SetRightClickBehavior(val),
                         )
                     })
                     .collect(),
@@ -4906,28 +4935,6 @@ impl SettingsWidget for LinkTooltipWidget {
     }
 }
 
-#[cfg(feature = "local_fs")]
-#[derive(Default)]
-struct ExternalEditorWidget {}
-
-#[cfg(feature = "local_fs")]
-impl SettingsWidget for ExternalEditorWidget {
-    type View = FeaturesPageView;
-
-    fn search_terms(&self) -> &str {
-        "editor open files markdown AI conversations layout pane tab"
-    }
-
-    fn render(
-        &self,
-        view: &Self::View,
-        _appearance: &Appearance,
-        _app: &AppContext,
-    ) -> Box<dyn Element> {
-        ChildView::new(&view.external_editor_view).finish()
-    }
-}
-
 #[derive(Default)]
 struct QuitWarningModalWidget {
     switch_state: SwitchStateHandle,
@@ -5253,53 +5260,6 @@ impl SettingsWidget for MouseScrollMultiplierWidget {
             appearance,
             input_column,
             None,
-        )
-    }
-}
-
-#[derive(Default)]
-struct AutoOpenCodeReviewPaneWidget {
-    switch_state: SwitchStateHandle,
-}
-
-impl SettingsWidget for AutoOpenCodeReviewPaneWidget {
-    type View = FeaturesPageView;
-
-    fn search_terms(&self) -> &str {
-        "oz auto open code review pane panel agent mode change first time accepted diff view conversation"
-    }
-
-    fn render(
-        &self,
-        view: &Self::View,
-        appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
-        let general_settings = GeneralSettings::as_ref(app);
-        let ui_builder = appearance.ui_builder();
-        render_body_item::<FeaturesPageAction>(
-            "Auto open code review panel".into(),
-            None,
-            LocalOnlyIconState::for_setting(
-                AutoOpenCodeReviewPaneOnFirstAgentChange::storage_key(),
-                AutoOpenCodeReviewPaneOnFirstAgentChange::sync_to_cloud(),
-                &mut view
-                    .button_mouse_states
-                    .local_only_icon_tooltip_states
-                    .borrow_mut(),
-                app,
-            ),
-            ToggleState::Enabled,
-            appearance,
-            ui_builder
-                .switch(self.switch_state.clone())
-                .check(*general_settings.auto_open_code_review_pane_on_first_agent_change)
-                .build()
-                .on_click(move |ctx, _, _| {
-                    ctx.dispatch_typed_action(FeaturesPageAction::ToggleAutoOpenCodeReviewPane);
-                })
-                .finish(),
-            Some("When this setting is on, the code review panel will open on the first accepted diff of a conversation".into()),
         )
     }
 }
@@ -6020,49 +5980,6 @@ impl SettingsWidget for AutocompleteSymbolsWidget {
 }
 
 #[derive(Default)]
-struct CodeEditorLineNumberModeWidget {}
-
-impl SettingsWidget for CodeEditorLineNumberModeWidget {
-    type View = FeaturesPageView;
-
-    fn search_terms(&self) -> &str {
-        "line number relative line vim gutter code editor"
-    }
-
-    fn render(
-        &self,
-        view: &Self::View,
-        appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
-        let mut column = Flex::column();
-        add_setting(
-            &mut column,
-            &AppEditorSettings::as_ref(app).code_editor_line_number_mode,
-            || {
-                render_dropdown_item(
-                    appearance,
-                    "Code editor line numbers:",
-                    None,
-                    None,
-                    LocalOnlyIconState::for_setting(
-                        CodeEditorLineNumberModeSetting::storage_key(),
-                        CodeEditorLineNumberModeSetting::sync_to_cloud(),
-                        &mut view
-                            .button_mouse_states
-                            .local_only_icon_tooltip_states
-                            .borrow_mut(),
-                        app,
-                    ),
-                    None,
-                    &view.code_editor_line_number_mode_dropdown,
-                )
-            },
-        );
-        column.finish()
-    }
-}
-#[derive(Default)]
 struct ErrorUnderliningWidget {
     switch_state: SwitchStateHandle,
 }
@@ -6265,6 +6182,148 @@ impl SettingsWidget for HistoryMenuWhileTypingWidget {
 }
 
 #[derive(Default)]
+struct WarpCompletionsWidget {
+    switch_state: SwitchStateHandle,
+    as_you_type_switch_state: SwitchStateHandle,
+}
+
+impl SettingsWidget for WarpCompletionsWidget {
+    type View = FeaturesPageView;
+
+    fn search_terms(&self) -> &str {
+        "warp completions built-in shell command suggestions open completions menu as you type typing"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let ui_builder = appearance.ui_builder();
+        let warp_completions_enabled = *InputSettings::as_ref(app).warp_completions_enabled.value();
+
+        let mut column = Flex::column();
+        column.add_child(render_body_item::<FeaturesPageAction>(
+            "Warp completions".into(),
+            None,
+            LocalOnlyIconState::for_setting(
+                WarpCompletionsEnabled::storage_key(),
+                WarpCompletionsEnabled::sync_to_cloud(),
+                &mut view
+                    .button_mouse_states
+                    .local_only_icon_tooltip_states
+                    .borrow_mut(),
+                app,
+            ),
+            ToggleState::Enabled,
+            appearance,
+            ui_builder
+                .switch(self.switch_state.clone())
+                .check(warp_completions_enabled)
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(FeaturesPageAction::ToggleWarpCompletions);
+                })
+                .finish(),
+            None,
+        ));
+
+        if warp_completions_enabled {
+            let as_you_type_switch = ui_builder
+                .switch(self.as_you_type_switch_state.clone())
+                .check(
+                    *InputSettings::as_ref(app)
+                        .completions_open_while_typing
+                        .value(),
+                )
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(FeaturesPageAction::ToggleCompletionsOpenWhileTyping);
+                })
+                .finish();
+            let as_you_type_item = view.render_setting_subgroup_item(
+                appearance,
+                LocalOnlyIconState::for_setting(
+                    CompletionsOpenWhileTyping::storage_key(),
+                    CompletionsOpenWhileTyping::sync_to_cloud(),
+                    &mut view
+                        .button_mouse_states
+                        .local_only_icon_tooltip_states
+                        .borrow_mut(),
+                    app,
+                ),
+                as_you_type_switch,
+                "Open completions menu as you type".into(),
+            );
+            column.add_child(render_group([as_you_type_item], appearance));
+        }
+
+        column.finish()
+    }
+}
+
+#[derive(Default)]
+struct NativeShellCompletionsWidget {
+    switch_state: SwitchStateHandle,
+}
+
+impl SettingsWidget for NativeShellCompletionsWidget {
+    type View = FeaturesPageView;
+
+    fn search_terms(&self) -> &str {
+        "native shell completions your shell command suggestions"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let input_settings = InputSettings::as_ref(app);
+        let native_on = *input_settings.native_shell_completions_enabled.value();
+        let warp_on = *input_settings.warp_completions_enabled.value();
+        let as_you_type_on = *input_settings.completions_open_while_typing.value();
+
+        let description = if warp_on && as_you_type_on && native_on {
+            let keystroke = &*view.completions_keystroke;
+            keystroke.is_empty().not().then(|| crate::i18n::ui_str(
+                "Native shell completions aren't generated as you type; press {keystroke} to fetch them."
+            ).replace("{keystroke}", keystroke))
+        } else {
+            None
+        };
+
+        let ui_builder = appearance.ui_builder();
+        render_body_item::<FeaturesPageAction>(
+            "Native shell completions".into(),
+            None,
+            LocalOnlyIconState::for_setting(
+                NativeShellCompletionsEnabled::storage_key(),
+                NativeShellCompletionsEnabled::sync_to_cloud(),
+                &mut view
+                    .button_mouse_states
+                    .local_only_icon_tooltip_states
+                    .borrow_mut(),
+                app,
+            ),
+            ToggleState::Enabled,
+            appearance,
+            ui_builder
+                .switch(self.switch_state.clone())
+                .check(native_on)
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(FeaturesPageAction::ToggleNativeShellCompletions);
+                })
+                .finish(),
+            description,
+        )
+    }
+}
+
+#[derive(Default)]
 struct CommandCorrectionsWidget {
     switch_state: SwitchStateHandle,
 }
@@ -6401,6 +6460,53 @@ impl SettingsWidget for MiddleClickPasteWidget {
                 .finish(),
             None,
         )
+    }
+}
+
+#[derive(Default)]
+struct RightClickBehaviorWidget {}
+
+impl SettingsWidget for RightClickBehaviorWidget {
+    type View = FeaturesPageView;
+
+    fn search_terms(&self) -> &str {
+        "right click behavior paste context menu shift"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let mut column = Flex::column();
+        let selection_settings = SelectionSettings::as_ref(app);
+        add_setting(
+            &mut column,
+            &selection_settings.right_click_behavior,
+            || {
+                render_dropdown_item(
+                    appearance,
+                    "Right-click:",
+                    selection_settings
+                        .right_click_pastes()
+                        .then_some("Shift+right-click to open the context menu."),
+                    None,
+                    LocalOnlyIconState::for_setting(
+                        RightClickBehaviorSetting::storage_key(),
+                        RightClickBehaviorSetting::sync_to_cloud(),
+                        &mut view
+                            .button_mouse_states
+                            .local_only_icon_tooltip_states
+                            .borrow_mut(),
+                        app,
+                    ),
+                    None,
+                    &view.right_click_behavior_dropdown,
+                )
+            },
+        );
+        column.finish()
     }
 }
 

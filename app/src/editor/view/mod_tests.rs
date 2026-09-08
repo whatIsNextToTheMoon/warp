@@ -3529,6 +3529,85 @@ fn test_autocomplete_symbols() {
 }
 
 #[test]
+fn symbol_pairing_respects_escaping_and_existing_text() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            let mut editor = EditorView::new_with_base_text("", Default::default(), ctx);
+            editor.set_autocomplete_symbols_allowed(true);
+            for (before, cursor, typed, expected) in [
+                ("\\", 1, "\"", "\\\""),
+                ("\\", 1, "(", "\\("),
+                ("\\\\", 2, "(", "\\\\()"),
+                ("word", 2, "(", "wo(rd"),
+                ("can't", 3, "'", "can''t"),
+                ("()", 1, ")", "())"),
+                ("\"\"", 1, "\"", "\"\"\""),
+            ] {
+                editor.set_buffer_text(before, ctx);
+                editor
+                    .select_ranges(
+                        vec![DisplayPoint::new(0, cursor)..DisplayPoint::new(0, cursor)],
+                        ctx,
+                    )
+                    .unwrap();
+                editor.user_insert(typed, ctx);
+                assert_eq!(
+                    editor.buffer_text(ctx),
+                    expected,
+                    "before={before:?}, typed={typed:?}"
+                );
+            }
+            editor
+        });
+    });
+}
+
+#[test]
+fn symbol_pairs_follow_cursor_movement_and_do_not_capture_replaced_characters() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            let mut editor = EditorView::new_with_base_text("", Default::default(), ctx);
+            editor.set_autocomplete_symbols_allowed(true);
+            editor.user_insert("(", ctx);
+            editor.user_insert("x", ctx);
+            editor.user_insert(")", ctx);
+            assert_eq!(editor.buffer_text(ctx), "(x)");
+            editor
+                .select_ranges(vec![DisplayPoint::new(0, 2)..DisplayPoint::new(0, 2)], ctx)
+                .unwrap();
+            editor.backspace(ctx);
+            assert_eq!(editor.buffer_text(ctx), "()");
+            editor
+                .model()
+                .update(ctx, |model, ctx| model.reset_undo_redo_stack(ctx));
+            editor
+                .select_ranges(vec![DisplayPoint::new(0, 1)..DisplayPoint::new(0, 1)], ctx)
+                .unwrap();
+            editor.backspace(ctx);
+            assert_eq!(editor.buffer_text(ctx), "");
+            editor.undo(ctx);
+            assert_eq!(editor.buffer_text(ctx), "()");
+            editor.delete(ctx);
+            assert_eq!(editor.buffer_text(ctx), "");
+            editor.set_buffer_text("()", ctx);
+            editor
+                .select_ranges(vec![DisplayPoint::new(0, 1)..DisplayPoint::new(0, 1)], ctx)
+                .unwrap();
+            editor.delete(ctx);
+            assert_eq!(editor.buffer_text(ctx), "(");
+            editor.set_buffer_text("", ctx);
+            editor.user_insert("(", ctx);
+            editor.set_autocomplete_symbols_allowed(false);
+            editor.backspace(ctx);
+            assert_eq!(editor.buffer_text(ctx), ")");
+            editor
+        });
+    });
+}
+
+#[test]
 fn test_clear_text_styles() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);

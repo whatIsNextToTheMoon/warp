@@ -858,6 +858,7 @@ pub(crate) fn open_new_from_path(
                 NewTerminalOptions::default()
                     .with_initial_directory_opt(path_if_directory(&arg.path).map(Into::into)),
             ),
+            initial_team_uid: None,
         },
         ctx,
     )
@@ -892,6 +893,7 @@ fn create_environment(arg: &CreateEnvironmentArg, ctx: &mut AppContext) {
     let (window_id, root_handle) = open_new_with_workspace_source(
         NewWorkspaceSource::Session {
             options: Box::default(),
+            initial_team_uid: None,
         },
         ctx,
     );
@@ -925,6 +927,7 @@ fn create_environment_and_run(arg: &CreateEnvironmentArg, ctx: &mut AppContext) 
     let (window_id, root_handle) = open_new_with_workspace_source(
         NewWorkspaceSource::Session {
             options: Box::default(),
+            initial_team_uid: None,
         },
         ctx,
     );
@@ -1508,6 +1511,7 @@ pub enum NewWorkspaceSource {
     },
     Session {
         options: Box<NewTerminalOptions>,
+        initial_team_uid: Option<ServerId>,
     },
     SharedSessionAsViewer {
         session_id: SessionId,
@@ -1580,6 +1584,13 @@ impl NewWorkspaceSource {
     }
 
     pub fn team_uid(&self, ctx: &AppContext) -> Option<ServerId> {
+        if let Self::Session {
+            initial_team_uid: Some(team_uid),
+            ..
+        } = self
+        {
+            return Some(*team_uid);
+        }
         let source_window_id = match self {
             Self::Empty {
                 previous_active_window,
@@ -1609,6 +1620,17 @@ impl NewWorkspaceSource {
         };
 
         UserWorkspaces::as_ref(ctx).inherited_or_default_team_uid(source_window_id)
+    }
+
+    /// Whether this source points at specific content (e.g. a shared session or a cloud
+    /// conversation) that a new window should reach directly, rather than being deferred
+    /// behind product onboarding.
+    pub(crate) fn is_content_deep_link(&self) -> bool {
+        matches!(
+            self,
+            NewWorkspaceSource::SharedSessionAsViewer { .. }
+                | NewWorkspaceSource::FromCloudConversationId { .. }
+        )
     }
 }
 
@@ -2029,7 +2051,28 @@ impl RootView {
                 });
             }
         }
+        // The web checkout confirmation hands the user back through the same
+        // desktop redirect it uses for auth, so the success flag rides along on
+        // a URL that may also have failed to parse as an auth payload.
+        if url_reports_checkout_success(url) {
+            self.notify_onboarding_checkout_succeeded(ctx);
+        }
         true
+    }
+
+    /// Routes a completed web checkout to onboarding. Returns whether an
+    /// AI-sell onboarding screen consumed the signal and advanced.
+    fn notify_onboarding_checkout_succeeded(&mut self, ctx: &mut ViewContext<Self>) -> bool {
+        let AuthOnboardingState::PostAuthOnboarding {
+            onboarding_view, ..
+        } = &self.auth_onboarding_state
+        else {
+            return false;
+        };
+        let onboarding_view = onboarding_view.clone();
+        onboarding_view.update(ctx, |onboarding_view, ctx| {
+            onboarding_view.on_checkout_succeeded(ctx)
+        })
     }
 
     #[allow(clippy::ptr_arg)]
@@ -2173,14 +2216,17 @@ impl RootView {
                 // Generic session link: ambient-ness (if any) is discovered at SessionJoined.
                 workspace.add_tab_for_joining_shared_session(*session_id, false, ctx);
             });
-            let window_id = ctx.window_id();
-            ctx.windows().show_window_and_focus_app(window_id);
-            ctx.notify();
-            true
-        } else {
+        } else if !self
+            .auth_onboarding_state
+            .retarget_pending_workspace_for_shared_session(*session_id)
+        {
             log::warn!("Auth not complete before trying to join shared session");
-            false
+            return false;
         }
+        let window_id = ctx.window_id();
+        ctx.windows().show_window_and_focus_app(window_id);
+        ctx.notify();
+        true
     }
 
     /// Opens a cloud conversation in an existing window.
@@ -2373,18 +2419,30 @@ impl RootView {
     ) -> bool {
         let window_id = ctx.window_id();
         if let AuthOnboardingState::Terminal(handle) = &self.auth_onboarding_state {
+            let handle = handle.clone();
             ctx.dispatch_typed_action_for_view(
                 window_id,
                 handle.id(),
                 &WorkspaceAction::ShowSettingsPage(*section),
             );
             ctx.windows().show_window_and_focus_app(window_id);
-        } else {
-            report_error!(
-                "Auth not complete before trying to open settings page",
-                extra: { "section" => ?section }
-            );
+            return true;
         }
+
+        // A checkout confirmation that predates the unified success hand-off
+        // still returns the user through the Billing & Usage deeplink. Landing
+        // it mid-onboarding would interrupt the flow, so onboarding takes it as
+        // the purchase succeeding and moves on instead.
+        if *section == SettingsSection::BillingAndUsage
+            && self.notify_onboarding_checkout_succeeded(ctx)
+        {
+            return true;
+        }
+
+        report_error!(
+            "Auth not complete before trying to open settings page",
+            extra: { "section" => ?section }
+        );
         true
     }
 
@@ -2754,9 +2812,7 @@ impl RootView {
             return;
         };
 
-        if FeatureFlag::OpenWarpNewSettingsModes.is_enabled()
-            && FeatureFlag::TabConfigs.is_enabled()
-        {
+        if FeatureFlag::TabConfigs.is_enabled() {
             let intention = tutorial.intention();
             if matches!(intention, OnboardingIntention::AgentDrivenDevelopment) {
                 workspace.update(ctx, |view, ctx| {
@@ -3035,6 +3091,31 @@ impl AuthOnboardingState {
                 ctx.emit(RootViewEvent::AuthOnboardingStateChanged);
             }
         }
+    }
+
+    /// Redirects a workspace that has not yet been created to join `session_id`.
+    fn retarget_pending_workspace_for_shared_session(&mut self, session_id: SessionId) -> bool {
+        let workspace_args = match self {
+            AuthOnboardingState::Auth(args) | AuthOnboardingState::ConfirmIncomingAuth(args) => {
+                args
+            }
+            AuthOnboardingState::NeedsSsoLink(target) => {
+                let AuthOnboardingTarget::Workspace(args) = target else {
+                    return false;
+                };
+                args
+            }
+            #[cfg(target_family = "wasm")]
+            AuthOnboardingState::WebImport(target) => {
+                let AuthOnboardingTarget::Workspace(args) = target else {
+                    return false;
+                };
+                args
+            }
+            AuthOnboardingState::Terminal(_) => return false,
+        };
+        workspace_args.workspace_setting = NewWorkspaceSource::SharedSessionAsViewer { session_id };
+        true
     }
 }
 

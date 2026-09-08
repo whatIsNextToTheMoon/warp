@@ -6,7 +6,7 @@ use crate::onboarding::{SelectedSettings, SessionDefault, UICustomizationSetting
 use crate::settings::ai::DefaultSessionMode;
 use crate::settings::{AISettings, CodeSettings};
 use crate::workspace::tab_settings::TabSettings;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{TeamContextForOperation, UserWorkspaces};
 use settings::Setting as _;
 use warp_core::features::FeatureFlag;
 use warp_errors::report_if_error;
@@ -17,9 +17,10 @@ use warpui::{AppContext, SingletonEntity as _};
 /// `has_account` indicates whether the user has (or is creating) a real Warp
 /// account. Warp's AI features run on a Warp account, so agent intent only
 /// enables AI when `has_account` is true; skipping login leaves AI off.
-pub fn apply_onboarding_settings(
+pub(crate) fn apply_onboarding_settings(
     selected_settings: &SelectedSettings,
     has_account: bool,
+    team_context: TeamContextForOperation,
     app: &mut AppContext,
 ) {
     let is_ai_enabled = match selected_settings {
@@ -28,7 +29,7 @@ pub fn apply_onboarding_settings(
             ui_customization,
             ..
         } => {
-            apply_agent_settings(agent_settings, app);
+            apply_agent_settings(agent_settings, &team_context, app);
             if let Some(ui) = ui_customization {
                 apply_ui_customization_settings(ui, true, app);
             }
@@ -43,35 +44,28 @@ pub fn apply_onboarding_settings(
             cli_agent_toolbar_enabled,
             show_agent_notifications,
         } => {
-            // In old onboarding, there's nothing to set for terminal intent.
-            if !FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
-                true
-            } else {
-                if let Some(ui) = ui_customization {
-                    apply_ui_customization_settings(ui, false, app);
-                }
-                AISettings::handle(app).update(app, |settings, ctx| {
-                    report_if_error!(
-                        settings
-                            .should_render_cli_agent_footer
-                            .set_value(*cli_agent_toolbar_enabled, ctx)
-                    );
-                    report_if_error!(
-                        settings
-                            .show_agent_notifications
-                            .set_value(*show_agent_notifications, ctx)
-                    );
-                });
-                false
+            if let Some(ui) = ui_customization {
+                apply_ui_customization_settings(ui, false, app);
             }
+            AISettings::handle(app).update(app, |settings, ctx| {
+                report_if_error!(
+                    settings
+                        .should_render_cli_agent_footer
+                        .set_value(*cli_agent_toolbar_enabled, ctx)
+                );
+                report_if_error!(
+                    settings
+                        .show_agent_notifications
+                        .set_value(*show_agent_notifications, ctx)
+                );
+            });
+            false
         }
     };
 
-    if FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
-        AISettings::handle(app).update(app, |settings, ctx| {
-            report_if_error!(settings.is_any_ai_enabled.set_value(is_ai_enabled, ctx));
-        });
-    }
+    AISettings::handle(app).update(app, |settings, ctx| {
+        report_if_error!(settings.is_any_ai_enabled.set_value(is_ai_enabled, ctx));
+    });
 }
 
 /// Applies the explicit UI customization settings chosen during the
@@ -133,7 +127,11 @@ fn apply_ui_customization_settings(
     }
 }
 
-fn apply_agent_settings(agent_settings: &AgentDevelopmentSettings, app: &mut AppContext) {
+fn apply_agent_settings(
+    agent_settings: &AgentDevelopmentSettings,
+    team_context: &TeamContextForOperation,
+    app: &mut AppContext,
+) {
     // Apply session default mode.
     let default_mode = match agent_settings.session_default {
         SessionDefault::Agent => DefaultSessionMode::Agent,
@@ -147,7 +145,7 @@ fn apply_agent_settings(agent_settings: &AgentDevelopmentSettings, app: &mut App
         );
     });
 
-    let workspace_autonomy_settings = UserWorkspaces::as_ref(app).ai_autonomy_settings();
+    let team_autonomy_settings = UserWorkspaces::as_ref(app).ai_autonomy_settings(team_context);
 
     AISettings::handle(app).update(app, |settings, ctx| {
         report_if_error!(
@@ -190,19 +188,19 @@ fn apply_agent_settings(agent_settings: &AgentDevelopmentSettings, app: &mut App
 
         let permissions = action_permissions_for_onboarding_autonomy(autonomy);
 
-        // Only set permissions that are not enforced by the workspace
-        if !workspace_autonomy_settings.has_override_for_code_diffs() {
+        // Only set permissions the team's admins do not already enforce.
+        if !team_autonomy_settings.has_override_for_code_diffs() {
             profiles.set_apply_code_diffs(&default_profile_id, &permissions.apply_code_diffs, ctx);
         }
-        if !workspace_autonomy_settings.has_override_for_read_files() {
+        if !team_autonomy_settings.has_override_for_read_files() {
             profiles.set_read_files(&default_profile_id, &permissions.read_files, ctx);
         }
-        if !workspace_autonomy_settings.has_override_for_execute_commands() {
+        if !team_autonomy_settings.has_override_for_execute_commands() {
             profiles.set_execute_commands(&default_profile_id, &permissions.execute_commands, ctx);
         }
-        // Note: MCP permissions don't have a workspace-level override, so always set them
+        // Note: MCP permissions don't have an admin-level override, so always set them
         profiles.set_mcp_permissions(&default_profile_id, &permissions.mcp_permissions, ctx);
-        if !workspace_autonomy_settings.has_override_for_write_to_pty() {
+        if !team_autonomy_settings.has_override_for_write_to_pty() {
             profiles.set_write_to_pty(&default_profile_id, &permissions.write_to_pty, ctx);
         }
     });

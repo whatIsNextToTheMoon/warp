@@ -5,6 +5,10 @@ use crate::context_chips::{ContextChipKind, git_line_changes_from_chips};
 use crate::terminal::TerminalView;
 
 impl TerminalView {
+    pub(crate) fn custom_title_with_status(&self, custom_title: &str) -> String {
+        custom_title_with_status(&self.terminal_title, custom_title)
+    }
+
     fn prompt_chip_value(&self, chip_kind: &ContextChipKind, ctx: &AppContext) -> Option<String> {
         self.current_prompt
             .as_ref(ctx)
@@ -48,6 +52,8 @@ impl TerminalView {
             if block.finished()
                 && !block.is_background()
                 && !block.is_static()
+                && !block.is_hidden()
+                && !block.is_in_band_command_block()
                 && (block.bootstrap_stage().is_done() || block.is_restored())
             {
                 let cmd = block.command_to_string();
@@ -97,3 +103,50 @@ impl TerminalView {
             })
     }
 }
+
+fn custom_title_with_status(terminal_title: &str, custom_title: &str) -> String {
+    let title = terminal_title.trim_start();
+    let Some(first) = title.chars().next() else {
+        return custom_title.to_owned();
+    };
+    if !matches!(
+        first,
+        '\u{2801}'
+            ..='\u{28ff}'
+                | '\u{2733}'
+                | '\u{2736}'
+                | '\u{273b}'
+                | '\u{273d}'
+                | '\u{2722}'
+                | '\u{00b7}'
+                | '\u{25d0}'
+                | '\u{25d1}'
+                | '\u{25d2}'
+                | '\u{25d3}'
+                | '\u{231b}'
+                | '\u{23f3}'
+                | '|'
+                | '/'
+                | '-'
+                | '\\'
+    ) {
+        return custom_title.to_owned();
+    }
+    let mut prefix_len = first.len_utf8();
+    if title[prefix_len..].starts_with('\u{fe0f}') {
+        prefix_len += '\u{fe0f}'.len_utf8();
+    }
+    if !title[prefix_len..].starts_with(char::is_whitespace) {
+        return custom_title.to_owned();
+    }
+    let prefix = &title[..prefix_len];
+    if custom_title.starts_with(&format!("{prefix} ")) {
+        custom_title.to_owned()
+    } else {
+        format!("{prefix} {custom_title}")
+    }
+}
+
+#[cfg(test)]
+#[path = "tab_metadata_tests.rs"]
+mod tests;

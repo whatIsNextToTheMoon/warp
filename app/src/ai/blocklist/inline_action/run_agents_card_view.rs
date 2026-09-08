@@ -31,7 +31,7 @@ use crate::ai::blocklist::action_model::{
 };
 use crate::ai::blocklist::agent_view::orchestration_pill_bar::render_static_agent_pill;
 use crate::ai::blocklist::block::AIBlock;
-use crate::ai::blocklist::block::model::AIBlockModel;
+use crate::ai::blocklist::block::model::{AIBlockModel, AIBlockOutputStatus};
 use crate::ai::blocklist::block::view_impl::WithContentItemSpacing;
 use crate::ai::blocklist::inline_action::create_environment_modal::{
     CreateEnvironmentModal, CreateEnvironmentModalEvent,
@@ -58,9 +58,11 @@ use crate::ai::harness_availability::{
 };
 use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
 use crate::appearance::Appearance;
+use crate::features::FeatureFlag;
 use crate::menu::{Event as MenuEvent, Menu, MenuItemFields, MenuVariant};
 use crate::server::experiments::{ServerExperiments, ServerExperimentsEvent};
 use crate::server::server_api::ServerApiProvider;
+use crate::server::team_scope::RequestTeamScope;
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{ButtonSize, KeystrokeSource, NakedTheme};
@@ -70,8 +72,12 @@ use crate::view_components::compactible_action_button::{
 use crate::view_components::compactible_split_action_button::CompactibleSplitActionButton;
 use crate::view_components::dropdown::DropdownEvent;
 use crate::view_components::{FilterableDropdownEvent, FilterableDropdownOrientation};
+use crate::workspaces::user_workspaces::{
+    TeamContextResolver, TeamScope, UserWorkspaces, UserWorkspacesEvent,
+};
 
 const RUN_AGENTS_CARD_TITLE: &str = "Can I start additional agents for this task?";
+const SPAWN_AGENTS_CANCELLED_LABEL: &str = "Spawn agents cancelled";
 
 pub fn init(app: &mut AppContext) {
     use warpui::keymap::macros::*;
@@ -268,6 +274,7 @@ pub struct RunAgentsCardView {
     runners: Vec<(String, String)>,
     /// True while the `getRunners` fetch is in flight.
     runners_loading: bool,
+    team_context_resolver: TeamContextResolver,
 }
 
 /// Resolves UI-only interactive defaults on edit state that has
@@ -281,7 +288,7 @@ pub struct RunAgentsCardView {
 fn resolve_interactive_defaults(
     orchestration_config_state: &mut OrchestrationConfigState,
     block_model: &dyn AIBlockModel<View = AIBlock>,
-    ctx: &AppContext,
+    ctx: &ViewContext<RunAgentsCardView>,
 ) {
     if orchestration_config_state.model_id.is_empty() {
         let harness = warp_cli::agent::Harness::parse_orchestration_harness(
@@ -306,7 +313,8 @@ fn resolve_interactive_defaults(
             // over the bare "warp" fallback so self-hosted teams see
             // their default pre-selected. Mirrors the Oz webapp's
             // `HostSelector` initial-selection behavior.
-            let default_host = oc::resolve_default_host_slug(ctx)
+            let scope = UserWorkspaces::as_ref(ctx).team_context_for_view(ctx);
+            let default_host = oc::resolve_default_host_slug(&scope, ctx)
                 .unwrap_or_else(|| oc::ORCHESTRATION_WARP_WORKER_HOST.to_string());
             orchestration_config_state.set_worker_host(default_host);
         }
@@ -545,6 +553,27 @@ impl RunAgentsCardView {
                 }
             },
         );
+        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |me, _, event, ctx| {
+            let affects_this_window = matches!(event, UserWorkspacesEvent::TeamsChanged)
+                || matches!(
+                    event,
+                    UserWorkspacesEvent::WindowTeamChanged { window_id }
+                        if *window_id == ctx.window_id()
+                );
+            if !affects_this_window {
+                return;
+            }
+            let scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+            ConnectedSelfHostedWorkersModel::handle(ctx).update(ctx, |model, ctx| {
+                model.refresh(&scope, ctx);
+            });
+            oc::repopulate_all_pickers(
+                &mut me.orchestration_edit_state.orchestration_config_state,
+                &me.handles.pickers,
+                ctx,
+            );
+            ctx.notify();
+        });
         // When auto_launched is true, execution is deferred to the
         // ActionBlockedOnUserConfirmation subscription above — the action
         // hasn't been queued in pending_actions yet at construction time.
@@ -571,6 +600,7 @@ impl RunAgentsCardView {
             has_auto_opened_create_modal: false,
             runners: Vec::new(),
             runners_loading: false,
+            team_context_resolver: UserWorkspaces::team_context_resolver(ctx.handle()),
         };
 
         view.ensure_pickers(ctx);
@@ -917,6 +947,10 @@ impl RunAgentsCardView {
 
         let state = &self.orchestration_edit_state.orchestration_config_state;
         if self.handles.pickers.host_picker.is_none() {
+            let scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+            ConnectedSelfHostedWorkersModel::handle(ctx).update(ctx, |model, ctx| {
+                model.refresh(&scope, ctx);
+            });
             let initial_host = match &state.execution_mode {
                 RunAgentsExecutionMode::Remote { worker_host, .. } => worker_host.as_str(),
                 RunAgentsExecutionMode::Local => oc::ORCHESTRATION_WARP_WORKER_HOST,
@@ -934,8 +968,9 @@ impl RunAgentsCardView {
             oc::populate_host_picker(&handle, initial_host, ctx);
             ctx.subscribe_to_view(&handle, |me, _, event, ctx| match event {
                 HostPickerEvent::Opened => {
+                    let scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
                     ConnectedSelfHostedWorkersModel::handle(ctx).update(ctx, |model, ctx| {
-                        model.refresh(ctx);
+                        model.refresh(&scope, ctx);
                     });
                 }
                 HostPickerEvent::HostChanged { slug } => {
@@ -1052,8 +1087,15 @@ impl RunAgentsCardView {
         }
         self.runners_loading = true;
         let client = ServerApiProvider::as_ref(ctx).get_factory_client();
+        let team_scope = RequestTeamScope::from_scope(
+            &UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx),
+        );
         ctx.spawn(
-            async move { client.get_runners(Some(RunnerSortBy::Name)).await },
+            async move {
+                client
+                    .get_runners(Some(RunnerSortBy::Name), Some(team_scope))
+                    .await
+            },
             |me, result, ctx| {
                 me.runners_loading = false;
                 match result {
@@ -1254,12 +1296,11 @@ impl View for RunAgentsCardView {
         // Cancelled. Must be checked before the streaming gate below,
         // because restored blocks have no pending action status.
         if self.block_model.is_restored() {
-            return render_status_only_card(
-                "Spawn agents cancelled".to_string(),
-                appearance,
-                StatusKind::Cancelled,
-                app,
-            );
+            return render_cancelled_card(appearance, app);
+        }
+
+        if is_orphaned_by_finished_output(status.as_ref(), &self.block_model.status(app)) {
+            return render_cancelled_card(appearance, app);
         }
 
         // Still streaming: show "Configuring agents..." placeholder until
@@ -1280,6 +1321,7 @@ impl View for RunAgentsCardView {
             &self.card,
             &self.handles,
             is_blocked,
+            &(self.team_context_resolver)(app),
             app,
         );
 
@@ -1449,6 +1491,7 @@ fn render_confirmation_card(
     card: &RunAgentsCardFields,
     handles: &RunAgentsCardHandles,
     is_blocked: bool,
+    scope: &(impl TeamScope + ?Sized),
     app: &AppContext,
 ) -> Box<dyn Element> {
     let appearance = Appearance::as_ref(app);
@@ -1462,7 +1505,12 @@ fn render_confirmation_card(
         .with_child(header)
         .with_child(body);
 
-    content.add_child(render_editor(orchestration_config_state, handles, app));
+    content.add_child(render_editor(
+        orchestration_config_state,
+        handles,
+        scope,
+        app,
+    ));
 
     let border_color = if is_blocked {
         theme.accent()
@@ -1534,7 +1582,30 @@ fn render_summary(card: &RunAgentsCardFields, appearance: &Appearance) -> Box<dy
     .with_selectable(true)
     .finish();
 
-    Container::new(summary_text)
+    let mut column = Flex::column()
+        .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+        .with_child(summary_text);
+    // Multi-level orchestration: the server may grant launched children the
+    // run_agents tool, so tell the approver up front. The client cannot
+    // cheaply know the server-side depth budget, so this line is gated on
+    // the client-side multi-level enablement flag.
+    if FeatureFlag::MultiLevelOrchestration.is_enabled() {
+        column = column.with_child(
+            Container::new(
+                Text::new(
+                    "These agents may start their own child agents".to_string(),
+                    appearance.ui_font_family(),
+                    appearance.monospace_font_size() - 1.,
+                )
+                .with_color(blended_colors::text_disabled(theme, theme.background()))
+                .finish(),
+            )
+            .with_margin_top(4.)
+            .finish(),
+        );
+    }
+
+    Container::new(column.finish())
         .with_margin_bottom(12.)
         .finish()
 }
@@ -1627,8 +1698,29 @@ pub(crate) fn format_terminal_state(result: &RunAgentsResult) -> (String, Status
             };
             (label, StatusKind::Failure)
         }
-        RunAgentsResult::Cancelled => ("Spawn agents cancelled".to_string(), StatusKind::Cancelled),
+        RunAgentsResult::Cancelled => (
+            SPAWN_AGENTS_CANCELLED_LABEL.to_string(),
+            StatusKind::Cancelled,
+        ),
     }
+}
+
+/// Whether the card can no longer reach a real outcome and must render as
+/// cancelled: the tool call never entered the action queue (so it has no
+/// status and will never produce a result), and the response stream that was
+/// streaming it has already finished as cancelled or failed. Without this the
+/// card would keep rendering the in-progress placeholder forever. Mirrors how
+/// [`crate::ai::blocklist::block::view_impl::output::action_icon`] treats a
+/// statusless action on a finished block.
+fn is_orphaned_by_finished_output(
+    action_status: Option<&AIActionStatus>,
+    block_status: &AIBlockOutputStatus,
+) -> bool {
+    action_status.is_none()
+        && matches!(
+            block_status,
+            AIBlockOutputStatus::Cancelled { .. } | AIBlockOutputStatus::Failed { .. }
+        )
 }
 
 #[derive(Clone, Copy)]
@@ -1652,6 +1744,16 @@ fn render_spawning_card(
         format!("Spawning {total} agents\u{2026}")
     };
     render_status_only_card(label, appearance, StatusKind::Spawning, app)
+}
+
+/// Terminal card for a tool call that ended without launching any agent.
+fn render_cancelled_card(appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
+    render_status_only_card(
+        SPAWN_AGENTS_CANCELLED_LABEL.to_string(),
+        appearance,
+        StatusKind::Cancelled,
+        app,
+    )
 }
 
 fn render_status_only_card(
@@ -1690,6 +1792,7 @@ fn render_status_only_card(
 fn render_editor(
     orchestration_config_state: &OrchestrationConfigState,
     handles: &RunAgentsCardHandles,
+    scope: &(impl TeamScope + ?Sized),
     app: &AppContext,
 ) -> Box<dyn Element> {
     use warpui::elements::ConstrainedBox;
@@ -1730,9 +1833,13 @@ fn render_editor(
             theme.ui_error_color(),
             appearance,
         ));
-    } else if let Some(message) =
-        oc::empty_env_recommendation_message(&orchestration_config_state.execution_mode, app)
-    {
+    } else if let Some(message) = oc::empty_env_recommendation_message(
+        &orchestration_config_state.execution_mode,
+        oc::environment_snapshot(orchestration_config_state, scope, app)
+            .rows
+            .iter()
+            .any(|row| !row.id.is_empty()),
+    ) {
         column.add_child(oc::render_validation_error(
             message,
             theme.ui_warning_color(),

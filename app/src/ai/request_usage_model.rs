@@ -20,7 +20,7 @@ use crate::auth::AuthStateProvider;
 use crate::pricing::PricingInfoModel;
 use crate::server::server_api::ai::AIClient;
 use crate::settings::AISettings;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
 use crate::workspaces::workspace::WorkspaceUid;
 
 /// Threshold of ambient-only credits at which we surface upgrade/CTA UI.
@@ -29,7 +29,17 @@ pub const AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD: i32 = 20;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BonusGrantScope {
     User,
+    Team(WorkspaceUid),
     Workspace(WorkspaceUid),
+}
+
+impl BonusGrantScope {
+    pub fn workspace_uid(&self) -> Option<WorkspaceUid> {
+        match self {
+            BonusGrantScope::User => None,
+            BonusGrantScope::Team(uid) | BonusGrantScope::Workspace(uid) => Some(*uid),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -488,16 +498,17 @@ impl AIRequestUsageModel {
 
     /// Returns `true` if the user can start an interactive AI request.
     /// Prefers the server decision when present; otherwise uses the pre-fetch fallback.
-    pub fn has_any_ai_remaining(&self, ctx: &AppContext) -> bool {
+    pub fn has_any_ai_remaining<S: TeamScope + ?Sized>(&self, scope: &S, ctx: &AppContext) -> bool {
         if let Some(availability) = self.server_availability.latest {
-            return Self::server_availability_permits_ai(availability, ctx);
+            return Self::server_availability_permits_ai(availability, scope, ctx);
         }
-        self.has_any_ai_remaining_before_server_decision(ctx)
+        self.has_any_ai_remaining_before_server_decision(scope, ctx)
     }
 
     /// Trusts `available`; only `OutOfCredits` may be refined by local BYO credentials.
-    fn server_availability_permits_ai(
+    fn server_availability_permits_ai<S: TeamScope + ?Sized>(
         availability: AICreditAvailability,
+        scope: &S,
         ctx: &AppContext,
     ) -> bool {
         if availability.available {
@@ -506,33 +517,66 @@ impl AIRequestUsageModel {
         matches!(
             availability.denial_reason,
             AICreditDenialReason::OutOfCredits
-        ) && Self::has_usable_byo_inference_path(ctx)
+        ) && Self::has_usable_byo_inference_path(scope, ctx)
     }
 
-    /// Whether a local BYO path is usable: stored API key/endpoint/Grok when
-    /// BYOK is allowed, or loaded AWS credentials for an enabled Bedrock host.
-    fn has_usable_byo_inference_path(ctx: &AppContext) -> bool {
-        let user_workspaces = UserWorkspaces::as_ref(ctx);
-        let api_keys = ApiKeyManager::as_ref(ctx);
-        if user_workspaces.is_byo_api_key_enabled(ctx) && api_keys.has_any_key() {
+    /// Whether a local BYO path is usable under `scope`'s team policy.
+    fn has_usable_byo_inference_path<S: TeamScope + ?Sized>(scope: &S, ctx: &AppContext) -> bool {
+        if Self::has_usable_member_byo_inference_path(scope, ctx) {
             return true;
         }
-        user_workspaces.is_aws_bedrock_credentials_enabled(ctx)
+        let user_workspaces = UserWorkspaces::as_ref(ctx);
+        let api_keys = ApiKeyManager::as_ref(ctx);
+        user_workspaces.is_aws_bedrock_credentials_enabled(scope, ctx)
             && matches!(
                 api_keys.aws_credentials_state(),
                 AwsCredentialsState::Loaded { .. }
             )
     }
 
+    fn has_usable_member_byo_inference_path<S: TeamScope + ?Sized>(
+        scope: &S,
+        ctx: &AppContext,
+    ) -> bool {
+        let user_workspaces = UserWorkspaces::as_ref(ctx);
+        let api_keys = ApiKeyManager::as_ref(ctx);
+        let has_provider_key =
+            api_keys.keys().provider_key_count() > 0 || api_keys.has_grok_subscription();
+        if user_workspaces.is_byo_api_key_enabled(ctx)
+            && user_workspaces.are_member_byo_keys_allowed(scope)
+            && has_provider_key
+        {
+            return true;
+        }
+        let has_custom_endpoint_key = api_keys
+            .keys()
+            .custom_endpoints
+            .iter()
+            .any(|endpoint| !endpoint.api_key.trim().is_empty());
+        if user_workspaces.is_byo_endpoint_enabled(ctx)
+            && user_workspaces.are_member_byo_endpoints_allowed(scope)
+            && has_custom_endpoint_key
+        {
+            return true;
+        }
+        false
+    }
+
     /// Prefetch fallback used only before any successful server availability decision this session.
-    fn has_any_ai_remaining_before_server_decision(&self, ctx: &AppContext) -> bool {
+    fn has_any_ai_remaining_before_server_decision<S: TeamScope + ?Sized>(
+        &self,
+        scope: &S,
+        ctx: &AppContext,
+    ) -> bool {
         let current_workspace = UserWorkspaces::as_ref(ctx).current_workspace();
 
         let has_base_plan_ai_requests = self.has_base_plan_requests_remaining();
 
         let user_bonus_credits = self.total_user_interactive_bonus_credits_remaining() > 0;
-        let workspace_bonus_credits = current_workspace
-            .map(|workspace| self.total_workspace_bonus_credits_remaining(workspace.uid) > 0)
+        let workspace_and_team_bonus_credits = current_workspace
+            .map(|workspace| {
+                self.total_workspace_and_team_bonus_credits_remaining(workspace.uid) > 0
+            })
             .unwrap_or_default();
 
         let workspace_has_overages =
@@ -558,11 +602,10 @@ impl AIRequestUsageModel {
 
         // If you have provided your own API key or connected a Grok
         // subscription, it doesn't matter if you are out of warp-provided requests.
-        let has_byo_credentials = UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled(ctx)
-            && ApiKeyManager::as_ref(ctx).has_any_key();
+        let has_byo_credentials = Self::has_usable_member_byo_inference_path(scope, ctx);
 
         has_base_plan_ai_requests
-            || (user_bonus_credits || workspace_bonus_credits)
+            || (user_bonus_credits || workspace_and_team_bonus_credits)
             || workspace_has_overages
             || is_payg_enabled
             || is_enterprise_auto_reload_enabled
@@ -659,20 +702,23 @@ impl AIRequestUsageModel {
         ctx.emit(AIRequestUsageModelEvent::AmbientCreditsBannerDismissed);
     }
 
-    pub fn total_workspace_bonus_credits_remaining(&self, uid: WorkspaceUid) -> i32 {
+    pub fn total_workspace_and_team_bonus_credits_remaining(&self, uid: WorkspaceUid) -> i32 {
         let now = Utc::now();
         self.bonus_grants
             .iter()
-            .filter(|grant| grant.scope == BonusGrantScope::Workspace(uid))
+            .filter(|grant| grant.scope.workspace_uid() == Some(uid))
             .filter(|grant| grant.expiration.is_none_or(|exp| now < exp))
             .map(|grant| grant.request_credits_remaining)
             .sum()
     }
 
-    pub fn total_current_workspace_bonus_credits_remaining(&self, ctx: &AppContext) -> i32 {
+    pub fn total_current_workspace_and_team_bonus_credits_remaining(
+        &self,
+        ctx: &AppContext,
+    ) -> i32 {
         UserWorkspaces::as_ref(ctx)
             .current_workspace()
-            .map(|workspace| self.total_workspace_bonus_credits_remaining(workspace.uid))
+            .map(|workspace| self.total_workspace_and_team_bonus_credits_remaining(workspace.uid))
             .unwrap_or(0)
     }
 
@@ -688,8 +734,9 @@ impl AIRequestUsageModel {
     }
 
     /// Computes the current banner state based on live conditions.
-    pub fn compute_buy_addon_credits_banner_display_state(
+    pub fn compute_buy_addon_credits_banner_display_state<S: TeamScope + ?Sized>(
         &self,
+        scope: &S,
         ctx: &AppContext,
     ) -> BuyCreditsBannerDisplayState {
         // Early return if user dismissed
@@ -718,7 +765,7 @@ impl AIRequestUsageModel {
             .filter(|grant| grant.request_credits_remaining > 0)
             .any(|grant| match grant.scope {
                 BonusGrantScope::User => true,
-                BonusGrantScope::Workspace(uid) => {
+                BonusGrantScope::Team(uid) | BonusGrantScope::Workspace(uid) => {
                     current_workspace.is_some_and(|workspace| workspace.uid == uid)
                 }
             });
@@ -731,7 +778,7 @@ impl AIRequestUsageModel {
                 );
             // Hide when interactive AI is permitted, except ambient-only sources
             // which do not fund interactive requests.
-            if self.has_any_ai_remaining(ctx) && !only_ambient_server_source {
+            if self.has_any_ai_remaining(scope, ctx) && !only_ambient_server_source {
                 return BuyCreditsBannerDisplayState::Hidden;
             }
         } else if self.has_base_plan_requests_remaining() || has_non_ambient_bonus_credits {

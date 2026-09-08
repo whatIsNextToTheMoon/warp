@@ -49,7 +49,7 @@ use crate::modal::{Modal, ModalEvent, ModalViewState};
 use crate::pricing::{PricingInfoModel, PricingInfoModelEvent};
 use crate::server::ids::ServerId;
 use crate::server::telemetry::TelemetryEvent;
-use crate::settings::ai::AISettings;
+use crate::settings::ai::{AISettings, AISettingsChangedEvent};
 use crate::settings_view::settings_page::TOGGLE_BUTTON_RIGHT_PADDING;
 use crate::ui_components::blended_colors;
 use crate::ui_components::buttons::icon_button;
@@ -326,6 +326,12 @@ impl BillingAndUsagePageView {
         });
         // On page init, fetch the usage history for the current user.
         usage_history_model.update(ctx, |m, ctx| m.refresh_usage_history_async(ctx));
+
+        ctx.subscribe_to_model(&AISettings::handle(ctx), |_, _, event, ctx| {
+            if matches!(event, AISettingsChangedEvent::UsageDisplayUnit { .. }) {
+                ctx.notify();
+            }
+        });
 
         let auth_state = AuthStateProvider::as_ref(ctx).get().clone();
 
@@ -1707,9 +1713,7 @@ impl BillingAndUsagePageView {
             .finish();
 
         let workspaces = UserWorkspaces::as_ref(app);
-        let purchase_policy = workspaces.purchase_policy_for_team(
-            team_uid.and_then(|team_uid| workspaces.team_from_uid(team_uid)),
-        );
+        let purchase_policy = workspaces.purchase_policy();
         let team_can_purchase_addon_credits =
             purchase_policy.is_some_and(|policy| policy.allows_purchases());
         let premium_bps = purchase_policy.map_or(0, |policy| policy.effective_premium_bps());
@@ -2964,13 +2968,14 @@ impl BillingAndUsagePageView {
 
         let show_addon_credits_panel = workspace.is_some()
             || workspaces
-                .purchase_policy_for_team(team)
+                .purchase_policy()
                 .is_some_and(|policy| policy.allows_purchases());
         if show_addon_credits_panel {
             let bonus_credit_balance = workspace.map_or_else(
                 || ai_request_usage_model.total_user_interactive_bonus_credits_remaining(),
                 |workspace| {
-                    ai_request_usage_model.total_workspace_bonus_credits_remaining(workspace.uid)
+                    ai_request_usage_model
+                        .total_workspace_and_team_bonus_credits_remaining(workspace.uid)
                 },
             );
 

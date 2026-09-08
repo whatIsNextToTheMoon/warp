@@ -4443,14 +4443,13 @@ impl EditorView {
                 .is_some_and(|ai_block| {
                     let block = ai_block.as_ref(ctx);
                     // Ctrl+c should dismiss the passive ai block only if the keybindings for the block are not hidden.
-                    let is_pending_code_diff = block.find_undismissed_code_diff(ctx).is_some();
-                    let is_pending_suggested_prompt = block
-                        .pending_unit_test_suggestion(ctx)
-                        .is_some_and(|suggested_prompt| {
-                            !suggested_prompt.as_ref(ctx).is_keybindings_hidden()
-                        });
-                    block.is_passive_conversation(ctx)
-                        && (is_pending_code_diff || is_pending_suggested_prompt)
+                    block.is_passive_conversation()
+                        && (block.find_undismissed_code_diff(ctx).is_some()
+                            || block.pending_unit_test_suggestion(ctx).is_some_and(
+                                |suggested_prompt| {
+                                    !suggested_prompt.as_ref(ctx).is_keybindings_hidden()
+                                },
+                            ))
                 })
         });
 
@@ -5632,14 +5631,18 @@ impl EditorView {
             ctx.emit(Event::BackspaceAtBeginningOfBuffer);
         }
 
+        let autocomplete_symbols =
+            self.autocomplete_symbols_allowed && self.autocomplete_symbols_setting;
         // Only select left for empty selections
         self.edit(
             ctx,
             Edits::new().with_update_buffer(
                 PlainTextEditorViewAction::Backspace,
                 EditOrigin::UserInitiated,
-                |editor_model, ctx| {
-                    if editor_model.consecutive_autocomplete_insertion_edits_counter() > 0 {
+                move |editor_model, ctx| {
+                    if autocomplete_symbols
+                        && editor_model.all_cursors_inside_autocompleted_pair(ctx)
+                    {
                         editor_model.remove_before_and_after_cursor(ctx);
                     } else {
                         editor_model.backspace(ctx);
@@ -5656,13 +5659,17 @@ impl EditorView {
         if self.single_cursor_at_buffer_end(false /* respect_line_cap */, ctx) {
             return;
         }
+        let autocomplete_symbols =
+            self.autocomplete_symbols_allowed && self.autocomplete_symbols_setting;
         self.edit(
             ctx,
             Edits::new().with_update_buffer(
                 PlainTextEditorViewAction::Delete,
                 EditOrigin::UserInitiated,
-                |editor_model, ctx| {
-                    if editor_model.consecutive_autocomplete_insertion_edits_counter() > 0 {
+                move |editor_model, ctx| {
+                    if autocomplete_symbols
+                        && editor_model.all_cursors_inside_autocompleted_pair(ctx)
+                    {
                         editor_model.remove_before_and_after_cursor(ctx);
                     } else {
                         editor_model.delete(ctx);

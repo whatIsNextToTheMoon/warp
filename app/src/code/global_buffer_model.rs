@@ -320,6 +320,7 @@ pub struct CharOffsetEdit {
 pub struct GlobalBufferModel {
     location_to_id: BiMap<LocalOrRemotePath, FileId>,
     buffers: HashMap<FileId, InternalBufferState>,
+    load_errors: HashMap<FileId, Rc<FileLoadError>>,
 }
 
 impl GlobalBufferModel {
@@ -373,6 +374,7 @@ impl GlobalBufferModel {
         Self {
             location_to_id: BiMap::new(),
             buffers: HashMap::new(),
+            load_errors: HashMap::new(),
         }
     }
 
@@ -413,6 +415,7 @@ impl GlobalBufferModel {
 
         for id in ids_to_remove {
             self.buffers.remove(&id);
+            self.load_errors.remove(&id);
 
             #[cfg(feature = "local_fs")]
             {
@@ -433,6 +436,7 @@ impl GlobalBufferModel {
     }
 
     fn cleanup_file_id(&mut self, file_id: FileId, _ctx: &mut ModelContext<Self>) {
+        self.load_errors.remove(&file_id);
         // Send didClose before removing the entry.
         if let Some((LocalOrRemotePath::Local(path), _)) =
             self.location_to_id.remove_by_right(&file_id)
@@ -490,6 +494,11 @@ impl GlobalBufferModel {
         is_initial_load: bool,
         ctx: &mut ModelContext<Self>,
     ) {
+        #[cfg(feature = "local_fs")]
+        if let Err(error) = warp_files::validate_editor_content(content) {
+            self.report_load_error(file_id, Rc::new(error), ctx);
+            return;
+        }
         let Some(state) = self.buffers.get_mut(&file_id) else {
             return;
         };
@@ -500,6 +509,7 @@ impl GlobalBufferModel {
             return;
         };
 
+        self.load_errors.remove(&file_id);
         if is_initial_load {
             // Initial load: use synchronous replace_all since there's nothing to preserve
             buffer.update(ctx, |buffer, ctx| {
@@ -698,10 +708,7 @@ impl GlobalBufferModel {
                 self.populate_buffer_with_read_content(*id, content, *version, *version, true, ctx);
             }
             FileModelEvent::FailedToLoad { id, error } => {
-                ctx.emit(GlobalBufferModelEvent::FailedToLoad {
-                    file_id: *id,
-                    error: error.clone(),
-                });
+                self.report_load_error(*id, error.clone(), ctx);
             }
             FileModelEvent::FileUpdated {
                 id,
@@ -810,6 +817,7 @@ impl GlobalBufferModel {
         version: ContentVersion,
         ctx: &mut ModelContext<Self>,
     ) -> Result<(), FileSaveError> {
+        self.ensure_loaded_for_save(file_id)?;
         // Check if this is a remote buffer — save via the remote server RPC.
         if let Some(state) = self.buffers.get_mut(&file_id)
             && let BufferSource::Remote {
@@ -867,6 +875,31 @@ impl GlobalBufferModel {
             .map(drop)
     }
 
+    pub fn load_error(&self, file_id: FileId) -> Option<Rc<FileLoadError>> {
+        self.load_errors.get(&file_id).cloned()
+    }
+
+    fn ensure_loaded_for_save(&self, file_id: FileId) -> Result<(), FileSaveError> {
+        if let Some(error) = self.load_errors.get(&file_id) {
+            return Err(FileSaveError::Other(error.to_string()));
+        }
+        Ok(())
+    }
+
+    fn report_load_error(
+        &mut self,
+        file_id: FileId,
+        error: Rc<FileLoadError>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if error.is_not_found() {
+            self.load_errors.remove(&file_id);
+        } else {
+            self.load_errors.insert(file_id, error.clone());
+        }
+        ctx.emit(GlobalBufferModelEvent::FailedToLoad { file_id, error });
+    }
+
     /// Rename a file and save its content via FileModel.
     #[cfg(feature = "local_fs")]
     pub fn rename_and_save(
@@ -877,6 +910,7 @@ impl GlobalBufferModel {
         version: ContentVersion,
         ctx: &mut ModelContext<Self>,
     ) -> Result<(), FileSaveError> {
+        self.ensure_loaded_for_save(file_id)?;
         // Completion is observed via `FileModelEvent`s; drop the save future.
         FileModel::handle(ctx)
             .update(ctx, |file_model, ctx| {
@@ -893,6 +927,7 @@ impl GlobalBufferModel {
         version: ContentVersion,
         ctx: &mut ModelContext<Self>,
     ) -> Result<(), FileSaveError> {
+        self.ensure_loaded_for_save(file_id)?;
         // Completion is observed via `FileModelEvent`s; drop the delete future.
         FileModel::handle(ctx)
             .update(ctx, |file_model, ctx| {
@@ -932,7 +967,7 @@ impl GlobalBufferModel {
         {
             let path_clone = path.to_path_buf();
             ctx.spawn(
-                async move { FileModel::read_content_for_file(&path_clone).await },
+                async move { warp_files::read_content_for_editor(&path_clone).await },
                 move |me, content, ctx| match content {
                     Ok(content) => {
                         // Consider this reload as a "new" version. This prevents any race condition when there is another
@@ -958,10 +993,7 @@ impl GlobalBufferModel {
                             ctx,
                         );
                     }
-                    Err(e) => ctx.emit(GlobalBufferModelEvent::FailedToLoad {
-                        file_id: id,
-                        error: e.into(),
-                    }),
+                    Err(e) => me.report_load_error(id, e.into(), ctx),
                 },
             );
         }
@@ -1831,6 +1863,11 @@ impl GlobalBufferModel {
                     content.len(),
                     server_version,
                 );
+                #[cfg(feature = "local_fs")]
+                if let Err(error) = warp_files::validate_editor_content(&content) {
+                    self.report_load_error(file_id, Rc::new(error), ctx);
+                    return;
+                }
                 let Some(state) = self.buffers.get_mut(&file_id) else {
                     safe_error!(
                         safe: ("[remote-buffer] Buffer state missing after OpenBuffer response"),
@@ -1863,6 +1900,7 @@ impl GlobalBufferModel {
                     buffer.replace_all(&content, ctx);
                     buffer.set_version(version);
                 });
+                self.load_errors.remove(&file_id);
                 ctx.emit(GlobalBufferModelEvent::BufferLoaded {
                     file_id,
                     content_version: version,
@@ -2103,7 +2141,7 @@ impl GlobalBufferModel {
         };
 
         ctx.spawn(
-            async move { FileModel::read_content_for_file(&file_path).await },
+            async move { warp_files::read_content_for_editor(&file_path).await },
             move |me, content, ctx| match content {
                 Ok(content) => {
                     let Some(state) = me.buffers.get_mut(&file_id) else {
@@ -2169,6 +2207,7 @@ impl GlobalBufferModel {
                         new_server_version,
                         expected_client_version,
                     });
+                    me.load_errors.remove(&file_id);
                     ctx.emit(GlobalBufferModelEvent::BufferLoaded {
                         file_id,
                         content_version: new_version,
@@ -2176,10 +2215,7 @@ impl GlobalBufferModel {
                 }
                 Err(e) => {
                     log::warn!("[server-local] force_reload failed: {e}");
-                    ctx.emit(GlobalBufferModelEvent::FailedToLoad {
-                        file_id,
-                        error: e.into(),
-                    });
+                    me.report_load_error(file_id, e.into(), ctx);
                 }
             },
         );

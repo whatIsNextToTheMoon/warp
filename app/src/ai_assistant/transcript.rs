@@ -817,7 +817,9 @@ impl View for Transcript {
         let theme = appearance.theme();
         let transcript = self.requests_model.as_ref(app).transcript();
         let request_status = self.requests_model.as_ref(app).request_status();
-        let has_ai_available = AIRequestUsageModel::as_ref(app).has_any_ai_remaining(app);
+        let user_workspaces = UserWorkspaces::as_ref(app);
+        let scope = user_workspaces.team_context(&self.view_handle, app);
+        let has_ai_available = AIRequestUsageModel::as_ref(app).has_any_ai_remaining(&scope, app);
 
         let mut blocks = Flex::column();
         for (index, part) in transcript.iter().enumerate() {
@@ -859,9 +861,9 @@ impl View for Transcript {
                 );
             }
 
-            let is_custom_llm_enabled = UserWorkspaces::as_ref(app)
-                .team_for_view_handle(&self.view_handle, app)
-                .is_some_and(|team| team.is_custom_llm_enabled());
+            let is_custom_llm_enabled = user_workspaces.is_custom_llm_enabled_for_team(
+                user_workspaces.team_for_view_handle(&self.view_handle, app),
+            );
 
             if !is_custom_llm_enabled {
                 blocks.add_child(

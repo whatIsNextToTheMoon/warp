@@ -23,7 +23,15 @@ use crate::server::sync_queue::SyncQueue;
 use crate::settings::{AISettings, PrivacySettings, apply_onboarding_settings};
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspaces::team_tester::TeamTesterStatus;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{TeamContextForOperation, UserWorkspaces};
+use crate::workspaces::workspace::FtueAccountClass;
+
+/// These tests run on a mocked `UserWorkspaces` with no teams, so no team's autonomy policy
+/// can apply and the scope only has to exist. Which team it names is asserted nowhere here;
+/// the scoped reads themselves are covered in `user_workspaces_tests`.
+fn team_context_for_test() -> TeamContextForOperation {
+    TeamContextForOperation::new_for_test(ServerId::from(1))
+}
 
 fn mock_server_metadata(uid: ServerId) -> ServerMetadata {
     ServerMetadata {
@@ -125,12 +133,11 @@ fn apply_onboarding_settings_preserves_existing_cloud_profile_on_existing_user_l
                 disable_oz: false,
                 show_agent_notifications: true,
             },
-            project_settings: ProjectOnboardingSettings::default(),
             ui_customization: None,
         };
 
         app.update(|ctx| {
-            apply_onboarding_settings(&onboarding_settings, true, ctx);
+            apply_onboarding_settings(&onboarding_settings, true, team_context_for_test(), ctx);
         });
 
         // Post-condition: the cloud profile retains its stored values.
@@ -177,7 +184,6 @@ fn apply_onboarding_settings_preserves_existing_cloud_profile_on_existing_user_l
 /// account and on once they have one.
 #[test]
 fn apply_onboarding_settings_gates_third_party_ai_on_account() {
-    let _flag = FeatureFlag::OpenWarpNewSettingsModes.override_enabled(true);
     App::test((), |mut app| async move {
         initialize_settings_for_tests(&mut app);
         app.add_singleton_model(|_| AuthStateProvider::new_for_test());
@@ -202,13 +208,12 @@ fn apply_onboarding_settings_gates_third_party_ai_on_account() {
                 disable_oz: true,
                 show_agent_notifications: true,
             },
-            project_settings: ProjectOnboardingSettings::default(),
             ui_customization: None,
         };
 
         // Skipping login (no account) leaves AI off, even for agent intent.
         app.update(|ctx| {
-            apply_onboarding_settings(&onboarding_settings, false, ctx);
+            apply_onboarding_settings(&onboarding_settings, false, team_context_for_test(), ctx);
         });
         let ai_disabled = app.read(|ctx| !*AISettings::as_ref(ctx).is_any_ai_enabled);
         assert!(
@@ -218,7 +223,7 @@ fn apply_onboarding_settings_gates_third_party_ai_on_account() {
 
         // Creating an account turns AI on, including for third-party agents.
         app.update(|ctx| {
-            apply_onboarding_settings(&onboarding_settings, true, ctx);
+            apply_onboarding_settings(&onboarding_settings, true, team_context_for_test(), ctx);
         });
         let ai_enabled = app.read(|ctx| *AISettings::as_ref(ctx).is_any_ai_enabled);
         assert!(

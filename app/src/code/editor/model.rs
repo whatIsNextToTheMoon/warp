@@ -2370,6 +2370,20 @@ impl CodeEditorModel {
         let all_cursors = selections.iter().all(|s| s.head == s.tail);
 
         if all_cursors {
+            let can_pair = selections.iter().all(|selection| {
+                !Self::symbol_cursor_is_escaped(buffer, selection.head)
+                    && buffer.char_at(selection.head).is_none_or(|ch| {
+                        ch.is_whitespace() || matches!(ch, ')' | ']' | '}' | ',' | ';' | ':')
+                    })
+                    && (!matches!(open, '\'' | '"')
+                        || buffer
+                            .char_at(selection.head.saturating_sub(&1.into()))
+                            .is_none_or(|ch| !ch.is_alphanumeric() && ch != '_'))
+            });
+            if !can_pair {
+                self.user_insert(&open.to_string(), ctx);
+                return;
+            }
             let pair: String = [open, close].iter().collect();
             let texts: Vec<(String, usize)> =
                 selections.iter().map(|_| (pair.clone(), 1)).collect();
@@ -2426,6 +2440,18 @@ impl CodeEditorModel {
         }
     }
 
+    fn symbol_cursor_is_escaped(buffer: &Buffer, mut offset: CharOffset) -> bool {
+        let mut backslashes = 0;
+        while offset > CharOffset::from(1) {
+            offset = offset - 1;
+            if buffer.char_at(offset) != Some('\\') {
+                break;
+            }
+            backslashes += 1;
+        }
+        backslashes % 2 != 0
+    }
+
     pub fn all_cursors_next_character_matches_char(
         &self,
         character: char,
@@ -2434,9 +2460,11 @@ impl CodeEditorModel {
         let buffer = self.content().as_ref(ctx);
         let selection_model = self.selection_model.as_ref(ctx);
         let selections = selection_model.selection_offsets();
-        selections
-            .iter()
-            .all(|s| buffer.char_at(s.head).is_some_and(|c| c == character))
+        selections.iter().all(|s| {
+            s.head == s.tail
+                && !Self::symbol_cursor_is_escaped(buffer, s.head)
+                && buffer.char_at(s.head).is_some_and(|c| c == character)
+        })
     }
 
     /// Replace char_count characters starting at the cursor, used by vim

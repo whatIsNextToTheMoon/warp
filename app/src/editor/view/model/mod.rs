@@ -3,7 +3,7 @@ mod display_map;
 mod selections;
 
 use std::cmp::{self};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::mem;
 use std::ops::Range;
 use std::rc::Rc;
@@ -411,6 +411,14 @@ impl BufferAndDisplayMaps {
     }
 }
 
+struct AutocompletedSymbolPair {
+    buffer_id: warpui::EntityId,
+    opening: Anchor,
+    closing: Anchor,
+    opening_char: char,
+    closing_char: char,
+}
+
 pub struct EditorModel {
     /// The extent to which the editor is interactable.
     interaction_state: InteractionState,
@@ -431,9 +439,7 @@ pub struct EditorModel {
     /// where the cursor(s) was at the time visual mode was entered.
     vim_visual_tails: Vec<Anchor>,
 
-    /// Counter for recording whether the last editor action contains an autocompleted symbol.
-    /// This increments with each consecutive autocompleted insertion.
-    consecutive_autocomplete_insertion_edits_counter: usize,
+    autocompleted_symbol_pairs: VecDeque<AutocompletedSymbolPair>,
 
     /// The maximum buffer length for the editor. Any operations that cause the buffer to exceed
     /// this length will be rejected.
@@ -561,7 +567,7 @@ impl EditorModel {
                 ephemeral_is_display_only: false,
             },
             vim_visual_tails: vec![],
-            consecutive_autocomplete_insertion_edits_counter: 0,
+            autocompleted_symbol_pairs: VecDeque::new(),
             max_buffer_len,
             valid_input_type,
             last_buffer_text: base_text,
@@ -780,11 +786,9 @@ impl EditorModel {
             before_buffer_edit(self, ctx);
         }
 
-        let prev_state = self.consecutive_autocomplete_insertion_edits_counter;
         if can_edit && let Some(update_buffer) = edit.update_buffer {
             (update_buffer.callback)(self, ctx);
         }
-        let next_state = self.consecutive_autocomplete_insertion_edits_counter;
 
         if can_select
             && let Some(post_buffer_edit_change_selection) =
@@ -800,11 +804,6 @@ impl EditorModel {
         if is_pure_selection_change {
             let a11y_content = self.delta_for_a11y(first_cursor_before, was_selecting, ctx);
             ctx.emit_a11y_content(a11y_content);
-        }
-
-        // Check if the last edit inserted a new autocomplete symbol.
-        if prev_state == next_state {
-            self.consecutive_autocomplete_insertion_edits_counter = 0;
         }
 
         self.end_batch(ctx);
@@ -967,8 +966,78 @@ impl EditorModel {
         })
     }
 
-    pub fn consecutive_autocomplete_insertion_edits_counter(&self) -> usize {
-        self.consecutive_autocomplete_insertion_edits_counter
+    fn autocompleted_pair_at_cursor(
+        &self,
+        offset: CharOffset,
+        empty_only: bool,
+        ctx: &AppContext,
+    ) -> Option<&AutocompletedSymbolPair> {
+        let buffer = self.buffer(ctx);
+        self.autocompleted_symbol_pairs.iter().rev().find(|pair| {
+            if pair.buffer_id != self.buffer_handle().id() {
+                return false;
+            }
+            let Ok(opening) = pair.opening.to_char_offset(buffer) else {
+                return false;
+            };
+            let Ok(closing) = pair.closing.to_char_offset(buffer) else {
+                return false;
+            };
+            closing == offset
+                && opening < closing
+                && (!empty_only || opening + 1 == closing)
+                && buffer.anchor_after(opening).ok().as_ref() == Some(&pair.opening)
+                && buffer.anchor_after(closing).ok().as_ref() == Some(&pair.closing)
+                && buffer
+                    .chars_at(opening)
+                    .ok()
+                    .and_then(|mut chars| chars.next())
+                    == Some(pair.opening_char)
+                && buffer
+                    .chars_at(closing)
+                    .ok()
+                    .and_then(|mut chars| chars.next())
+                    == Some(pair.closing_char)
+        })
+    }
+
+    pub fn all_cursors_inside_autocompleted_pair(&self, ctx: &AppContext) -> bool {
+        self.selection_to_char_offset_ranges(ctx)
+            .iter()
+            .all(|range| {
+                range.is_empty()
+                    && self
+                        .autocompleted_pair_at_cursor(range.start, true, ctx)
+                        .is_some()
+            })
+    }
+
+    fn record_autocompleted_symbol_pairs(
+        &mut self,
+        opening: &str,
+        closing: &str,
+        ctx: &AppContext,
+    ) {
+        let buffer = self.buffer(ctx);
+        let pairs = self
+            .selection_to_char_offset_ranges(ctx)
+            .iter()
+            .filter_map(|range| {
+                let opening_offset = range.start.as_usize().checked_sub(1)?;
+                Some(AutocompletedSymbolPair {
+                    buffer_id: self.buffer_handle().id(),
+                    opening: buffer.anchor_after(CharOffset::from(opening_offset)).ok()?,
+                    closing: buffer.anchor_after(range.end).ok()?,
+                    opening_char: opening.chars().next()?,
+                    closing_char: closing.chars().next()?,
+                })
+            })
+            .collect::<Vec<_>>();
+        self.autocompleted_symbol_pairs.extend(pairs);
+        // Retain recent anchors for undo/redo without accumulating unbounded editing history.
+        while self.autocompleted_symbol_pairs.len() > 256 {
+            self.autocompleted_symbol_pairs.pop_front();
+        }
     }
 
     pub fn as_snapshot<C: ModelAsRef>(&self, ctx: &C) -> EditorSnapshot {
@@ -1098,24 +1167,23 @@ impl EditorModel {
         });
     }
 
-    /// Autocomplete user inserted text under the following conditions:
-    /// 1) The symbol has a corresponding closing symbol (e.g. ( -> ), " -> ", etc)
-    /// 2) All of the current cursors are not immediately next to any alphanumeric character
-    ///
-    // If there are only selections (no single cursor), autocomplete by wrapping the selection with start and end symbol.
+    /// Pairs symbols at safe boundaries and wraps selected text.
     pub fn insert_and_maybe_autocomplete_symbols(
         &mut self,
         text: &str,
         ctx: &mut ModelContext<Self>,
     ) {
         if CLOSING_SYMBOLS.contains(&text)
-            && text.chars().count() == 1
-            && self.all_cursors_next_character_matches_char(
-                text.chars()
-                    .next()
-                    .expect("Autocompleted symbol should have at least one character"),
-                ctx,
-            )
+            && self
+                .selection_to_char_offset_ranges(ctx)
+                .iter()
+                .all(|range| {
+                    range.is_empty()
+                        && !self.cursor_is_escaped(range.start, ctx)
+                        && self
+                            .autocompleted_pair_at_cursor(range.start, false, ctx)
+                            .is_some_and(|pair| Some(pair.closing_char) == text.chars().next())
+                })
         {
             let map = self.display_map(ctx);
 
@@ -1146,36 +1214,41 @@ impl EditorModel {
         if let Some(completion) = AUTOCOMPLETE_SYMBOLS.get(text) {
             if self.no_cursor_only_selections(ctx) {
                 self.insert_characters_wrap_around_selection(text, completion, ctx);
+                self.record_autocompleted_symbol_pairs(text, completion, ctx);
                 return;
             }
 
             let buffer = self.buffer(ctx);
-            // Check whether all of the current cursors are not immediately next to any alphanumeric characters.
-            let not_alphanumeric = self.selections(ctx).iter().all(|selection| {
+            let can_pair = self.selections(ctx).iter().all(|selection| {
+                let range = selection.to_offset(buffer);
+                if !range.is_empty() || self.cursor_is_escaped(range.start, ctx) {
+                    return false;
+                }
                 let position = selection
                     .start()
                     .to_point(buffer)
                     .expect("Start of selection should exist");
 
-                let right_not_alphanumeric = buffer
+                let right_boundary = buffer
                     .chars_at(position)
                     .unwrap()
                     .next()
-                    .map(|right_char| !right_char.is_alphanumeric())
+                    .map(|ch| ch.is_whitespace() || matches!(ch, ')' | ']' | '}' | ',' | ';' | ':'))
                     .unwrap_or(true);
                 let left_not_alphanumeric = buffer
                     .chars_at(position)
                     .unwrap()
                     .rev()
                     .next()
-                    .map(|left_char| !left_char.is_alphanumeric())
+                    .map(|ch| !ch.is_alphanumeric() && ch != '_')
                     .unwrap_or(true);
-                right_not_alphanumeric && left_not_alphanumeric
+                right_boundary && ((text != "\"" && text != "'") || left_not_alphanumeric)
             });
 
-            // Always autocomplete for brackets and parentheses. For quotes, only autocomplete
-            // if both sides of the cursor are not alphabetic or numeric characters.
-            if (text != "\"" && text != "\'") || not_alphanumeric {
+            if can_pair
+                && !self
+                    .text_insertion_would_exceed_max_buffer_len(&format!("{text}{completion}"), ctx)
+            {
                 self.insert_internal(text, None, SelectionInsertion::No, ctx);
                 let offset_ranges = self.selection_to_char_offset_ranges(ctx);
 
@@ -1186,12 +1259,23 @@ impl EditorModel {
                         report_error!(error.context("error inserting text"));
                     };
                 });
-                self.consecutive_autocomplete_insertion_edits_counter += 1;
+                self.record_autocompleted_symbol_pairs(text, completion, ctx);
                 return;
             }
         }
 
         self.insert_internal(text, None, SelectionInsertion::No, ctx);
+    }
+
+    fn cursor_is_escaped(&self, offset: CharOffset, ctx: &AppContext) -> bool {
+        self.buffer(ctx)
+            .chars_at(offset)
+            .unwrap()
+            .rev()
+            .take_while(|ch| *ch == '\\')
+            .count()
+            % 2
+            != 0
     }
 
     pub fn insert_internal(
@@ -2369,7 +2453,6 @@ impl EditorModel {
                 }
             }
         }
-        self.consecutive_autocomplete_insertion_edits_counter -= 1;
         self.change_selections(new_selections, ctx);
         self.insert("", None, ctx);
     }

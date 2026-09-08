@@ -38,6 +38,21 @@ pub enum FileLoadError {
     DoesNotExist,
     #[error("IO error when loading file.")]
     IOError(#[from] io::Error),
+    #[error("File exceeds the editor's 4 MiB size limit.")]
+    EditorFileTooLarge,
+    #[error("File exceeds the editor's 100,000 line limit.")]
+    EditorTooManyLines,
+    #[error("File contains a line longer than the editor's 16 KiB limit.")]
+    EditorLineTooLong,
+    #[error("Only regular files can be opened in the editor.")]
+    NotRegularFile,
+}
+
+impl FileLoadError {
+    pub fn is_not_found(&self) -> bool {
+        matches!(self, Self::DoesNotExist)
+            || matches!(self, Self::IOError(error) if error.kind() == io::ErrorKind::NotFound)
+    }
 }
 
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]

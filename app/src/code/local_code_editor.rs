@@ -275,6 +275,8 @@ pub struct LocalCodeEditorView {
     metadata: Option<LoadedFileMetadata>,
     enable_diff_nav_by_default: bool,
     is_new_file: bool,
+    load_error: Option<Rc<FileLoadError>>,
+    interaction_state_before_load_error: Option<crate::editor::InteractionState>,
     diff_type: Option<DiffType>,
     selection_as_context_tooltip: Option<SelectionAsContextTooltip>,
     /// A marker for when the backing file has first been loaded. This is used to prevent applying
@@ -517,6 +519,8 @@ impl LocalCodeEditorView {
             editor,
             diff_type,
             is_new_file,
+            load_error: None,
+            interaction_state_before_load_error: None,
             metadata: None,
             enable_diff_nav_by_default,
             file_loaded: Condition::new(),
@@ -1142,6 +1146,13 @@ impl LocalCodeEditorView {
     }
 
     fn perform_save(&mut self, file_id: FileId, ctx: &mut ViewContext<Self>) {
+        if let Some(error) = &self.load_error {
+            self.auto_save_in_flight = false;
+            ctx.emit(LocalCodeEditorEvent::FailedToSave {
+                error: Arc::new(FileSaveError::Other(error.to_string())),
+            });
+            return;
+        }
         self.base_content_version = Some(self.editor.as_ref(ctx).version(ctx));
 
         let result = match self.diff() {
@@ -1355,6 +1366,14 @@ impl LocalCodeEditorView {
             id: file_id,
             location,
         });
+        local_editor.load_error = GlobalBufferModel::as_ref(ctx).load_error(file_id);
+        if local_editor.load_error.is_some() {
+            local_editor.interaction_state_before_load_error =
+                Some(local_editor.editor.as_ref(ctx).interaction_state(ctx));
+            local_editor.editor.update(ctx, |editor, ctx| {
+                editor.set_interaction_state(crate::editor::InteractionState::Selectable, ctx);
+            });
+        }
 
         Self::subscribe_to_global_buffer_events(file_id, ctx);
 
@@ -1387,6 +1406,16 @@ impl LocalCodeEditorView {
                 editor.set_pending_scroll(ScrollTrigger::new(position, version));
             });
         }
+    }
+
+    fn clear_load_error(&mut self, ctx: &mut ViewContext<Self>) {
+        self.load_error = None;
+        if let Some(state) = self.interaction_state_before_load_error.take() {
+            self.editor.update(ctx, |editor, ctx| {
+                editor.set_interaction_state(state, ctx);
+            });
+        }
+        ctx.notify();
     }
 
     /// Updates the enablement state of the visible "add as context" gutter button based on the file state.
@@ -1658,6 +1687,7 @@ impl LocalCodeEditorView {
                 GlobalBufferModelEvent::BufferLoaded {
                     content_version, ..
                 } => {
+                    me.clear_load_error(ctx);
                     // For a reopen (discard), base_content_version is already
                     // set from the initial load. Accept the new version and
                     // clear any conflict flag.
@@ -1674,8 +1704,24 @@ impl LocalCodeEditorView {
                     }
                 }
                 GlobalBufferModelEvent::FailedToLoad { error, .. } => {
-                    me.is_new_file = true;
-                    me.on_file_loaded(ctx);
+                    if error.is_not_found() {
+                        me.is_new_file = true;
+                        me.clear_load_error(ctx);
+                        me.on_file_loaded(ctx);
+                    } else {
+                        if me.interaction_state_before_load_error.is_none() {
+                            me.interaction_state_before_load_error =
+                                Some(me.editor.as_ref(ctx).interaction_state(ctx));
+                        }
+                        me.load_error = Some(error.clone());
+                        me.editor.update(ctx, |editor, ctx| {
+                            editor.set_interaction_state(
+                                crate::editor::InteractionState::Selectable,
+                                ctx,
+                            );
+                        });
+                        ctx.notify();
+                    }
                     ctx.emit(LocalCodeEditorEvent::FailedToLoad {
                         error: error.clone(),
                     });
@@ -1688,6 +1734,7 @@ impl LocalCodeEditorView {
                     if !*success {
                         ctx.notify();
                     } else {
+                        me.clear_load_error(ctx);
                         me.base_content_version = Some(*content_version);
                     }
                 }
@@ -1758,6 +1805,11 @@ impl LocalCodeEditorView {
     /// This will only return an error immediately if there is a failure in the sync part of the call.
     /// Other errors could be returned asynchronously via the FileModelEvent::FailedToSave event.
     pub fn save_local(&mut self, ctx: &mut ViewContext<Self>) -> Result<(), ImmediateSaveError> {
+        if let Some(error) = &self.load_error {
+            return Err(ImmediateSaveError::FailedToSave(FileSaveError::Other(
+                error.to_string(),
+            )));
+        }
         if self.is_remote_disconnected(ctx) {
             return Err(ImmediateSaveError::RemoteDisconnected);
         }
@@ -1790,6 +1842,10 @@ impl LocalCodeEditorView {
         ctx: &mut ViewContext<Self>,
     ) {
         let callback = callback.unwrap_or(Box::new(|_, _| {}));
+        if me.load_error.is_some() {
+            callback(SaveOutcome::Failed, ctx);
+            return;
+        }
         let Some(path_str) = path_opt else {
             callback(SaveOutcome::Canceled, ctx);
             return;
@@ -1917,6 +1973,11 @@ impl LocalCodeEditorView {
 
     pub fn editor(&self) -> &ViewHandle<CodeEditorView> {
         &self.editor
+    }
+
+    /// The current vertical scroll position as a fraction of the scrollable range, in `0..=1`.
+    pub fn scroll_fraction(&self, ctx: &AppContext) -> f32 {
+        self.editor.as_ref(ctx).scroll_fraction(ctx)
     }
 
     /// Accept the diff that is currently in the editor. For local files, this can only be called after the file contents
@@ -2233,6 +2294,9 @@ impl DiffViewer for LocalCodeEditorView {
     }
 
     fn restore_diff_base(&mut self, ctx: &mut ViewContext<Self>) -> Result<(), String> {
+        if let Some(error) = &self.load_error {
+            return Err(error.to_string());
+        }
         if self.is_new_file {
             if let Some(file_id) = self.file_id() {
                 GlobalBufferModel::handle(ctx).update(ctx, |model, ctx| {
@@ -2288,7 +2352,7 @@ impl View for LocalCodeEditorView {
     }
 
     fn on_focus(&mut self, focus_ctx: &warpui::FocusContext, ctx: &mut ViewContext<Self>) {
-        if focus_ctx.is_self_focused() {
+        if self.load_error.is_none() && focus_ctx.is_self_focused() {
             self.editor.update(ctx, |editor, ctx| editor.focus(ctx));
         }
     }
@@ -2305,6 +2369,20 @@ impl View for LocalCodeEditorView {
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn warpui::Element> {
+        if let Some(error) = &self.load_error {
+            let appearance = Appearance::as_ref(app);
+            return Container::new(
+                Text::new(
+                    crate::i18n::ui_text(&error.to_string()),
+                    appearance.ui_font_family(),
+                    14.,
+                )
+                .with_color(appearance.theme().active_ui_text_color())
+                .finish(),
+            )
+            .with_uniform_padding(16.)
+            .finish();
+        }
         // Rendering the remote disconnection banner or version conflict banner.
         // Only show the disconnection banner if the file was successfully loaded;
         // if it never loaded, the error/loading state handles that.

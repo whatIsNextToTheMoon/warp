@@ -35,15 +35,20 @@ query GetWorkspacesMetadataForUser($requestContext: RequestContext!) {
             uid
             email
             role
+            isDisabled
           }
           teams {
             uid
             name
+            inviteLink
             members {
               uid
               email
               role
+              isDisabled
             }
+            visibility
+            featureModelChoice { ... }
           }
           billingMetadata {
             customerType
@@ -122,6 +127,7 @@ query GetWorkspacesMetadataForUser($requestContext: RequestContext!) {
                 usageSource
                 creditsUsed
                 costCents
+                attributedTeamUid
               }
             }
           }
@@ -166,10 +172,10 @@ query GetWorkspacesMetadataForUser($requestContext: RequestContext!) {
             }
           }
           hasBillingHistory
-          inviteCode
           pendingEmailInvites {
             email
             expired
+            teamUid
           }
           inviteLinkDomainRestrictions {
             uid
@@ -203,6 +209,7 @@ query GetWorkspacesMetadataForUser($requestContext: RequestContext!) {
         overages {
           pricePerRequestUsdCents
         }
+        promotionMessage
       }
     }
   }

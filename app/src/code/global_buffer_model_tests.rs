@@ -122,6 +122,52 @@ fn test_path() -> StandardizedPath {
     StandardizedPath::try_new("/test/file.txt").unwrap()
 }
 
+#[test]
+fn rejected_editor_content_cannot_be_saved_or_reopened_as_empty() {
+    App::test((), |mut app| async move {
+        init_app(&mut app);
+        app.add_singleton_model(GlobalBufferModel::new);
+        let state = gbm(&app).update(&mut app, |model, ctx| {
+            model.seed_remote_buffer_for_test(test_host_id(), test_path(), "original", 1, ctx)
+        });
+        let id = state.file_id;
+        gbm(&app).update(&mut app, |model, ctx| {
+            let version = ContentVersion::new();
+            model.populate_buffer_with_read_content(
+                id,
+                &"x".repeat(16 * 1024 + 1),
+                version,
+                version,
+                true,
+                ctx,
+            );
+            assert!(model.load_error(id).is_some());
+            assert!(model.ensure_loaded_for_save(id).is_err());
+            assert!(model.save(id, String::new(), version, ctx).is_err());
+            assert!(
+                model
+                    .rename_and_save(
+                        id,
+                        std::path::PathBuf::from("/test/new.txt"),
+                        String::new(),
+                        version,
+                        ctx
+                    )
+                    .is_err()
+            );
+            assert!(model.delete(id, version, ctx).is_err());
+        });
+        assert_eq!(content(&app, id), "original");
+        gbm(&app).update(&mut app, |model, ctx| {
+            let version = ContentVersion::new();
+            model.populate_buffer_with_read_content(id, "recovered", version, version, true, ctx);
+            assert!(model.load_error(id).is_none());
+            assert!(model.ensure_loaded_for_save(id).is_ok());
+        });
+        assert_eq!(content(&app, id), "recovered");
+    });
+}
+
 // ── Pending edit batch: discard on server push ───────────────────
 
 #[test]

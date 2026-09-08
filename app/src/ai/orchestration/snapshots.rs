@@ -16,7 +16,7 @@ use super::providers::{
 };
 use crate::LLMPreferences;
 use crate::ai::auth_secret_types::auth_secret_types_for_harness;
-use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
+use crate::ai::cloud_environments::{CloudAmbientAgentEnvironment, environment_matches_scope};
 use crate::ai::connected_self_hosted_workers::ConnectedSelfHostedWorkersModel;
 use crate::ai::harness_availability::{AuthSecretFetchState, HarnessAvailabilityModel};
 use crate::ai::harness_display;
@@ -24,6 +24,7 @@ use crate::ai::local_harness_setup::{
     LocalHarnessSetupState, local_harness_is_product_enabled, local_harness_setup_state,
 };
 use crate::cloud_object::CloudObjectLookup as _;
+use crate::workspaces::user_workspaces::TeamScope;
 
 const DEFAULT_MODEL_LABEL: &str = "Default model";
 /// Label shown in the auth secret picker when no secret is selected
@@ -475,14 +476,18 @@ fn build_api_key_snapshot(
 
 // ── Host ────────────────────────────────────────────────────────────
 
-/// Builds the host options in the GUI host picker's order: workspace
+/// Builds the host options in the GUI host picker's order: `scope`'s team
 /// default (badged), warp, connected worker hosts (badged), the recent
 /// custom slug (badged), then a custom-host text-entry footer.
-pub fn host_snapshot(state: &OrchestrationConfigState, ctx: &AppContext) -> OptionSnapshot {
-    let default_host = resolve_default_host_slug(ctx);
-    let recent_host = resolve_recent_host_slug(ctx);
+pub fn host_snapshot<S: TeamScope + ?Sized>(
+    state: &OrchestrationConfigState,
+    scope: &S,
+    ctx: &AppContext,
+) -> OptionSnapshot {
+    let default_host = resolve_default_host_slug(scope, ctx);
+    let recent_host = resolve_recent_host_slug(scope, ctx);
     let mut connected_hosts = ConnectedSelfHostedWorkersModel::as_ref(ctx)
-        .worker_hosts_excluding(default_host.as_deref());
+        .worker_hosts_excluding(scope, default_host.as_deref());
     connected_hosts.sort();
     connected_hosts.dedup();
     let current = match &state.execution_mode {
@@ -556,12 +561,17 @@ fn build_host_snapshot(
 
 // ── Environment ─────────────────────────────────────────────────────
 
-/// Builds the environment options: "Empty environment" plus existing
-/// environments sorted by name, mirroring the GUI environment picker.
-pub fn environment_snapshot(state: &OrchestrationConfigState, ctx: &AppContext) -> OptionSnapshot {
+/// Builds the environment options: "Empty environment" plus personal and
+/// current-team environments sorted by name.
+pub fn environment_snapshot<S: TeamScope + ?Sized>(
+    state: &OrchestrationConfigState,
+    scope: &S,
+    ctx: &AppContext,
+) -> OptionSnapshot {
     let all_envs = CloudAmbientAgentEnvironment::get_all(ctx);
     let mut sorted_envs: Vec<(String, String)> = all_envs
         .iter()
+        .filter(|environment| environment_matches_scope(environment, scope, true))
         .map(|env| (env.id.uid(), env.model().string_model.name.clone()))
         .collect();
     sorted_envs.sort_by(|a, b| a.1.cmp(&b.1));

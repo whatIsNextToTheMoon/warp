@@ -11,7 +11,7 @@ use lazy_static::lazy_static;
 use num_traits::Float as _;
 use unicode_width::UnicodeWidthChar;
 use warp_core::features::FeatureFlag;
-use warp_errors::report_error;
+use warp_errors::{ReportErrorLogMode, report_error};
 use warpui::assets::asset_cache::{AssetCache, AssetSource, AssetState};
 use warpui::color::ColorU;
 use warpui::elements::{Border, CornerRadius, DEFAULT_UI_LINE_HEIGHT_RATIO, Fill, Radius};
@@ -361,6 +361,7 @@ pub fn render_grid<'a>(
                 start_row,
                 end_row,
                 visible_rows,
+                true,
                 colors,
                 override_colors,
                 theme,
@@ -393,6 +394,7 @@ pub fn render_grid<'a>(
                 start_row,
                 end_row,
                 start_row..end_row,
+                false,
                 colors,
                 override_colors,
                 theme,
@@ -426,6 +428,7 @@ pub fn render_grid<'a>(
                 start_row,
                 end_row,
                 visible_rows,
+                true,
                 colors,
                 override_colors,
                 theme,
@@ -459,6 +462,7 @@ pub fn render_grid<'a>(
                 start_row,
                 end_row,
                 start_row..end_row,
+                false,
                 colors,
                 override_colors,
                 theme,
@@ -496,6 +500,7 @@ fn render_grid_without_ligatures<'a>(
     start_row: usize,
     end_row: usize,
     visible_rows: impl Iterator<Item = usize>,
+    used_displayed_output_rows: bool,
     colors: &color::List,
     override_colors: &color::OverrideList,
     theme: &WarpTheme,
@@ -652,8 +657,18 @@ fn render_grid_without_ligatures<'a>(
         let offset_row = start_row + offset;
 
         let Some(row) = grid.row(row_idx) else {
-            #[cfg(debug_assertions)]
-            report_error!("grid_renderer should not try to render an out-of-bounds row");
+            report_error!(
+                "grid_renderer should not try to render an out-of-bounds row",
+                extra: {
+                    "row_idx" => %row_idx,
+                    "total_rows" => %grid.total_rows(),
+                    "start_row" => %start_row,
+                    "end_row" => %end_row,
+                    "used_displayed_output_rows" => %used_displayed_output_rows,
+                    "use_ligature_rendering" => "false",
+                },
+                ReportErrorLogMode::OncePerRun
+            );
             continue;
         };
 
@@ -1010,6 +1025,7 @@ fn render_grid_with_ligatures<'a>(
     start_row: usize,
     end_row: usize,
     visible_rows: impl Iterator<Item = usize>,
+    used_displayed_output_rows: bool,
     colors: &color::List,
     override_colors: &color::OverrideList,
     theme: &WarpTheme,
@@ -1163,7 +1179,18 @@ fn render_grid_with_ligatures<'a>(
             AttributedStringBuilder::new(font_family, font_family, grid.columns());
 
         let Some(row) = grid.row(row_idx) else {
-            report_error!("grid_renderer should not try to render an out-of-bounds row");
+            report_error!(
+                "grid_renderer should not try to render an out-of-bounds row",
+                extra: {
+                    "row_idx" => %row_idx,
+                    "total_rows" => %grid.total_rows(),
+                    "start_row" => %start_row,
+                    "end_row" => %end_row,
+                    "used_displayed_output_rows" => %used_displayed_output_rows,
+                    "use_ligature_rendering" => "true",
+                },
+                ReportErrorLogMode::OncePerRun
+            );
             continue;
         };
 
