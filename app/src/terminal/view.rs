@@ -11927,7 +11927,11 @@ impl TerminalView {
 
         let is_local = !self.is_block_considered_remote(
             serialized_block.session_id,
-            Some(&block_completed.command),
+            Some(
+                block_completed
+                    .command
+                    .get_with(|compute| compute(block_list)),
+            ),
             app,
         );
 
@@ -29470,7 +29474,7 @@ impl View for TerminalView {
                 should_render_blocklist_for_empty_codex_alt_screen,
                 self.is_input_box_visible(&model, app),
                 self.should_render_use_agent_footer(&model, app),
-                self.use_agent_footer.as_ref(app).has_cli_agent(app),
+                self.has_active_cli_agent_session(app),
                 self.codex_alt_screen_display_mode,
             );
         }

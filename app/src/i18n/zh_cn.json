@@ -3432,5 +3432,7 @@
   "{credits} free cloud agent credits": "{credits} 免费云端 Agent 点数",
   "{} tokens / {unit_text}": "{} token / {unit_text}",
   "for {name}": "发送给 {name}",
-  "Your admin has enabled auto-reload for add-on credits. When your team's add-on credit balance runs low, Warp will automatically purchase {credits} credits for {price} and add them to your team's shared pool.": "管理员已启用附加点数自动充值。团队附加点数余额不足时，Warp 将以 {price} 自动购买 {credits} 点数并加入团队共享点数池。"
+  "Your admin has enabled auto-reload for add-on credits. When your team's add-on credit balance runs low, Warp will automatically purchase {credits} credits for {price} and add them to your team's shared pool.": "管理员已启用附加点数自动充值。团队附加点数余额不足时，Warp 将以 {price} 自动购买 {credits} 点数并加入团队共享点数池。",
+  "You added your own {provider_name} API key, but your default model is currently set to {current_default}, which won't work without Warp credits. Would you like to change your default model?": "你已添加自己的 {provider_name} API 密钥，但当前默认模型为 {current_default}，没有 Warp 点数时无法使用。是否更改默认模型？",
+  "You added the \"{}\" custom endpoint, but your default model is currently set to {current_default}, which won't work without Warp credits. Would you like to change your default model?": "你已添加自定义端点“{}”，但当前默认模型为 {current_default}，没有 Warp 点数时无法使用。是否更改默认模型？"
 }

@@ -63,13 +63,13 @@ fn test_set_query_text_replaces_existing_text() {
         find_view.update(&mut app, |view, ctx| {
             view.set_query_text("first", ctx);
         });
-        let text = find_view.read(&app, |view, ctx| view.editor_text(ctx));
+        let text = find_view.read(&app, |view, ctx| view.query_text(ctx));
         assert_eq!(text, "first");
 
         find_view.update(&mut app, |view, ctx| {
             view.set_query_text("second", ctx);
         });
-        let text = find_view.read(&app, |view, ctx| view.editor_text(ctx));
+        let text = find_view.read(&app, |view, ctx| view.query_text(ctx));
         assert_eq!(text, "second");
     })
 }

@@ -38,7 +38,7 @@ use std::path::{Path, PathBuf};
 #[cfg(target_os = "macos")]
 use std::process;
 use std::sync::{Arc, Mutex, mpsc};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 #[cfg(target_os = "macos")]
 use std::time::{SystemTime, UNIX_EPOCH};
 

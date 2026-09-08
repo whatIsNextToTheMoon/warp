@@ -8,7 +8,6 @@ use crate::settings::{AISettings, CodeSettings};
 use crate::workspace::tab_settings::TabSettings;
 use crate::workspaces::user_workspaces::{TeamContextForOperation, UserWorkspaces};
 use settings::Setting as _;
-use warp_core::features::FeatureFlag;
 use warp_errors::report_if_error;
 use warpui::{AppContext, SingletonEntity as _};
 
@@ -75,10 +74,6 @@ fn apply_ui_customization_settings(
     is_agent_intent: bool,
     app: &mut AppContext,
 ) {
-    // Customize UI slide should only exist with this flag enabled.
-    if !FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
-        return;
-    }
     TabSettings::handle(app).update(app, |settings, ctx| {
         report_if_error!(
             settings

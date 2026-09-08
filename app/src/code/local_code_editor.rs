@@ -2377,7 +2377,7 @@ impl View for LocalCodeEditorView {
                     appearance.ui_font_family(),
                     14.,
                 )
-                .with_color(appearance.theme().active_ui_text_color())
+                .with_color(appearance.theme().active_ui_text_color().into())
                 .finish(),
             )
             .with_uniform_padding(16.)

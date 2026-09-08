@@ -1212,7 +1212,7 @@ impl GlobalBufferModel {
                 && let Some(handle) = state.buffer.upgrade(ctx)
             {
                 // Only emit buffer loaded if the base content version is set.
-                if state.is_loaded() {
+                if state.is_loaded() && !self.load_errors.contains_key(&id) {
                     ctx.emit(GlobalBufferModelEvent::BufferLoaded {
                         file_id: id,
                         content_version: handle.as_ref(ctx).version(),

@@ -1,12 +1,12 @@
 use crate::onboarding::slides::{
     AgentAutonomy, AgentDevelopmentSettings, ProjectOnboardingSettings,
 };
-use crate::onboarding::SelectedSettings;
+use crate::onboarding::{SelectedSettings, SessionDefault};
 use ai::LLMId;
 use chrono::{DateTime, Utc};
-use warp_core::features::FeatureFlag;
 use warpui::{App, SingletonEntity};
 
+use super::apply_onboarding_settings;
 use crate::LaunchMode;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::execution_profiles::{
@@ -20,11 +20,10 @@ use crate::network::NetworkStatus;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::{ServerId, SyncId};
 use crate::server::sync_queue::SyncQueue;
-use crate::settings::{AISettings, PrivacySettings, apply_onboarding_settings};
+use crate::settings::{AISettings, PrivacySettings};
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::user_workspaces::{TeamContextForOperation, UserWorkspaces};
-use crate::workspaces::workspace::FtueAccountClass;
 
 /// These tests run on a mocked `UserWorkspaces` with no teams, so no team's autonomy policy
 /// can apply and the scope only has to exist. Which team it names is asserted nowhere here;
@@ -129,10 +128,11 @@ fn apply_onboarding_settings_preserves_existing_cloud_profile_on_existing_user_l
                 selected_model_id: LLMId::from("onboarding-chosen-model"),
                 autonomy: Some(AgentAutonomy::None),
                 cli_agent_toolbar_enabled: true,
-                session_default: crate::onboarding::SessionDefault::Agent,
+                session_default: SessionDefault::Agent,
                 disable_oz: false,
                 show_agent_notifications: true,
             },
+            project_settings: ProjectOnboardingSettings::NoProject,
             ui_customization: None,
         };
 
@@ -204,10 +204,11 @@ fn apply_onboarding_settings_gates_third_party_ai_on_account() {
                 selected_model_id: LLMId::from("auto"),
                 autonomy: None,
                 cli_agent_toolbar_enabled: true,
-                session_default: onboarding::SessionDefault::Agent,
+                session_default: SessionDefault::Agent,
                 disable_oz: true,
                 show_agent_notifications: true,
             },
+            project_settings: ProjectOnboardingSettings::NoProject,
             ui_customization: None,
         };
 

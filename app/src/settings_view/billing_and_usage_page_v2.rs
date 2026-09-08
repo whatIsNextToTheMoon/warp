@@ -1272,13 +1272,13 @@ impl BillingAndUsagePageV2View {
                         "${:.2}",
                         option.price_usd_cents_with_premium(premium_bps) as f64 / 100.0
                     );
-                    format!(
+                    crate::i18n::ui_str(
                         "Your admin has enabled auto-reload for add-on credits. When your team's add-on credit balance runs low, Warp will automatically purchase {credits} credits for {price} and add them to your team's shared pool."
-                    )
+                    ).replace("{credits}", &credits).replace("{price}", &price)
                 }
-                None => {
-                    "Your admin has enabled auto-reload for add-on credits. When your team's add-on credit balance runs low, Warp will automatically purchase add-on credits and add them to your team's shared pool.".to_string()
-                }
+                None => crate::i18n::ui_str(
+                    "Your admin has enabled auto-reload for add-on credits. When your team's add-on credit balance runs low, Warp will automatically purchase add-on credits and add them to your team's shared pool.",
+                ),
             };
             return AddonCreditsPanelState::AutoreloadNonAdmin {
                 description_text,

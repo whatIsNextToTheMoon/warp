@@ -3145,10 +3145,7 @@ impl EditorModel {
         }
     }
 
-    fn selection_to_char_offset_ranges(
-        &self,
-        ctx: &mut ModelContext<Self>,
-    ) -> Vec1<Range<CharOffset>> {
+    fn selection_to_char_offset_ranges(&self, ctx: &AppContext) -> Vec1<Range<CharOffset>> {
         self.selections(ctx).clone().mapped(|selection| {
             let start = selection.start().to_char_offset(self.buffer(ctx)).unwrap();
             let end = selection.end().to_char_offset(self.buffer(ctx)).unwrap();
@@ -3226,28 +3223,6 @@ impl EditorModel {
         self.selections(ctx)
             .iter()
             .all(|selection| !selection.is_cursor_only(self.buffer(ctx)))
-    }
-
-    fn all_cursors_next_character_matches_char(
-        &self,
-        character: char,
-        ctx: &mut ModelContext<Self>,
-    ) -> bool {
-        let buffer = self.buffer(ctx);
-
-        self.selections(ctx).iter().all(|selection| {
-            let position = selection
-                .start()
-                .to_point(buffer)
-                .expect("Start of selection should exist");
-
-            buffer
-                .chars_at(position)
-                .unwrap()
-                .next()
-                .map(|right_char| right_char == character)
-                .unwrap_or(false)
-        })
     }
 
     /// Attempt to include a newline in the selection, if there one.

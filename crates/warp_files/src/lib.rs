@@ -1145,14 +1145,32 @@ impl FileModel {
             async move {
                 let mut res = Vec::new();
                 for file_path in matching_files {
-                    if let Ok(content) = read_content_for_editor(&file_path).await {
-                        res.push((file_path, content));
-                    }
+                    let result = read_content_for_editor(&file_path).await;
+                    res.push((file_path, result));
                 }
                 res
             },
             move |me, res, ctx| {
-                for (file_path, content) in res {
+                for (file_path, result) in res {
+                    let content = match result {
+                        Ok(content) => content,
+                        Err(error) => {
+                            // Preserve the last buffer, but do not let it overwrite a file
+                            // whose current contents could not be safely reloaded.
+                            if !error.is_not_found() {
+                                let error = Rc::new(error);
+                                for (file_id, file_state) in me.file_state.local_iter_mut() {
+                                    if file_state.should_receive_update_for_path(&file_path) {
+                                        ctx.emit(FileModelEvent::FailedToLoad {
+                                            id: *file_id,
+                                            error: error.clone(),
+                                        });
+                                    }
+                                }
+                            }
+                            continue;
+                        }
+                    };
                     let mut emitted_event = false;
                     for (file_id, file_state) in me.file_state.local_iter_mut() {
                         // Only set the new version of a file if it has opt-in to receiving updates.

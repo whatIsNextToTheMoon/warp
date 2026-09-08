@@ -1751,13 +1751,6 @@ impl RootView {
                 if #[cfg(target_family = "wasm")] {
                     AuthOnboardingState::WebImport(AuthOnboardingTarget::Workspace(workspace_args.into()))
                 } else {
-                    // When OpenWarpNewSettingsModes is enabled, show onboarding before login for
-                    // users who haven't completed it yet (tracked via a local UserPreferences key).
-                    let has_completed_local_onboarding = FeatureFlag::OpenWarpNewSettingsModes.is_enabled()
-                        && has_completed_local_onboarding(ctx);
-                    let should_show_pre_login_onboarding = FeatureFlag::OpenWarpNewSettingsModes.is_enabled()
-                        && FeatureFlag::AgentOnboarding.is_enabled()
-                        && !has_completed_local_onboarding;
                     if FeatureFlag::ForceLogin.is_enabled() {
                         // ForceLogin is true for Preview
                         AuthOnboardingState::Auth(workspace_args.into())
@@ -1767,11 +1760,6 @@ impl RootView {
                         // precedence over the lightweight pre-login onboarding redirect to
                         // avoid forcing logged-out users through Auth on every startup.
                         AuthOnboardingState::Terminal(workspace_args.create_workspace(ctx))
-                    } else if should_show_pre_login_onboarding {
-                        // Lightweight build: skip the full-screen onboarding UI.
-                        // We still go through the Auth flow; the guided in-app tutorial
-                        // can be triggered later from within the workspace.
-                        AuthOnboardingState::Auth(workspace_args.into())
                     } else {
                         AuthOnboardingState::Auth(workspace_args.into())
                     }
@@ -2051,28 +2039,7 @@ impl RootView {
                 });
             }
         }
-        // The web checkout confirmation hands the user back through the same
-        // desktop redirect it uses for auth, so the success flag rides along on
-        // a URL that may also have failed to parse as an auth payload.
-        if url_reports_checkout_success(url) {
-            self.notify_onboarding_checkout_succeeded(ctx);
-        }
         true
-    }
-
-    /// Routes a completed web checkout to onboarding. Returns whether an
-    /// AI-sell onboarding screen consumed the signal and advanced.
-    fn notify_onboarding_checkout_succeeded(&mut self, ctx: &mut ViewContext<Self>) -> bool {
-        let AuthOnboardingState::PostAuthOnboarding {
-            onboarding_view, ..
-        } = &self.auth_onboarding_state
-        else {
-            return false;
-        };
-        let onboarding_view = onboarding_view.clone();
-        onboarding_view.update(ctx, |onboarding_view, ctx| {
-            onboarding_view.on_checkout_succeeded(ctx)
-        })
     }
 
     #[allow(clippy::ptr_arg)]
@@ -2426,16 +2393,6 @@ impl RootView {
                 &WorkspaceAction::ShowSettingsPage(*section),
             );
             ctx.windows().show_window_and_focus_app(window_id);
-            return true;
-        }
-
-        // A checkout confirmation that predates the unified success hand-off
-        // still returns the user through the Billing & Usage deeplink. Landing
-        // it mid-onboarding would interrupt the flow, so onboarding takes it as
-        // the purchase succeeding and moves on instead.
-        if *section == SettingsSection::BillingAndUsage
-            && self.notify_onboarding_checkout_succeeded(ctx)
-        {
             return true;
         }
 

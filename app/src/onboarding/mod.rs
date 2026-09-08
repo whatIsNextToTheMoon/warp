@@ -103,15 +103,11 @@ pub enum SelectedSettings {
 
 impl SelectedSettings {
     pub fn is_ai_enabled(&self) -> bool {
-        use warp_core::features::FeatureFlag;
-
         match self {
             SelectedSettings::AgentDrivenDevelopment { agent_settings, .. } => {
                 !agent_settings.disable_oz
             }
-            SelectedSettings::Terminal { .. } => {
-                !FeatureFlag::OpenWarpNewSettingsModes.is_enabled()
-            }
+            SelectedSettings::Terminal { .. } => false,
         }
     }
 

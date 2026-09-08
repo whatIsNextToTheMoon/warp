@@ -1383,11 +1383,13 @@ impl WarpAgentPageView {
         }
         let provider_name = provider.display_name();
         let current_default = Self::active_base_model_display_name(ctx);
-        let description = format!(
+        let description = crate::i18n::ui_str(
             "You added your own {provider_name} API key, but your default model is currently set \
              to {current_default}, which won't work without Warp credits. Would you like to change \
-             your default model?"
-        );
+             your default model?",
+        )
+        .replace("{provider_name}", provider_name)
+        .replace("{current_default}", &current_default);
         self.show_set_default_model_modal(description, choices, ctx);
     }
 
@@ -1428,12 +1430,13 @@ impl WarpAgentPageView {
             return;
         }
         let current_default = Self::active_base_model_display_name(ctx);
-        let description = format!(
+        let description = crate::i18n::ui_str(
             "You added the \"{}\" custom endpoint, but your default model is currently set to \
              {current_default}, which won't work without Warp credits. Would you like to change \
              your default model?",
-            endpoint.name
-        );
+        )
+        .replace("{}", &endpoint.name)
+        .replace("{current_default}", &current_default);
         self.show_set_default_model_modal(description, choices, ctx);
     }
 

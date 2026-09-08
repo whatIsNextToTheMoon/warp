@@ -1359,8 +1359,8 @@ async fn read_binary_file_context(
 
     let content = match read_file_as_binary(path).await {
         Ok(content) => content,
-        Err(FileLoadError::DoesNotExist) => return Ok(BinaryFileReadResult::NotFound),
-        Err(FileLoadError::IOError(e)) => return Err(anyhow::anyhow!(e)),
+        Err(error) if error.is_not_found() => return Ok(BinaryFileReadResult::NotFound),
+        Err(error) => return Err(error.into()),
     };
 
     let mime_type = from_path(path).first_or_octet_stream().to_string();
