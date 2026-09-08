@@ -52,7 +52,7 @@ jobs:
           tool: nextest
       - name: Run editor and terminal regressions
         run: >-
-          xvfb-run -a cargo nextest run --locked -p warp -p warp_files --lib
+          xvfb-run -a cargo nextest run --locked --no-fail-fast -p warp -p warp_files --lib
           -E 'test(editor_file_reader::tests::) or test(symbol_pair) or test(test_autocomplete_symbols)
           or test(rejected_editor_content) or test(custom_title_preserves_live_spinner)
           or test(completion_sources_resolution_tests)'

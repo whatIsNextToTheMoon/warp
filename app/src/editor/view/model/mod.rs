@@ -1185,20 +1185,15 @@ impl EditorModel {
                             .is_some_and(|pair| Some(pair.closing_char) == text.chars().next())
                 })
         {
-            let map = self.display_map(ctx);
-
-            // Moves cursor to the right.
+            // Layout can lag behind consecutive edits. Step over the known symbol in
+            // the buffer rather than mapping through potentially stale display coordinates.
+            let buffer = self.buffer(ctx);
             let mut new_selections = self.selections(ctx).clone();
             for selection in new_selections.iter_mut() {
-                let end = selection.end().to_display_point(map, ctx).unwrap();
-                let cursor = map
-                    .anchor_before(
-                        movement::right(map, end, ctx, false)
-                            .expect("moving right should return a valid DisplayPoint"),
-                        Bias::Right,
-                        ctx,
-                    )
-                    .expect("DisplayPoint should convert to an Anchor");
+                let end = selection.end().to_char_offset(buffer).unwrap();
+                let cursor = buffer
+                    .anchor_before(end + 1)
+                    .expect("autocompleted closing symbol is in the buffer");
 
                 selection.set_start(cursor.clone());
                 selection.set_end(cursor);

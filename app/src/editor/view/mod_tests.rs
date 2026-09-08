@@ -3545,12 +3545,9 @@ fn symbol_pairing_respects_escaping_and_existing_text() {
                 ("\"\"", 1, "\"", "\"\"\""),
             ] {
                 editor.set_buffer_text(before, ctx);
-                editor
-                    .select_ranges(
-                        vec![DisplayPoint::new(0, cursor)..DisplayPoint::new(0, cursor)],
-                        ctx,
-                    )
-                    .unwrap();
+                let offset = ByteOffset::from(cursor);
+                editor.select_ranges_by_byte_offset([offset..offset], ctx);
+                assert_eq!(editor.start_byte_index_of_first_selection(ctx), offset);
                 editor.user_insert(typed, ctx);
                 assert_eq!(
                     editor.buffer_text(ctx),
@@ -3574,17 +3571,17 @@ fn symbol_pairs_follow_cursor_movement_and_do_not_capture_replaced_characters() 
             editor.user_insert("x", ctx);
             editor.user_insert(")", ctx);
             assert_eq!(editor.buffer_text(ctx), "(x)");
-            editor
-                .select_ranges(vec![DisplayPoint::new(0, 2)..DisplayPoint::new(0, 2)], ctx)
-                .unwrap();
+            assert_eq!(
+                editor.end_byte_index_of_last_selection(ctx),
+                ByteOffset::from(3)
+            );
+            editor.select_ranges_by_byte_offset([ByteOffset::from(2)..ByteOffset::from(2)], ctx);
             editor.backspace(ctx);
             assert_eq!(editor.buffer_text(ctx), "()");
             editor
                 .model()
                 .update(ctx, |model, ctx| model.reset_undo_redo_stack(ctx));
-            editor
-                .select_ranges(vec![DisplayPoint::new(0, 1)..DisplayPoint::new(0, 1)], ctx)
-                .unwrap();
+            editor.select_ranges_by_byte_offset([ByteOffset::from(1)..ByteOffset::from(1)], ctx);
             editor.backspace(ctx);
             assert_eq!(editor.buffer_text(ctx), "");
             editor.undo(ctx);
@@ -3592,9 +3589,7 @@ fn symbol_pairs_follow_cursor_movement_and_do_not_capture_replaced_characters() 
             editor.delete(ctx);
             assert_eq!(editor.buffer_text(ctx), "");
             editor.set_buffer_text("()", ctx);
-            editor
-                .select_ranges(vec![DisplayPoint::new(0, 1)..DisplayPoint::new(0, 1)], ctx)
-                .unwrap();
+            editor.select_ranges_by_byte_offset([ByteOffset::from(1)..ByteOffset::from(1)], ctx);
             editor.delete(ctx);
             assert_eq!(editor.buffer_text(ctx), "(");
             editor.set_buffer_text("", ctx);
