@@ -9,7 +9,9 @@ use warp_util::host_id::HostId;
 use warp_util::standardized_path::StandardizedPath;
 use warpui::{App, ModelHandle, SingletonEntity};
 
-use super::{BufferSource, CharOffsetEdit, GlobalBufferModel, PendingEditBatch};
+use super::{
+    BufferSource, CharOffsetEdit, GlobalBufferModel, GlobalBufferModelEvent, PendingEditBatch,
+};
 use crate::test_util::settings::initialize_settings_for_tests;
 
 // ── Test-only helpers on GlobalBufferModel ────────────────────────
@@ -123,7 +125,7 @@ fn test_path() -> StandardizedPath {
 }
 
 #[test]
-fn rejected_editor_content_cannot_be_saved_or_reopened_as_empty() {
+fn rejected_editor_content_preserves_buffer_and_blocks_saves() {
     App::test((), |mut app| async move {
         init_app(&mut app);
         app.add_singleton_model(GlobalBufferModel::new);
@@ -165,6 +167,61 @@ fn rejected_editor_content_cannot_be_saved_or_reopened_as_empty() {
             assert!(model.ensure_loaded_for_save(id).is_ok());
         });
         assert_eq!(content(&app, id), "recovered");
+    });
+}
+
+#[test]
+fn rejected_editor_content_remains_rejected_after_local_reopen() {
+    App::test((), |mut app| async move {
+        init_app(&mut app);
+        let model = app.add_singleton_model(GlobalBufferModel::new);
+        let (sender, receiver) = async_channel::unbounded();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&model, move |_, event, _| {
+                let result = match event {
+                    GlobalBufferModelEvent::FailedToLoad { file_id, error } => (
+                        *file_id,
+                        matches!(
+                            error.as_ref(),
+                            warp_util::file::FileLoadError::EditorFileTooLarge
+                        ),
+                    ),
+                    GlobalBufferModelEvent::BufferLoaded { file_id, .. } => (*file_id, false),
+                    _ => return,
+                };
+                sender.try_send(result).unwrap();
+            });
+        });
+
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let size = 4 * 1024 * 1024 + 1;
+        file.as_file().set_len(size).unwrap();
+        for _ in 0..2 {
+            let state = model.update(&mut app, |model, ctx| {
+                model.open_local(file.path().to_path_buf(), false, ctx)
+            });
+            assert_eq!(receiver.recv().await.unwrap(), (state.file_id, true));
+
+            let reopened = model.update(&mut app, |model, ctx| {
+                let reopened = model.open_local(file.path().to_path_buf(), false, ctx);
+                assert_eq!(reopened.file_id, state.file_id);
+                assert!(model.load_error(reopened.file_id).is_some());
+                assert!(!model.buffer_loaded(reopened.file_id));
+                assert!(
+                    model
+                        .save(reopened.file_id, String::new(), ContentVersion::new(), ctx)
+                        .is_err()
+                );
+                reopened
+            });
+            assert!(receiver.try_recv().is_err());
+
+            drop(reopened);
+            let file_id = state.file_id;
+            drop(state);
+            model.update(&mut app, |model, ctx| model.cleanup_file_id(file_id, ctx));
+            assert_eq!(file.as_file().metadata().unwrap().len(), size);
+        }
     });
 }
 
