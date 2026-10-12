@@ -5734,7 +5734,6 @@ impl Workspace {
         let title = crate::terminal::view::strip_agent_spinner_prefixes(
             pane_group
                 .custom_title(ctx)
-                .as_deref()
                 .unwrap_or_else(|| pane_group.title(ctx))
                 .trim(),
         )
