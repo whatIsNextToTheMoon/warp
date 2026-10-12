@@ -1706,6 +1706,32 @@ fn test_remove_all_rich_content_blocks_with_same_view_id() {
         .contains_key(&RemovableBlocklistItem::RichContent(view_id)));
 }
 
+/// The rich-content view dedupes by removing every stale row for a view id before
+/// appending a fresh one, and it relies on the removal count to notice that the
+/// model and the view bookkeeping had drifted apart (session restore, Codex
+/// alt-screen transitions). This mirrors that sequence at the model level.
+#[test]
+fn test_remove_all_rich_content_reports_removed_rows_and_allows_reinsert() {
+    let mut block_list =
+        new_bootstrapped_block_list(None, None, ChannelEventListener::new_for_test());
+
+    insert_block(&mut block_list, "cmd", "output");
+
+    let view_id = EntityId::new();
+    block_list.append_rich_content(RichContentItem::new_for_test(None, view_id, None), false);
+    block_list.append_rich_content(RichContentItem::new_for_test(None, view_id, None), false);
+    assert_eq!(block_list.rich_content_item_count(view_id), 2);
+
+    // Every duplicate row has to be reported, otherwise the view would keep
+    // rendering the same child view twice.
+    assert_eq!(block_list.remove_all_rich_content(view_id), 2);
+    assert_eq!(block_list.rich_content_item_count(view_id), 0);
+
+    // Re-inserting the same view leaves exactly one row.
+    block_list.append_rich_content(RichContentItem::new_for_test(None, view_id, None), false);
+    assert_eq!(block_list.rich_content_item_count(view_id), 1);
+}
+
 #[test]
 fn test_conversation_scoped_rich_content_hidden_outside_fullscreen_agent_view() {
     FeatureFlag::AgentView.set_enabled(true);

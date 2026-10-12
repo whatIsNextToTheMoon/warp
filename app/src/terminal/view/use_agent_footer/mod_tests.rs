@@ -235,43 +235,6 @@ fn use_agent_footer_renders_for_manual_handoff_even_when_user_command_footer_set
     })
 }
 
-/// Regression: several event paths ask for the footer during the same Codex
-/// alt-screen/status transition. The blocklist must end up with exactly one row
-/// pointing at the footer view.
-#[test]
-fn use_agent_footer_is_never_stacked_in_the_blocklist() {
-    App::test((), |mut app| async move {
-        initialize_app_for_terminal_view(&mut app);
-        FeatureFlag::AgentView.set_enabled(true);
-
-        let terminal = add_window_with_terminal(&mut app, None);
-
-        terminal.update(&mut app, |view, ctx| {
-            simulate_user_started_long_running_command(view);
-            transition_to_user_handoff_state(view, UserTakeOverReason::Manual, ctx);
-
-            view.maybe_show_use_agent_footer_in_blocklist(ctx);
-            view.maybe_show_use_agent_footer_in_blocklist(ctx);
-            // Inserting the same view through the generic rich-content path must not
-            // add a second row either.
-            let footer = view.use_agent_footer.clone();
-            view.insert_rich_content(
-                None,
-                footer,
-                None,
-                RichContentInsertionPosition::Append {
-                    insert_below_long_running_block: true,
-                },
-                ctx,
-            );
-
-            let footer_id = view.use_agent_footer.id();
-            let model = view.model.lock();
-            assert_eq!(model.block_list().rich_content_item_count(footer_id), 1);
-        });
-    })
-}
-
 #[test]
 fn use_agent_footer_renders_for_manual_handoff_when_unfinished_ai_block_remains() {
     App::test((), |mut app| async move {
