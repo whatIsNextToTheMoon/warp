@@ -5347,6 +5347,9 @@ impl PaneGroup {
     }
 
     pub fn set_title(&mut self, title: &str, ctx: &mut ViewContext<Self>) {
+        // Never persist a live spinner frame as part of the custom name: the
+        // frame is re-attached from the terminal title when the tab renders.
+        let title = crate::terminal::view::strip_agent_spinner_prefixes(title.trim());
         self.custom_title = Some(title.to_string()).filter(|t| !t.is_empty());
 
         // refocus on the focused pane

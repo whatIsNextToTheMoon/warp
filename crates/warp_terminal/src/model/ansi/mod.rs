@@ -915,7 +915,9 @@ where
                     if let Ok(body) = body
                         && !body.is_empty()
                     {
-                        log::info!("Received OSC 9 notification: {}", body);
+                        // Never log the body: CLI agents put the working directory,
+                        // session id and project name in it.
+                        log::debug!("Received OSC 9 notification ({} bytes)", body.len());
                         self.handler.pluggable_notification(None, body);
                         return;
                     }

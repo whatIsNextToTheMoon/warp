@@ -43,6 +43,7 @@ pub(crate) mod ssh_remote_server_choice_view;
 pub(crate) mod ssh_remote_server_failed_banner;
 pub(crate) mod ssh_tmux_deprecation_banner;
 mod tab_metadata;
+pub(crate) use tab_metadata::strip_agent_spinner_prefixes;
 #[cfg(any(test, feature = "integration_tests"))]
 mod testing;
 mod tooltips;

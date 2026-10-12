@@ -23,7 +23,7 @@ use crate::util::extensions::TrimStringExt;
 ///
 /// Large command output expands substantially when reconstructed as a terminal grid, so the line
 /// limit alone is not a sufficient persistence or memory bound.
-pub(crate) const MAX_PERSISTED_STYLIZED_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
+pub(crate) const MAX_PERSISTED_STYLIZED_OUTPUT_BYTES: usize = 1024 * 1024;
 
 fn truncate_stylized_output_to_bytes(output: String, max_bytes: usize) -> Vec<u8> {
     if output.len() <= max_bytes {

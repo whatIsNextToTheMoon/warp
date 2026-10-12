@@ -231,8 +231,12 @@ fn establish_connection(database_url: &str, read_only: bool) -> Result<SqliteCon
         r#"
         PRAGMA journal_mode=WAL;
         PRAGMA synchronous=NORMAL;
-        PRAGMA wal_autocheckpoint=4000;
-        PRAGMA journal_size_limit=16777216;
+        -- Checkpoint every ~32 MiB of WAL instead of ~16 MiB. Each checkpoint copies
+        -- pages back into the main database, which is the dominant steady-state write
+        -- load once `warp.sqlite` is large, and mechanical disks are seek-bound.
+        PRAGMA wal_autocheckpoint=8000;
+        -- Truncate the retained WAL to ~8 MiB after each checkpoint.
+        PRAGMA journal_size_limit=8388608;
     "#,
     )
     .context("Failed to enable WAL")?;
@@ -446,6 +450,29 @@ fn setup_database(database_path: &Path) -> Result<SqliteConnection> {
     conn.run_pending_migrations(persistence::MIGRATIONS)
         .map_err(|e| anyhow!(e))
         .context("Failed to perform migrations")?;
+
+    // Reclaim history that no longer belongs to a pane. These rows only appear after
+    // an unclean shutdown, and because `pane_leaf_uuid` has no foreign key nothing
+    // else removes them (they were ~70 MiB in a long-lived profile).
+    match super::block_list::delete_orphaned_blocks(&mut conn) {
+        Ok(0) => {}
+        Ok(removed) => log::info!("Removed {removed} orphaned block rows on startup"),
+        Err(err) => report_error!(
+            anyhow::Error::new(err).context("Failed to remove orphaned terminal blocks")
+        ),
+    }
+
+    // `WARP_SQLITE_COMPACT=1` rewrites the database to release free pages. `VACUUM` is
+    // expensive (it rewrites the whole file), so it stays opt-in.
+    if matches!(
+        std::env::var("WARP_SQLITE_COMPACT").as_deref(),
+        Ok("1") | Ok("true") | Ok("yes") | Ok("on")
+    ) {
+        log::info!("Compacting SQLite database (WARP_SQLITE_COMPACT=1)");
+        conn.batch_execute("VACUUM;")
+            .context("Failed to compact SQLite database")?;
+    }
+
     Ok(conn)
 }
 
@@ -590,6 +617,10 @@ fn start_writer(conn: SqliteConnection, database_path: PathBuf) -> Result<Writer
         .name("SQLite Writer".into())
         .spawn(move || {
             let mut paused = false;
+            // Last app-state snapshot written to disk. Rapid window/layout updates dispatch a
+            // snapshot on every interaction, and most of them are byte-for-byte identical to the
+            // previous one; writing those again is pure write amplification.
+            let mut last_app_state: Option<AppState> = None;
             // When true, we stop blocking on `recv()` and instead drain any remaining queued
             // events before exiting. This helps avoid losing events that were enqueued by
             // background tasks right around shutdown.
@@ -633,6 +664,7 @@ fn start_writer(conn: SqliteConnection, database_path: PathBuf) -> Result<Writer
                 for event in events {
                     match event {
                         ModelEvent::ReconstructAndResume => {
+                            last_app_state = None;
                             match reconstruct_database(&database_path) {
                                 Ok(conn) => {
                                     current_conn = conn;
@@ -646,6 +678,7 @@ fn start_writer(conn: SqliteConnection, database_path: PathBuf) -> Result<Writer
                         }
                         ModelEvent::PauseAndRemoveDatabase => {
                             paused = true;
+                            last_app_state = None;
                             log::info!("SQLite Writer is paused");
 
                             if let Err(err) = std::fs::remove_file(&database_path) {
@@ -662,6 +695,23 @@ fn start_writer(conn: SqliteConnection, database_path: PathBuf) -> Result<Writer
                             // already be queued behind this Terminate event.
                             log::info!("SQLite writer received Terminate; draining queued events.");
                             terminating = true;
+                        }
+                        ModelEvent::Snapshot(app_state) => {
+                            if paused {
+                                log::info!("Ignoring event as SQLite Writer is on pause");
+                                continue;
+                            }
+                            // Skip re-writing an unchanged snapshot. The state is moved into
+                            // `last_app_state` afterwards, so this never clones.
+                            if last_app_state.as_ref() == Some(&app_state) {
+                                continue;
+                            }
+                            if let Err(err) = save_app_state(&mut current_conn, &app_state)
+                                .context("error saving app state")
+                            {
+                                report_db_error("Model", err, &database_path);
+                            }
+                            last_app_state = Some(app_state);
                         }
                         event => {
                             if paused {

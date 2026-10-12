@@ -331,18 +331,22 @@ impl TerminalView {
             .iter()
             .filter(|rich_content| rich_content.view_id() == view_id)
             .count();
-        if existing_view_count > 0 || is_use_agent_footer {
-            if existing_view_count > 0 {
-                log::warn!(
-                    "deduping rich content before insert: view_id={view_id:?} existing_views={existing_view_count} use_agent_footer={is_use_agent_footer}"
-                );
-            }
-            self.model
-                .lock()
-                .block_list_mut()
-                .remove_all_rich_content(view_id);
-            self.rich_content_views
-                .retain(|rich_content| rich_content.view_id() != view_id);
+        // A ViewHandle is a single rich-content identity, so always drop the previous
+        // copy before appending the fresh one. The block list model can hold entries
+        // that are no longer tracked here — for example after restoring a session or
+        // when switching in and out of the Codex alt screen — and leaving those behind
+        // renders the same child view (e.g. the CLI agent footer) more than once.
+        let stale_model_entries = self
+            .model
+            .lock()
+            .block_list_mut()
+            .remove_all_rich_content(view_id);
+        self.rich_content_views
+            .retain(|rich_content| rich_content.view_id() != view_id);
+        if existing_view_count > 0 || stale_model_entries > 0 {
+            log::warn!(
+                "deduping rich content before insert: view_id={view_id:?} existing_views={existing_view_count} stale_model_entries={stale_model_entries} use_agent_footer={is_use_agent_footer}"
+            );
         }
 
         let is_agent_transcript_user_query = match &metadata {

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
+use std::sync::{LazyLock, Mutex};
+use std::time::{Duration, Instant, SystemTime};
 use std::{env, fs, io};
 
 use async_trait::async_trait;
@@ -354,9 +355,65 @@ fn check_platform_plugin_installed(codex_dir: &Path) -> bool {
     check_plugin_enabled(codex_dir, PLATFORM_PLUGIN_KEY)
 }
 
+/// Cached result of a `config.toml` plugin-enablement lookup.
+struct CachedPluginEnabled {
+    checked_at: Instant,
+    modified_at: Option<SystemTime>,
+    len: u64,
+    enabled: bool,
+}
+
+/// How long a cached lookup may be reused before the file is re-read even when it
+/// has not changed. Keeps the cache honest after in-app plugin installs, which may
+/// rewrite `config.toml` without a distinguishable mtime granularity.
+const PLUGIN_ENABLED_CACHE_TTL: Duration = Duration::from_secs(5);
+
+/// `check_plugin_enabled` is evaluated while rendering the CLI agent toolbar, which
+/// used to re-read and re-parse `~/.codex/config.toml` (tens of kilobytes) many
+/// times per second. Cache by (path, plugin key) and invalidate on mtime/size change
+/// or after [`PLUGIN_ENABLED_CACHE_TTL`].
+fn plugin_enabled_cache() -> &'static Mutex<HashMap<(PathBuf, String), CachedPluginEnabled>> {
+    static CACHE: LazyLock<Mutex<HashMap<(PathBuf, String), CachedPluginEnabled>>> =
+        LazyLock::new(|| Mutex::new(HashMap::new()));
+    &CACHE
+}
+
 /// Whether `config.toml` marks the given plugin key as enabled.
 fn check_plugin_enabled(codex_dir: &Path, plugin_key: &str) -> bool {
     let config_path = codex_dir.join("config.toml");
+    let metadata = fs::metadata(&config_path).ok();
+    let modified_at = metadata.as_ref().and_then(|metadata| metadata.modified().ok());
+    let len = metadata.as_ref().map(|metadata| metadata.len()).unwrap_or(0);
+    let now = Instant::now();
+
+    {
+        let cache = plugin_enabled_cache().lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(cached) = cache.get(&(config_path.clone(), plugin_key.to_owned()))
+            && now.duration_since(cached.checked_at) < PLUGIN_ENABLED_CACHE_TTL
+            && cached.modified_at == modified_at
+            && cached.len == len
+        {
+            return cached.enabled;
+        }
+    }
+
+    let enabled = read_plugin_enabled(&config_path, plugin_key);
+    plugin_enabled_cache()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(
+            (config_path, plugin_key.to_owned()),
+            CachedPluginEnabled {
+                checked_at: now,
+                modified_at,
+                len,
+                enabled,
+            },
+        );
+    enabled
+}
+
+fn read_plugin_enabled(config_path: &Path, plugin_key: &str) -> bool {
     let Ok(contents) = fs::read_to_string(config_path) else {
         return false;
     };

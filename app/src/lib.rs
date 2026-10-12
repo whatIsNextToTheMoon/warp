@@ -813,6 +813,8 @@ pub fn run() -> Result<()> {
                     warp_logging::init(warp_logging::LogConfig {
                         frontend: warp_logging::LogFrontend::Cli,
                         log_destination: Some(warp_logging::LogDestination::Stderr),
+                        // Keep long-running CLI processes from growing an unbounded log.
+                        max_file_size_bytes: Some(4 * 1024 * 1024),
                         ..Default::default()
                     })?;
                     tracing_initialization.log_initialization_warning();
@@ -897,6 +899,10 @@ fn run_worker_command(worker: &warp_cli::WorkerCommand) -> Result<()> {
             warp_logging::init(warp_logging::LogConfig {
                 frontend: launch_mode.log_frontend(),
                 log_destination: launch_mode.log_destination(),
+                // Rotate `warp.log` once it passes 4 MiB during a session. Without a
+                // bound the file grew for the whole session (tens of MB on a long-lived
+                // instance), which is painful on mechanical disks.
+                max_file_size_bytes: Some(4 * 1024 * 1024),
                 ..Default::default()
             })?;
             tracing_initialization.log_initialization_warning();
@@ -1053,6 +1059,8 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
                 warp_logging::init(warp_logging::LogConfig {
                     frontend: launch_mode.log_frontend(),
                     log_destination,
+                    // Bound the on-disk log for long-lived sessions.
+                    max_file_size_bytes: Some(4 * 1024 * 1024),
                     ..Default::default()
                 })?;
             }
@@ -1060,6 +1068,8 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
             warp_logging::init(warp_logging::LogConfig {
                 frontend: launch_mode.log_frontend(),
                 log_destination,
+                // Bound the on-disk log for long-lived sessions.
+                max_file_size_bytes: Some(4 * 1024 * 1024),
                 ..Default::default()
             })?;
         }

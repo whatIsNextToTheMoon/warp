@@ -1022,7 +1022,14 @@ impl ShareBlockModal {
                 .finish()
             }
             None => {
-                log::warn!("Tried to render share modal without a model");
+                // This branch runs on every frame while the modal is open, so report
+                // the missing model once per process instead of tens of thousands of
+                // identical lines (it used to be ~25% of all log output).
+                static WARNED_MISSING_MODEL: std::sync::atomic::AtomicBool =
+                    std::sync::atomic::AtomicBool::new(false);
+                if !WARNED_MISSING_MODEL.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    log::warn!("Tried to render share modal without a model");
+                }
                 Empty::new().finish()
             }
         };

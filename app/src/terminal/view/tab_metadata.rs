@@ -104,46 +104,73 @@ impl TerminalView {
     }
 }
 
+/// Characters that CLI coding agents use as the leading frame of the spinner they
+/// write into the terminal title (OSC 0/2) while they are working.
+///
+/// Keep this aligned with the actual agents instead of with every glyph that could
+/// look spinner-ish:
+/// - Codex (TUI) cycles through braille frames (`\u{280b}` `\u{2819}` ...).
+/// - Claude Code alternates `◐`/`◑` and uses `✳` while it is busy.
+/// - `●` is used by the voice/recording indicator.
+fn is_agent_spinner_char(c: char) -> bool {
+    matches!(
+        c,
+        '\u{2801}'..='\u{28ff}'        // Braille patterns
+            | '\u{25cf}'               // ●
+            | '\u{25d0}'..='\u{25d3}'  // ◐ ◑ ◒ ◓
+            | '\u{2733}'               // ✳
+    )
+}
+
+/// Returns the leading spinner frame(s) of `title`, which must already be
+/// trimmed of leading whitespace. Variation selectors following a frame are
+/// included in the prefix.
+///
+/// The frame run must be followed by whitespace, so a title that merely starts
+/// with a bullet (or a shell title such as `-zsh`) is not mistaken for a spinner.
+fn leading_agent_spinner_prefix(title: &str) -> Option<&str> {
+    let mut cursor = 0;
+    let mut saw_frame = false;
+    for c in title.chars() {
+        if is_agent_spinner_char(c) {
+            saw_frame = true;
+        } else if c == '\u{fe0f}' {
+            // A variation selector can follow a frame; it never starts one.
+        } else {
+            break;
+        }
+        cursor += c.len_utf8();
+    }
+
+    if !saw_frame || !title[cursor..].starts_with(char::is_whitespace) {
+        return None;
+    }
+    Some(&title[..cursor])
+}
+
+/// Strips any leading whitespace and spinner frames from a title.
+///
+/// Used when persisting a custom tab name and when prefilling the rename editor:
+/// the frame is re-attached from the live terminal title at render time, so
+/// storing it would stack duplicate frames (and keep animating a stale one).
+pub(crate) fn strip_agent_spinner_prefixes(mut title: &str) -> &str {
+    loop {
+        let trimmed = title.trim_start();
+        match leading_agent_spinner_prefix(trimmed) {
+            Some(prefix) => title = trimmed[prefix.len()..].trim_start(),
+            None => return trimmed,
+        }
+    }
+}
+
 fn custom_title_with_status(terminal_title: &str, custom_title: &str) -> String {
-    let title = terminal_title.trim_start();
-    let Some(first) = title.chars().next() else {
-        return custom_title.to_owned();
-    };
-    if !matches!(
-        first,
-        '\u{2801}'
-            ..='\u{28ff}'
-                | '\u{2733}'
-                | '\u{2736}'
-                | '\u{273b}'
-                | '\u{273d}'
-                | '\u{2722}'
-                | '\u{00b7}'
-                | '\u{25d0}'
-                | '\u{25d1}'
-                | '\u{25d2}'
-                | '\u{25d3}'
-                | '\u{231b}'
-                | '\u{23f3}'
-                | '|'
-                | '/'
-                | '-'
-                | '\\'
-    ) {
+    let custom_title = strip_agent_spinner_prefixes(custom_title.trim_start());
+    if custom_title.is_empty() {
         return custom_title.to_owned();
     }
-    let mut prefix_len = first.len_utf8();
-    if title[prefix_len..].starts_with('\u{fe0f}') {
-        prefix_len += '\u{fe0f}'.len_utf8();
-    }
-    if !title[prefix_len..].starts_with(char::is_whitespace) {
-        return custom_title.to_owned();
-    }
-    let prefix = &title[..prefix_len];
-    if custom_title.starts_with(&format!("{prefix} ")) {
-        custom_title.to_owned()
-    } else {
-        format!("{prefix} {custom_title}")
+    match leading_agent_spinner_prefix(terminal_title.trim_start()) {
+        Some(prefix) => format!("{prefix} {custom_title}"),
+        None => custom_title.to_owned(),
     }
 }
 

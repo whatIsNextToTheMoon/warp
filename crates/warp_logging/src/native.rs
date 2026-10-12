@@ -597,7 +597,18 @@ fn init_internal(
 
     let mut base_logger = env_logger::builder();
 
-    base_logger.filter_level(LevelFilter::Info);
+    // Default to `WARN`. The GUI used to log every dispatched action, key event and
+    // alt-screen transition at `INFO`, which produced ~20 MB of log per one to two days
+    // and persisted agent details (working directory, project, session id) to disk.
+    // Setting any `WARP_DEBUG_*` variable opts back into `DEBUG` so the existing
+    // diagnostics keep working, and `RUST_LOG` (parsed below) still overrides this.
+    let debug_logging_requested = env::vars()
+        .any(|(key, value)| key.starts_with("WARP_DEBUG_") && !value.trim().is_empty());
+    base_logger.filter_level(if debug_logging_requested {
+        LevelFilter::Debug
+    } else {
+        LevelFilter::Warn
+    });
 
     // Only include `WARN` or higher logs for wgpu. By default, wgpu outputs logs at the `INFO`
     // level multiple times _per_ frame. See https://github.com/gfx-rs/wgpu/issues/3206.

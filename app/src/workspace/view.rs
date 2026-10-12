@@ -5727,7 +5727,18 @@ impl Workspace {
 
     pub fn rename_tab(&mut self, index: usize, ctx: &mut ViewContext<Self>) {
         let tab = &self.tabs[index];
-        let title = tab.pane_group.as_ref(ctx).display_title(ctx);
+        let pane_group = tab.pane_group.as_ref(ctx);
+        // Prefill the editor with the saved name instead of the rendered title, and
+        // strip any live spinner frame, so accepting the prefill does not store a
+        // stale animation frame as part of the user's custom name.
+        let title = crate::terminal::view::strip_agent_spinner_prefixes(
+            pane_group
+                .custom_title(ctx)
+                .as_deref()
+                .unwrap_or_else(|| pane_group.title(ctx))
+                .trim(),
+        )
+        .to_owned();
 
         self.rename_tab_internal(index, &title, ctx);
         send_telemetry_from_ctx!(
@@ -5755,13 +5766,15 @@ impl Workspace {
             self.clear_tab_name_editor(ctx);
         }
 
-        let title = title.trim();
+        let title = crate::terminal::view::strip_agent_spinner_prefixes(title.trim()).trim();
         if title.is_empty() {
             ctx.notify();
             return;
         }
         pane_group.update(ctx, |pane_group, ctx| {
-            if pane_group.display_title(ctx) != title {
+            let already_named = pane_group.custom_title(ctx).as_deref() == Some(title)
+                || pane_group.display_title(ctx) == title;
+            if !already_named {
                 pane_group.set_title(title, ctx);
                 send_telemetry_from_ctx!(
                     TelemetryEvent::TabRenamed(TabRenameEvent::CustomNameSet),

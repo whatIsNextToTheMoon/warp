@@ -1214,17 +1214,39 @@ impl BlockList {
         None
     }
 
-    pub fn remove_all_rich_content(&mut self, view_id: EntityId) {
+    /// Removes every rich content item for `view_id` and returns how many were
+    /// removed. Callers rely on the count to detect entries that outlived the
+    /// view bookkeeping (session restore, alt-screen transitions), which would
+    /// otherwise render the same child view twice.
+    /// Test helper: how many rich content items are currently stored for `view_id`.
+    #[cfg(test)]
+    pub fn rich_content_item_count(&self, view_id: EntityId) -> usize {
+        self.block_heights
+            .items()
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item,
+                    BlockHeightItem::RichContent(rich_content) if rich_content.view_id == view_id
+                )
+            })
+            .count()
+    }
+
+    pub fn remove_all_rich_content(&mut self, view_id: EntityId) -> usize {
         self.dirty_rich_content_items.remove(&view_id);
         if self.pinned_to_bottom == Some(view_id) {
             self.pinned_to_bottom = None;
         }
 
+        let mut removed = 0;
         while let Some(index) = self.first_rich_content_index(view_id) {
             self.removable_blocklist_item_positions
                 .insert(RemovableBlocklistItem::RichContent(view_id), index);
             self.remove_item_from_blocklist(RemovableBlocklistItem::RichContent(view_id));
+            removed += 1;
         }
+        removed
     }
 
     pub fn update_agent_view_conversation_id_for_rich_content(

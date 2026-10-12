@@ -359,6 +359,20 @@ impl TerminalView {
                 || active_block.is_eligible_for_agent_handoff())
     }
 
+    /// [`Self::should_render_use_agent_footer`] for the rich-content (blocklist)
+    /// insertion path.
+    ///
+    /// `TerminalView::render` appends the same footer view *below* the alt-screen
+    /// element while the Codex alt screen is active, so the two paths must be
+    /// mutually exclusive; otherwise a transition can leave two footers on screen.
+    pub(super) fn should_render_use_agent_footer_in_blocklist(
+        &self,
+        model: &TerminalModel,
+        app: &AppContext,
+    ) -> bool {
+        !model.is_alt_screen_active() && self.should_render_use_agent_footer(model, app)
+    }
+
     /// Returns the detected CLI agent for the active block's command, if any.
     ///
     /// This method resolves aliases before detecting the CLI agent. For example,
@@ -544,14 +558,11 @@ impl TerminalView {
         // This is a bit of a hack- but it ensures we never show more than one footer in the
         // blocklist.
         self.hide_use_agent_footer_in_blocklist(ctx);
-        let (should_render_footer, is_alt_screen_active) = {
+        let should_render_footer = {
             let model = self.model.lock();
-            (
-                self.should_render_use_agent_footer(&model, ctx),
-                model.is_alt_screen_active(),
-            )
+            self.should_render_use_agent_footer_in_blocklist(&model, ctx)
         };
-        if is_alt_screen_active || !should_render_footer {
+        if !should_render_footer {
             return;
         }
 

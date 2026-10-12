@@ -28,7 +28,7 @@ use crate::terminal::model::block::{
 const MAX_TERMINAL_BLOCKS_TO_PERSIST_PER_SESSION: i64 = 1000;
 
 /// Upper bound on restored stylized output retained for one session/pane.
-const MAX_PERSISTED_STYLIZED_OUTPUT_BYTES_PER_SESSION: i64 = 16 * 1024 * 1024;
+const MAX_PERSISTED_STYLIZED_OUTPUT_BYTES_PER_SESSION: i64 = 4 * 1024 * 1024;
 
 type PersistedBlocks = HashMap<PaneUuid, Vec<SerializedBlockListItem>>;
 
@@ -216,6 +216,21 @@ fn upsert_ai_query_with_limit(
 
         Ok(())
     })?)
+}
+
+/// Deletes persisted blocks whose owning pane no longer exists and returns how many
+/// rows were removed.
+///
+/// Closing a pane deletes its blocks, but a crash or a killed process can leave rows
+/// behind. `blocks.pane_leaf_uuid` deliberately has no foreign key, so nothing else
+/// cleans them up; they waste space and every block write walks the table.
+pub(super) fn delete_orphaned_blocks(
+    conn: &mut SqliteConnection,
+) -> Result<usize, diesel::result::Error> {
+    diesel::sql_query(
+        "DELETE FROM blocks WHERE pane_leaf_uuid NOT IN (SELECT uuid FROM terminal_panes)",
+    )
+    .execute(conn)
 }
 
 /// Returns the most recent [`MAX_TERMINAL_BLOCKS_TO_PERSIST_PER_SESSION`] block list items for each
