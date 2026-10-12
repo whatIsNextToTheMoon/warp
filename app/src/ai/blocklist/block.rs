@@ -85,22 +85,23 @@ use super::permissions::is_agent_mode_autonomy_allowed;
 use super::suggested_agent_mode_workflow_modal::SuggestedAgentModeWorkflowAndId;
 use super::suggested_rule_modal::SuggestedRuleAndId;
 use super::telemetry_banner::should_collect_ai_ugc_telemetry;
+use super::usage::request_metadata_turn_view::RequestMetadataTurnView;
 use super::{
-    BlocklistAIActionModel, BlocklistAIController, BlocklistAIHistoryEvent,
-    BlocklistAIHistoryModel, BlocklistAIPermissions, ResponseStreamId,
+    BlocklistAIActionModel, BlocklistAIController, BlocklistAIHistoryModel, BlocklistAIPermissions,
+    ResponseStreamId,
 };
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::redaction::redact_secrets;
 use crate::ai::agent::telemetry::ForTelemetry as _;
 use crate::ai::agent::{
     AIAgentAction, AIAgentActionId, AIAgentActionResultType, AIAgentActionType, AIAgentAttachment,
-    AIAgentCitation, AIAgentContext, AIAgentInput, AIAgentOutput, AIAgentOutputMessage,
-    AIAgentOutputMessageType, AIAgentTextSection, AIIdentifiers, CancellationReason,
-    CreateDocumentsRequest, CreateDocumentsResult, DocumentToCreate, EditDocumentsResult,
-    MessageId, PassiveSuggestionTrigger, ProgrammingLanguage, RenderableAIError,
-    RequestCommandOutputResult, RequestFileEditsResult, ScreenshotSource, SearchCodebaseResult,
-    ServerOutputId, SubagentCall, SubagentType, SuggestPromptRequest, SuggestPromptResult,
-    SuggestedLoggingId, SummarizationType, TodoOperation,
+    AIAgentCitation, AIAgentContext, AIAgentExchangeId, AIAgentInput, AIAgentOutput,
+    AIAgentOutputMessage, AIAgentOutputMessageType, AIAgentTextSection, AIIdentifiers,
+    CancellationReason, CreateDocumentsRequest, CreateDocumentsResult, DocumentToCreate,
+    EditDocumentsResult, MessageId, PassiveSuggestionTrigger, ProgrammingLanguage,
+    RenderableAIError, RequestCommandOutputResult, RequestFileEditsResult, ScreenshotSource,
+    SearchCodebaseResult, ServerOutputId, SubagentCall, SubagentType, SuggestPromptRequest,
+    SuggestPromptResult, SuggestedLoggingId, SummarizationType, TodoOperation,
 };
 use crate::ai::agent_conversations_model::{AgentConversationsModel, AgentConversationsModelEvent};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
@@ -456,6 +457,9 @@ pub(super) struct AIBlockStateHandles {
     /// Mouse state handle for the usage button
     usage_button_handle: MouseStateHandle,
 
+    /// Mouse state handle for the per-turn request-metadata "Turn" panel trigger
+    turn_panel_button_handle: MouseStateHandle,
+
     /// Mouse state handles per citation.
     /// A given citation should only appear once per block.
     footer_citation_chip_handles: HashMap<AIAgentCitation, MouseStateHandle>,
@@ -493,6 +497,10 @@ pub(super) struct AIBlockStateHandles {
 
     /// Mouse state handle for the Subscribe button shown on the out-of-credits error
     subscribe_button_handle: MouseStateHandle,
+
+    /// Per-action mouse state handles for the recovery buttons on a ChatGPT subscription
+    /// error, indexed in the server's action order.
+    chatgpt_subscription_action_handles: Vec<MouseStateHandle>,
 
     /// Mouse state handle for AI document created block
     ai_document_handle: MouseStateHandle,
@@ -988,6 +996,7 @@ pub struct AIBlock {
 
     time_to_first_token: OnceCell<Duration>,
     time_to_last_token: Option<Duration>,
+    receives_live_output_updates: bool,
 
     /// The number of blocks that were attached as context to this AI block's query.
     num_attached_context_blocks: usize,
@@ -1077,6 +1086,11 @@ pub struct AIBlock {
 
     /// Whether the usage summary footer is expanded.
     is_usage_footer_expanded: bool,
+
+    /// Whether the per-turn request-metadata "Turn" panel is expanded. Independent of
+    /// `is_usage_footer_expanded`: the two panels are separate surfaces.
+    is_turn_panel_expanded: bool,
+    turn_panel_view: Option<ViewHandle<RequestMetadataTurnView>>,
 
     /// Controller for reading/modifying `AgentView` state for this terminal pane (e.g. if there is
     /// an active agent view or not, which affects whether or not this block should be hidden).
@@ -1323,29 +1337,6 @@ impl AIBlock {
             }
         });
 
-        // Note: UpdatedStreamingExchange is handled by the dedicated on_updated_output()
-        // callback in model_impl.rs, so we don't need to respond to it here.
-        ctx.subscribe_to_model(
-            &BlocklistAIHistoryModel::handle(ctx),
-            |me, _, event, ctx| {
-                if event
-                    .terminal_surface_id()
-                    .is_none_or(|id| id == me.terminal_view_id)
-                {
-                    match event {
-                        BlocklistAIHistoryEvent::AppendedExchange { .. }
-                        | BlocklistAIHistoryEvent::UpdatedTodoList { .. }
-                        | BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride { .. }
-                        | BlocklistAIHistoryEvent::StartedNewConversation { .. }
-                        | BlocklistAIHistoryEvent::SetActiveConversation { .. } => {
-                            ctx.notify();
-                        }
-                        _ => {}
-                    }
-                }
-            },
-        );
-
         ctx.subscribe_to_model(
             cli_subagent_controller,
             move |me, _, event, ctx| match event {
@@ -1502,6 +1493,7 @@ impl AIBlock {
         }
 
         let is_passive = model.request_type(ctx).is_passive();
+        let receives_live_output_updates = model.status(ctx).is_streaming();
 
         let mut me = Self {
             model,
@@ -1522,6 +1514,7 @@ impl AIBlock {
             state_handles: Default::default(),
             time_to_first_token: OnceCell::new(),
             time_to_last_token: None,
+            receives_live_output_updates,
             num_attached_context_blocks,
             has_attached_context_selected_text,
             finish_reason: None,
@@ -1565,6 +1558,8 @@ impl AIBlock {
             has_recording_related_actions: false,
             last_right_clicked_command: None,
             is_usage_footer_expanded: false,
+            is_turn_panel_expanded: false,
+            turn_panel_view: None,
             agent_view_controller,
             ambient_agent_view_model,
             aws_bedrock_credentials_error_view: None,
@@ -1583,9 +1578,8 @@ impl AIBlock {
         me.run_secret_redaction_on_user_query(me.client_ids.conversation_id, ctx);
         me.spawn_link_detection(ctx);
 
-        if me.model.status(ctx).is_streaming() {
-            me.model
-                .on_updated_output(Box::new(Self::on_output_status_update), ctx);
+        if let AIBlockOutputStatus::PartiallyReceived { output } = me.model.status(ctx) {
+            me.handle_updated_output(&output.get(), ctx);
         } else if let Some(output) = me.model.status(ctx).output_to_render() {
             // "Simulate" receiving this output if output is already complete.
             let output = output.get();
@@ -1600,6 +1594,7 @@ impl AIBlock {
             AIBlockOutputStatus::Failed { error, .. } => {
                 me.maybe_create_aws_bedrock_credentials_error_view(&error, ctx);
                 me.maybe_create_gemini_enterprise_credentials_error_view(&error, ctx);
+                me.maybe_create_chatgpt_subscription_action_handles(&error);
                 me.finish(FinishReason::Error, ctx);
             }
             AIBlockOutputStatus::Cancelled { .. } => {
@@ -1624,6 +1619,14 @@ impl AIBlock {
         self.directory_context.pwd = pwd;
         self.directory_context.home_dir = home_dir;
         ctx.notify();
+    }
+
+    pub(crate) fn contains_todo_list(&self) -> bool {
+        !self.todo_list_states.is_empty()
+    }
+
+    pub(crate) fn receives_live_output_updates(&self) -> bool {
+        self.receives_live_output_updates
     }
 
     /// Set the shell launch data for this block, re-running link detection on the
@@ -1886,7 +1889,7 @@ impl AIBlock {
         })
     }
 
-    fn on_output_status_update(&mut self, ctx: &mut ViewContext<Self>) {
+    pub(crate) fn handle_history_output_update(&mut self, ctx: &mut ViewContext<Self>) {
         if let Some(latency) = self.model.time_since_request_start(ctx) {
             // Since this is a OnceCell, we'll only set time_to_first_token to the
             // latency of the first output received.
@@ -1988,6 +1991,7 @@ impl AIBlock {
                 );
                 self.maybe_create_aws_bedrock_credentials_error_view(&error, ctx);
                 self.maybe_create_gemini_enterprise_credentials_error_view(&error, ctx);
+                self.maybe_create_chatgpt_subscription_action_handles(&error);
                 self.notify_run_agents_card_views(ctx);
                 // There are no actions to be taken in this block, it is finished.
                 self.finish(FinishReason::Error, ctx);
@@ -4229,6 +4233,19 @@ impl AIBlock {
         self.gemini_enterprise_credentials_error_view = Some(view);
         ctx.notify();
     }
+
+    fn maybe_create_chatgpt_subscription_action_handles(&mut self, error: &RenderableAIError) {
+        let RenderableAIError::ChatGPTSubscriptionError { actions, .. } = error else {
+            return;
+        };
+        if self.state_handles.chatgpt_subscription_action_handles.len() != actions.len() {
+            self.state_handles.chatgpt_subscription_action_handles = actions
+                .iter()
+                .map(|_| MouseStateHandle::default())
+                .collect();
+        }
+    }
+
     pub fn accept_pending_unit_test_suggestion(
         &mut self,
         interaction_source: InteractionSource,
@@ -6095,6 +6112,27 @@ fn set_imported_comment_button_disabled(
     });
 }
 
+impl AIBlock {
+    pub(crate) fn set_turn_panel_view(
+        &mut self,
+        view: Option<ViewHandle<RequestMetadataTurnView>>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.turn_panel_view = view;
+        ctx.notify();
+    }
+
+    /// Notifies the terminal view of the turn panel's current expansion state, using this
+    /// block's own conversation/exchange ids.
+    fn emit_turn_panel_toggled(&self, ctx: &mut ViewContext<Self>) {
+        ctx.emit(AIBlockEvent::TurnPanelToggled {
+            conversation_id: self.client_ids.conversation_id,
+            exchange_id: self.client_ids.client_exchange_id,
+            is_expanded: self.is_turn_panel_expanded,
+        });
+    }
+}
+
 fn num_attached_context_blocks(inputs: &[AIAgentInput]) -> usize {
     inputs.iter().fold(0, |count, input| {
         if let Some(context) = input.context() {
@@ -6166,6 +6204,14 @@ pub enum AIBlockEvent {
     /// Emitted when we want to show or hide the usage footer.
     UsageFooterToggled {
         conversation_id: AIConversationId,
+        is_expanded: bool,
+    },
+
+    /// Emitted when we want to show or hide the per-turn request-metadata "Turn" panel.
+    TurnPanelToggled {
+        conversation_id: AIConversationId,
+        /// The exchange this block renders, used to look up that turn's record
+        exchange_id: AIAgentExchangeId,
         is_expanded: bool,
     },
 
@@ -6250,6 +6296,10 @@ pub enum AIBlockEvent {
     ResumeConversation {
         conversation_id: AIConversationId,
     },
+    /// Emitted when the user chooses Warp-funded inference after a ChatGPT subscription error.
+    ContinueWithWarpCredits {
+        conversation_id: AIConversationId,
+    },
     InsertForkSlashCommand,
     ToggleCodeReviewPane {
         entrypoint: CodeReviewPaneEntrypoint,
@@ -6304,6 +6354,10 @@ pub enum AIBlockAction {
 
     /// Resume the stopped conversation
     ResumeConversation,
+
+    /// Switch the conversation to Warp-funded inference after a ChatGPT subscription error, then
+    /// resume it.
+    ContinueWithWarpCredits,
 
     /// Fork the conversation
     ForkConversation,
@@ -6405,6 +6459,9 @@ pub enum AIBlockAction {
     OpenFeedbackDocs,
     /// Toggle the usage summary footer expansion state
     ToggleIsUsageFooterExpanded,
+    /// Toggle the per-turn request-metadata "Turn" panel expansion state.
+    ToggleIsTurnPanelExpanded,
+    SetIsTurnPanelExpanded(bool),
     CommentExpanded {
         id: CommentId,
     },
@@ -6516,6 +6573,11 @@ impl TypedActionView for AIBlock {
             }
             AIBlockAction::ResumeConversation => {
                 ctx.emit(AIBlockEvent::ResumeConversation {
+                    conversation_id: self.client_ids.conversation_id,
+                });
+            }
+            AIBlockAction::ContinueWithWarpCredits => {
+                ctx.emit(AIBlockEvent::ContinueWithWarpCredits {
                     conversation_id: self.client_ids.conversation_id,
                 });
             }
@@ -6698,6 +6760,14 @@ impl TypedActionView for AIBlock {
                     conversation_id: self.client_ids.conversation_id,
                     is_expanded: self.is_usage_footer_expanded,
                 });
+            }
+            AIBlockAction::ToggleIsTurnPanelExpanded => {
+                self.is_turn_panel_expanded = !self.is_turn_panel_expanded;
+                self.emit_turn_panel_toggled(ctx);
+            }
+            AIBlockAction::SetIsTurnPanelExpanded(is_expanded) => {
+                self.is_turn_panel_expanded = *is_expanded;
+                self.emit_turn_panel_toggled(ctx);
             }
             AIBlockAction::CommentExpanded { id } => {
                 let Some(comment) = self.comment_states.get_mut(id) else {

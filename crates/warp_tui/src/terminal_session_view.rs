@@ -38,9 +38,9 @@ use warp::tui_export::{
     ResolvedTeamScope, ServerConversationToken, ServerId, SessionSettings, Sessions, SessionsEvent,
     ShellCommandExecutorEvent, SizeInfo, SizeUpdate, SkillReference, SlashCommandDataSource as _,
     SlashCommandKind, SlashCommandSelectionBehavior, StartAgentExecutorEvent, StartAgentRequest,
-    StaticCommand, TeamContextForOperation, TelemetryEvent, TerminalModel, TerminalSurface,
-    TerminalSurfaceInit, TranscriptScope, TuiMcpAction, TuiMcpManager, TuiMcpServerId,
-    TuiMcpVariableValue, TuiOnboardingMarker, TuiOnboardingMarkers, TuiOnboardingMarkersEvent,
+    StaticCommand, TelemetryEvent, TerminalModel, TerminalSurface, TerminalSurfaceInit,
+    TranscriptScope, TuiMcpAction, TuiMcpManager, TuiMcpServerId, TuiMcpVariableValue,
+    TuiOnboardingMarker, TuiOnboardingMarkers, TuiOnboardingMarkersEvent,
     TuiSlashCommandDataSource, TuiSlashCommandDataSourceArgs, TuiUpArrowHistoryItemKind,
     TuiUserInfoManager, TuiUserInfoManagerEvent, TuiZeroStateDataSource, UserTakeOverReason,
     UserWorkspaces, UserWorkspacesEvent, WAKEUP_THROTTLE_PERIOD, WarpConfig, WarpConfigUpdateEvent,
@@ -56,6 +56,7 @@ use warp_core::features::FeatureFlag;
 use warp_core::settings::Setting;
 use warp_editor::model::CoreEditorModel;
 use warp_errors::report_error;
+use warp_terminal::event::ExitReason;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::SingletonEntity;
 #[cfg(feature = "voice_input")]
@@ -317,7 +318,6 @@ pub(crate) enum TuiTerminalSessionEvent {
     StartAgentConversation {
         request: Box<StartAgentRequest>,
         working_directory: Option<PathBuf>,
-        team_context: TeamContextForOperation,
     },
     CleanupFailedChildLaunch {
         conversation_id: AIConversationId,
@@ -1572,11 +1572,9 @@ impl TuiTerminalSessionView {
 
         ctx.subscribe_to_model(&start_agent_executor, |view, _, event, ctx| match event {
             StartAgentExecutorEvent::CreateAgent(request) => {
-                let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
                 ctx.emit(TuiTerminalSessionEvent::StartAgentConversation {
                     request: request.clone(),
                     working_directory: view.current_working_directory(ctx).map(PathBuf::from),
-                    team_context,
                 });
             }
             StartAgentExecutorEvent::CleanupFailedChildLaunch { conversation_id } => {
@@ -2096,6 +2094,8 @@ impl TuiTerminalSessionView {
                 }
                 QueuedQueryEvent::DefaultModeChanged => ctx.notify(),
                 QueuedQueryEvent::Appended { .. }
+                | QueuedQueryEvent::PromptReady { .. }
+                | QueuedQueryEvent::DispatchStateChanged { .. }
                 | QueuedQueryEvent::RowUnlocked { .. }
                 | QueuedQueryEvent::Removed { .. }
                 | QueuedQueryEvent::Reordered { .. }
@@ -2140,6 +2140,11 @@ impl TuiTerminalSessionView {
             ModelEvent::TerminalModeSwapped(_) => {
                 view.reconcile_focus(ctx);
                 ctx.notify();
+            }
+            ModelEvent::ShellExitObserved { status } => {
+                view.terminal_model
+                    .lock()
+                    .finalize_exit(ExitReason::ShellProcessExited { status: *status });
             }
             ModelEvent::Typeahead => view.handle_typeahead_event(ctx),
             ModelEvent::BlockMetadataReceived(_)
@@ -5173,6 +5178,24 @@ impl TuiTerminalSessionView {
             }
             ShellCommandExecutorEvent::CancelExecution => {
                 ctx.emit(TuiTerminalSessionEvent::InterruptPty);
+            }
+            ShellCommandExecutorEvent::InterruptForInjectedFollowup {
+                conversation_id,
+                block_id,
+            } => {
+                let should_interrupt = {
+                    let model = model.lock();
+                    let block = model.block_list().active_block();
+                    block.id() == block_id
+                        && block.ai_conversation_id() == Some(*conversation_id)
+                        && block.is_executing()
+                        && !block
+                            .long_running_control_state()
+                            .is_some_and(|state| state.is_user_in_control())
+                };
+                if should_interrupt {
+                    ctx.emit(TuiTerminalSessionEvent::InterruptPty);
+                }
             }
             ShellCommandExecutorEvent::TransferControlToUser {
                 action_id: _,

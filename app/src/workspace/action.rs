@@ -342,6 +342,7 @@ pub enum WorkspaceAction {
     ToggleKeybindingsPage,
     ShowCommandSearch(CommandSearchOptions),
     TriggerExternalCtrlTFileSearch,
+    TriggerExternalAltCDirectorySearch,
     CreatePersonalNotebook,
     ImportToPersonalDrive,
     ImportToTeamDrive,
@@ -754,6 +755,12 @@ pub enum WorkspaceAction {
     /// Reset the auto-handoff sleep modal shown state (for debugging)
     #[cfg(debug_assertions)]
     ResetAutoHandoffSleepModalState,
+    /// Open the "You're using your ChatGPT plan" modal (for debugging)
+    #[cfg(debug_assertions)]
+    OpenChatGPTPlanModal,
+    /// Reset the ChatGPT plan modal shown state (for debugging)
+    #[cfg(debug_assertions)]
+    ResetChatGPTPlanModalState,
     /// Trigger the auto-handoff-to-cloud flow in-process, as if the machine
     /// were about to sleep (for debugging)
     #[cfg(debug_assertions)]
@@ -877,6 +884,7 @@ pub enum WorkspaceAction {
     OpenNewWindowForTeam {
         team_uid: ServerId,
     },
+    BrowseTeams,
     /// Shows (toggles) the team-switcher dropdown menu in the title bar.
     ShowTeamSwitcherMenu,
 }
@@ -1059,6 +1067,7 @@ impl WorkspaceAction {
             | ToggleKeybindingsPage
             | ShowCommandSearch(_)
             | TriggerExternalCtrlTFileSearch
+            | TriggerExternalAltCDirectorySearch
             | ToggleMouseReporting
             | ToggleScrollReporting
             | ToggleFocusReporting
@@ -1206,6 +1215,7 @@ impl WorkspaceAction {
             | OpenCreateAuthSecretModal { .. }
             | OpenNetworkLogPane
             | OpenNewWindowForTeam { .. }
+            | BrowseTeams
             | ShowTeamSwitcherMenu => false,
             #[cfg(debug_assertions)]
             ShowHoaOnboardingFlow => false,
@@ -1227,6 +1237,8 @@ impl WorkspaceAction {
             | ResetFeatureIntroModalState
             | OpenAutoHandoffSleepModal
             | ResetAutoHandoffSleepModalState
+            | OpenChatGPTPlanModal
+            | ResetChatGPTPlanModalState
             | TriggerAutoHandoffToCloud
             | OpenFreeAiRemovalModal
             | ResetFreeAiRemovalModalState

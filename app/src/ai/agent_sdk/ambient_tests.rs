@@ -339,7 +339,7 @@ fn run_list_scope_uses_team_loaded_by_workspace_refresh() {
                         joinable_teams: vec![],
                         experiments: None,
                         ai_credit_availability: None,
-                        user_purchase_policy: None,
+                        user_tier: Default::default(),
                     },
                     pricing_info: None,
                 })
@@ -439,11 +439,8 @@ fn task_id_from_oz_run_id_env_rejects_invalid_value() {
 }
 
 fn http_error(status: u16, body: &str) -> anyhow::Error {
-    anyhow::Error::new(HttpStatusError {
-        status,
-        body: body.to_string(),
-    })
-    .context(format!("API request failed with status {status}"))
+    anyhow::Error::new(HttpStatusError::new(status, body.to_string()))
+        .context(format!("API request failed with status {status}"))
 }
 
 fn operation_not_supported_error() -> anyhow::Error {

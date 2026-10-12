@@ -304,7 +304,7 @@ fn debug_text_preview(text: &str) -> String {
 
 /// Removes a leading UTF-8 BOM from the text and adjusts the style run offsets accordingly.
 /// We throw away the styling of the BOM character.
-fn strip_leading_unicode_bom<'a>(
+pub(crate) fn strip_leading_unicode_bom<'a>(
     text: &'a str,
     style_runs: &'a [(Range<usize>, StyleAndFont)],
 ) -> (&'a str, Option<Vec<StyleRun>>) {

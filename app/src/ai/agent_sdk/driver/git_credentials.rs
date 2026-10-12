@@ -2,7 +2,7 @@
 ///
 /// This module handles:
 /// - Writing provider credentials to `~/.git-credentials`, GitHub credentials
-///   to `~/.config/gh/hosts.yml`, and refresh-safe Azure CLI authentication.
+///   to the `gh` config directory, and refresh-safe Azure CLI authentication.
 /// - One-time git configuration (`credential.helper store`, SSH→HTTPS URL
 ///   rewrites).
 /// - Configuring the git user identity from the server-returned username/email.
@@ -21,13 +21,27 @@ use anyhow::{Context, Result, bail};
 // Use the project's allowed Command wrapper (not std::process::Command, which is
 // disallowed by clippy rules because it flashes a terminal window on Windows).
 use command::blocking::Command as BlockingCommand;
+use warp_isolation_platform::IsolationPlatformError;
 
-use crate::server::server_api::ai::{AIClient, GitCredential, TaskGitCredentialsResponse};
+use crate::server::retry_strategies::with_retry;
+use crate::server::server_api::ai::{
+    AIClient, GitCredential, TaskGitCredentialsError, TaskGitCredentialsResponse,
+};
 use crate::util::path::resolve_executable;
 
 /// How long to wait between credential refresh attempts (~50 minutes, staying
 /// well ahead of the shortest-lived one-hour token expiry).
 pub(crate) const GIT_CREDENTIALS_REFRESH_INTERVAL: Duration = Duration::from_secs(50 * 60);
+pub(crate) const GIT_CREDENTIALS_BOOTSTRAP_BACKOFF: [Duration; 3] = [
+    Duration::from_secs(1),
+    Duration::from_secs(2),
+    Duration::from_secs(4),
+];
+const GIT_CREDENTIALS_REFRESH_BACKOFF: [Duration; 3] = [
+    Duration::from_secs(60),
+    Duration::from_secs(2 * 60),
+    Duration::from_secs(4 * 60),
+];
 
 const DEFAULT_GIT_NAME: &str = "Warp";
 const DEFAULT_GIT_EMAIL: &str = "agent@warp.dev";
@@ -41,8 +55,65 @@ const AZURE_DEVOPS_TOKEN_FILENAME: &str = "entra-token";
 const AZURE_DEVOPS_BIN_DIR: &str = "bin";
 const AZURE_CLI_FILENAME: &str = "az";
 
+/// Whether a `TaskGitCredentialsError` is worth retrying. Platform errors
+/// defer to the server's `retryable` flag; request-layer errors are retried
+/// unless they indicate the sandbox has no isolation platform at all, since
+/// retrying can never succeed in that case.
+pub(crate) fn is_retryable(error: &TaskGitCredentialsError) -> bool {
+    match error {
+        TaskGitCredentialsError::Platform { info, .. } => info.retryable,
+        TaskGitCredentialsError::Request(error) => !error
+            .downcast_ref::<IsolationPlatformError>()
+            .is_some_and(|error| {
+                matches!(error, IsolationPlatformError::NoIsolationPlatformDetected)
+            }),
+        TaskGitCredentialsError::Unstructured { .. } => false,
+    }
+}
+
+/// Fails fast with `NoIsolationPlatformDetected` when no workload token can
+/// plausibly be issued, instead of waiting for the request to fail
+/// asynchronously. This accepts both a detected platform with its own
+/// issuance mechanism and a platform-agnostic token configured via
+/// `WARP_WORKLOAD_TOKEN`, matching `issue_workload_token`'s own resolution,
+/// so it only short-circuits attempts that are guaranteed to fail.
+pub(crate) fn ensure_workload_token_available() -> Result<(), TaskGitCredentialsError> {
+    if !warp_isolation_platform::workload_token_available() {
+        return Err(TaskGitCredentialsError::Request(
+            IsolationPlatformError::NoIsolationPlatformDetected.into(),
+        ));
+    }
+    Ok(())
+}
+
 fn home_dir() -> Result<PathBuf> {
-    dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))
+    let home = if cfg!(windows) {
+        git_home_dir(|key| std::env::var_os(key))
+    } else {
+        None
+    };
+    home.or_else(dirs::home_dir)
+        .ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))
+}
+
+/// Resolves `~` the way git does on Windows: from the environment, not from the profile of the
+/// account the process runs as. The credential files must land where git's `store` helper reads
+/// them, and `dirs::home_dir` disagrees with git when a process running as SYSTEM carries another
+/// user's `USERPROFILE`.
+fn git_home_dir(get_env: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    let non_empty = |key: &str| get_env(key).filter(|value| !value.is_empty());
+    if let Some(home) = non_empty("HOME") {
+        return Some(PathBuf::from(home));
+    }
+    if let (Some(drive), Some(path)) = (non_empty("HOMEDRIVE"), non_empty("HOMEPATH")) {
+        let mut combined = drive;
+        combined.push(path);
+        let combined = PathBuf::from(combined);
+        if combined.is_dir() {
+            return Some(combined);
+        }
+    }
+    non_empty("USERPROFILE").map(PathBuf::from)
 }
 
 /// Write `content` to `path` using owner-only (0600) permissions.
@@ -348,7 +419,35 @@ fn write_git_credentials_file(credentials: &[GitCredential]) -> Result<()> {
     Ok(())
 }
 
-/// Write `~/.config/gh/hosts.yml` so the `gh` CLI is authenticated.
+/// The directory `gh` reads its config from, in `gh`'s own precedence order. On Windows `gh`
+/// ignores `~/.config/gh` whenever `APPDATA` is set.
+fn gh_config_dir(home: &Path) -> PathBuf {
+    resolve_gh_config_dir(home, cfg!(windows), |key| std::env::var_os(key))
+}
+
+fn resolve_gh_config_dir(
+    home: &Path,
+    is_windows: bool,
+    get_env: impl Fn(&str) -> Option<OsString>,
+) -> PathBuf {
+    let non_empty = |key: &str| {
+        get_env(key)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    };
+    if let Some(dir) = non_empty("GH_CONFIG_DIR") {
+        return dir;
+    }
+    if let Some(dir) = non_empty("XDG_CONFIG_HOME") {
+        return dir.join("gh");
+    }
+    if is_windows && let Some(app_data) = non_empty("APPDATA") {
+        return app_data.join("GitHub CLI");
+    }
+    home.join(".config").join("gh")
+}
+
+/// Write `hosts.yml` into `gh_config_dir` so the `gh` CLI is authenticated.
 ///
 /// The YAML format is stable for `gh` v2+:
 /// ```yaml
@@ -359,7 +458,7 @@ fn write_git_credentials_file(credentials: &[GitCredential]) -> Result<()> {
 /// ```
 ///
 /// The write is atomic: a temporary file is written then renamed.
-fn write_gh_hosts_yml(credentials: &[GitCredential], home: &std::path::Path) -> Result<()> {
+fn write_gh_hosts_yml(credentials: &[GitCredential], gh_config_dir: &Path) -> Result<()> {
     let github_credentials = credentials
         .iter()
         .filter(|credential| credential.host == GITHUB_HOST)
@@ -367,8 +466,7 @@ fn write_gh_hosts_yml(credentials: &[GitCredential], home: &std::path::Path) -> 
     if github_credentials.is_empty() {
         return Ok(());
     }
-    let gh_config_dir = home.join(".config").join("gh");
-    std::fs::create_dir_all(&gh_config_dir)
+    std::fs::create_dir_all(gh_config_dir)
         .with_context(|| format!("Failed to create {}", gh_config_dir.display()))?;
     let path = gh_config_dir.join(GH_HOSTS_FILENAME);
     let tmp_path = gh_config_dir.join(format!("{GH_HOSTS_FILENAME}.tmp"));
@@ -488,7 +586,7 @@ pub(crate) fn write_git_credentials_with_failures(
     let home = home_dir()?;
     let outcomes = [
         write_git_credentials_file(credentials),
-        write_gh_hosts_yml(credentials, &home),
+        write_gh_hosts_yml(credentials, &gh_config_dir(&home)),
         write_glab_config(credentials, &home),
         write_azure_cli_auth(credentials, &home),
     ];
@@ -651,14 +749,112 @@ fn recorded_identity_for_host(host: &str) -> Option<(String, String)> {
     Some((matched.name.clone(), matched.email.clone()))
 }
 
-/// Write `user.name`/`user.email` into one repository's local git config,
+/// Write `user.name`/`user.email` into one repository's LOCAL git config,
 /// selecting the identity of the forge that hosts it.
-pub(crate) fn configure_repository_git_identity(repository_dir: &std::path::Path, host: &str) {
+///
+/// Repo-local config always wins over `--global` config, so most callers want
+/// [`configure_repository_git_identity_if_unset`] instead, which only applies
+/// this when nothing has already claimed the repo's identity. Calling this
+/// unconditionally would permanently defeat a later `--global` override, such
+/// as a customer's own setup command.
+fn configure_repository_git_identity(repository_dir: &std::path::Path, host: &str) {
     let Some((name, email)) = recorded_identity_for_host(host) else {
         return;
     };
     run_repository_git_config(repository_dir, "user.name", &name);
     run_repository_git_config(repository_dir, "user.email", &email);
+}
+
+/// Where to read a git identity from: either the process-wide `--global`
+/// config, or a specific repository's effective config (local over global
+/// over system, exactly as git resolves it for a commit there).
+///
+/// `--global` is an option to the `config` subcommand, while `-C` is a
+/// top-level git option that must come *before* the subcommand, so the two
+/// scopes need different argument placement — this exists to keep that
+/// placement correct in one place rather than repeated at call sites.
+enum GitIdentityScope<'a> {
+    Global,
+    Repository(&'a std::path::Path),
+}
+
+/// Reads a single git config key with `--get` from `scope`. Returns `None` if
+/// the key is unset or the invocation fails.
+fn read_git_config(scope: &GitIdentityScope, key: &str) -> Option<String> {
+    let output = match scope {
+        GitIdentityScope::Global => BlockingCommand::new("git")
+            .args(["config", "--global", "--get", key])
+            .output(),
+        GitIdentityScope::Repository(dir) => {
+            let dir = dir.to_string_lossy();
+            BlockingCommand::new("git")
+                .args(["-C", dir.as_ref(), "config", "--get", key])
+                .output()
+        }
+    }
+    .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!value.is_empty()).then_some(value)
+}
+
+/// The `user.name`/`user.email` pair currently in effect at `scope` (see
+/// [`read_git_config`]). `None` unless both are set.
+fn read_git_identity(scope: &GitIdentityScope) -> Option<(String, String)> {
+    let name = read_git_config(scope, "user.name")?;
+    let email = read_git_config(scope, "user.email")?;
+    Some((name, email))
+}
+
+/// The process-wide git identity right now. Intended to be snapshotted once,
+/// right after bootstrap (before any repo is cloned or any setup command
+/// runs), as the `baseline` for [`configure_repository_git_identity_if_unset`].
+pub(crate) fn global_git_identity() -> Option<(String, String)> {
+    read_git_identity(&GitIdentityScope::Global)
+}
+
+/// The git identity currently in effect for `repository_dir` (local over
+/// global over system, exactly as git itself resolves it for a commit there).
+fn repository_git_identity(repository_dir: &std::path::Path) -> Option<(String, String)> {
+    read_git_identity(&GitIdentityScope::Repository(repository_dir))
+}
+
+/// Reports whether `repository_dir`'s effective identity differs from
+/// `baseline`, meaning something — a customer's setup command, a repo-local
+/// config the agent ran itself, etc. — has already claimed an identity for
+/// this repo since `baseline` was captured.
+fn repository_identity_changed_since(
+    repository_dir: &std::path::Path,
+    baseline: Option<(String, String)>,
+) -> bool {
+    repository_git_identity(repository_dir) != baseline
+}
+
+/// Write `user.name`/`user.email` into one repository's LOCAL git config from
+/// the recorded identity for `host` — but only if nothing has changed the
+/// repo's effective identity away from `baseline` since it was captured.
+///
+/// This is how a forge-specific identity reaches a repo in a mixed-forge
+/// sandbox without permanently overriding a customer's own git identity:
+/// repo-local config always wins over `--global` config regardless of write
+/// order, so this can only safely run *after* setup commands (or anything
+/// else that might configure git identity) have had their chance, comparing
+/// against a `baseline` captured before any of that ran (see
+/// [`global_git_identity`]). A repo the customer's setup command already gave
+/// its own identity — globally, or locally for just that repo — is left
+/// alone; every other repo falls back to the forge-appropriate identity Warp
+/// resolved at bootstrap.
+pub(crate) fn configure_repository_git_identity_if_unset(
+    repository_dir: &std::path::Path,
+    host: &str,
+    baseline: Option<(String, String)>,
+) {
+    if repository_identity_changed_since(repository_dir, baseline) {
+        return;
+    }
+    configure_repository_git_identity(repository_dir, host);
 }
 
 fn run_repository_git_config(repository_dir: &std::path::Path, key: &str, value: &str) {
@@ -701,28 +897,45 @@ fn apply_refreshed_credentials(response: TaskGitCredentialsResponse) -> Result<b
     Ok(response.failed_hosts.is_empty())
 }
 
-/// Perform one git credentials refresh attempt.
+/// Perform one git credentials refresh attempt: fetch fresh credentials from
+/// the server and overwrite the local credential files.
 ///
-/// Returns `Ok(true)` when every applicable forge refreshed, and `Ok(false)`
-/// when some refreshed and others failed. Returns `Err` when the workload-token
-/// issuance, the server call, or the local credential write fails.
+/// Returns `Ok(())` on success (including when the server returns no
+/// credentials, in which case the on-disk files are left untouched). Returns
+/// `Err` when the workload-token issuance, the server API call, or the
+/// credential-file write fails — these are transient failures worth retrying.
 #[tracing::instrument(name = "git_credentials::try_refresh", skip_all, err, fields(
     tags.cloud_agent = true,
     task_id,
 ))]
-async fn try_refresh(task_id: &str, ai_client: &Arc<dyn AIClient>) -> Result<bool> {
+async fn try_refresh(
+    task_id: &str,
+    ai_client: &Arc<dyn AIClient>,
+    use_factory_repositories: bool,
+) -> Result<(), TaskGitCredentialsError> {
+    ensure_workload_token_available()?;
     let workload_token =
         warp_isolation_platform::issue_workload_token(Some(Duration::from_secs(5 * 60)))
             .await
-            .context("Failed to issue workload token for git credentials refresh")?
+            .map_err(|error| TaskGitCredentialsError::Request(error.into()))?
             .token;
 
     let response = ai_client
-        .get_task_git_credentials(task_id.to_string(), workload_token, true)
-        .await
-        .context("Failed to fetch git credentials from server")?;
+        .get_task_git_credentials(
+            task_id.to_string(),
+            workload_token,
+            true,
+            use_factory_repositories,
+        )
+        .await?;
 
-    apply_refreshed_credentials(response)
+    if apply_refreshed_credentials(response).map_err(TaskGitCredentialsError::Request)? {
+        Ok(())
+    } else {
+        Err(TaskGitCredentialsError::Request(anyhow::anyhow!(
+            "Git credentials remained stale for some forges"
+        )))
+    }
 }
 
 /// Infinite async loop that refreshes git credentials every
@@ -731,8 +944,8 @@ async fn try_refresh(task_id: &str, ai_client: &Arc<dyn AIClient>) -> Result<boo
 /// On each iteration:
 /// 1. Issue a short-lived workload token.
 /// 2. Call `taskGitCredentials` to get a fresh token from the server.
-/// 3. Overwrite `~/.git-credentials` and refresh GitHub credentials in
-///    `~/.config/gh/hosts.yml`.
+/// 3. Overwrite `~/.git-credentials` and refresh GitHub credentials in the
+///    `gh` `hosts.yml`.
 ///
 /// On transient failure, the refresh is retried up to three times with
 /// exponential backoff (1 min, 2 min, 4 min), keeping all retries within the
@@ -743,59 +956,32 @@ async fn try_refresh(task_id: &str, ai_client: &Arc<dyn AIClient>) -> Result<boo
 /// This future never resolves — it is designed to be raced with the harness
 /// execution future via `futures::select!` and dropped when the harness
 /// completes.
-pub(crate) async fn refresh_loop(task_id: String, ai_client: Arc<dyn AIClient>) {
+pub(crate) async fn refresh_loop(
+    task_id: String,
+    ai_client: Arc<dyn AIClient>,
+    use_factory_repositories: bool,
+) {
     loop {
         warpui::r#async::Timer::after(GIT_CREDENTIALS_REFRESH_INTERVAL).await;
 
         log::info!("Refreshing git credentials for task {task_id}");
 
-        let backoff_delays = [
-            Duration::from_secs(60),
-            Duration::from_secs(2 * 60),
-            Duration::from_secs(4 * 60),
-        ];
-        let mut attempt = 0usize;
-        loop {
-            match try_refresh(&task_id, &ai_client).await {
-                Ok(true) => break,
-                Ok(false) if attempt < backoff_delays.len() => {
-                    let delay = backoff_delays[attempt];
-                    log::warn!(
-                        "Git credentials refreshed for some forges but not others (attempt {}); \
-                         retrying the remaining ones in {}s",
-                        attempt + 1,
-                        delay.as_secs()
-                    );
-                    warpui::r#async::Timer::after(delay).await;
-                    attempt += 1;
-                }
-                Ok(false) => {
-                    log::warn!(
-                        "Git credentials still stale for some forges after {} attempts; \
-                         those forges may lose access before the next refresh cycle",
-                        attempt + 1
-                    );
-                    break;
-                }
-                Err(e) if attempt < backoff_delays.len() => {
-                    let delay = backoff_delays[attempt];
-                    log::warn!(
-                        "Git credentials refresh failed (attempt {}): {e:#}; retrying in {}s",
-                        attempt + 1,
-                        delay.as_secs()
-                    );
-                    warpui::r#async::Timer::after(delay).await;
-                    attempt += 1;
-                }
-                Err(e) => {
-                    log::warn!(
-                        "Git credentials refresh failed after {} attempts: {e:#}; \
-                         credentials may expire before next refresh cycle",
-                        attempt + 1
-                    );
-                    break;
-                }
-            }
+        if with_retry(
+            "Git credentials refresh",
+            || try_refresh(&task_id, &ai_client, use_factory_repositories),
+            is_retryable,
+            |delay| async move {
+                warpui::r#async::Timer::after(delay).await;
+            },
+            |attempts_made| GIT_CREDENTIALS_REFRESH_BACKOFF.get(attempts_made).copied(),
+        )
+        .await
+        .is_err()
+        {
+            log::warn!(
+                "Git credentials refresh stopped after a non-retryable error or exhausted \
+                 retries; credentials may expire before the next refresh cycle"
+            );
         }
     }
 }

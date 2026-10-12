@@ -32,10 +32,10 @@ use crate::ai::agent::todos::AIAgentTodoList;
 use crate::ai::agent::{
     AIAgentActionResult, AIAgentActionResultType, AIAgentContext, AIAgentExchange,
     AIAgentExchangeId, AIAgentInput, AIAgentOutput, AIAgentOutputMessage, AIAgentOutputStatus,
-    CallMCPToolResult, CancellationReason, CloneRepositoryURL, CreateDocumentsResult,
-    DocumentContext, EditDocumentsResult, FileContext, FileGlobResult, FileGlobV2Match,
-    FileGlobV2Result, FinishedAIAgentOutput, GrepFileMatch, GrepLineMatch, GrepResult,
-    ImageContext, InsertReviewCommentsResult, OutputModelInfo, PassiveCodeDiffEntry,
+    BaseUserQuery, CallMCPToolResult, CancellationReason, CloneRepositoryURL,
+    CreateDocumentsResult, DocumentContext, EditDocumentsResult, FileContext, FileGlobResult,
+    FileGlobV2Match, FileGlobV2Result, FinishedAIAgentOutput, GrepFileMatch, GrepLineMatch,
+    GrepResult, ImageContext, InsertReviewCommentsResult, OutputModelInfo, PassiveCodeDiffEntry,
     PassiveSuggestionResultType, PassiveSuggestionTrigger, ReadDocumentsResult,
     ReadFilesFailedFile, ReadFilesResult, ReadMCPResourceResult, ReadShellCommandOutputResult,
     RequestCommandOutputResult, RequestFileEditsResult, SearchCodebaseFailureReason,
@@ -90,6 +90,7 @@ pub fn convert_conversation_data_to_ai_conversation(
             autoexecute_override: None,
             last_event_sequence: None,
             pinned: false,
+            use_warp_credits_instead_of_chatgpt: false,
         },
         RestorationMode::Continue => AgentConversationData {
             server_conversation_token: Some(
@@ -111,6 +112,7 @@ pub fn convert_conversation_data_to_ai_conversation(
             autoexecute_override: None,
             last_event_sequence: None,
             pinned: false,
+            use_warp_credits_instead_of_chatgpt: false,
         },
     };
 
@@ -393,6 +395,7 @@ impl ConvertToExchanges for &api::Task {
                         user_query_mode: convert_user_query_mode(user_query.mode.as_ref()),
                         running_command: None,
                         intended_agent: Some(user_query.intended_agent()),
+                        base: BaseUserQuery::from_message(user_query),
                     });
                     true
                 }
@@ -411,6 +414,7 @@ impl ConvertToExchanges for &api::Task {
                                 user_query_mode: UserQueryMode::default(), // SystemQuery doesn't have mode field
                                 running_command: None,
                                 intended_agent: None,
+                                base: None,
                             });
                             true
                         }
@@ -473,6 +477,7 @@ impl ConvertToExchanges for &api::Task {
                                 .user_query
                                 .clone()
                                 .map(|user_query| crate::ai::agent::InvokeSkillUserQuery {
+                                    base: BaseUserQuery::from_message(&user_query),
                                     query: user_query.query,
                                     // Restored conversations currently do not hydrate invoke-skill
                                     // inline attachments back into client-side attachment structs.
@@ -519,7 +524,8 @@ impl ConvertToExchanges for &api::Task {
                 | api::message::Message::ArtifactEvent(_)
                 | api::message::Message::MessagesReceivedFromAgents(_)
                 | api::message::Message::ModelUsed(_)
-                | api::message::Message::OrchestrationConfigSnapshot(_) => false,
+                | api::message::Message::OrchestrationConfigSnapshot(_)
+                | api::message::Message::RequestMetadata(_) => false,
             };
 
             if !added_message_as_exchange_input
@@ -607,6 +613,12 @@ pub(crate) fn convert_tool_call_result_to_input(
                     is_alt_screen_active: snapshot.is_alt_screen_active,
                     activity: snapshot.activity.as_ref().map(Into::into),
                 },
+                Some(api::run_shell_command_result::Result::TerminalBusy(busy)) => {
+                    RequestCommandOutputResult::TerminalBusy {
+                        command: result.command.clone(),
+                        block_id: busy.running_command_id.clone().into(),
+                    }
+                }
                 Some(api::run_shell_command_result::Result::PermissionDenied(
                     api::PermissionDenied { .. },
                 ))
@@ -972,10 +984,10 @@ pub(crate) fn convert_tool_call_result_to_input(
                         .map(|api_result| match &api_result.result {
                             Some(api::call_mcp_tool_result::success::result::Result::Text(
                                 text,
-                            )) => rmcp::model::Content::text(text.text.clone()),
+                            )) => rmcp::model::ContentBlock::text(text.text.clone()),
                             Some(api::call_mcp_tool_result::success::result::Result::Image(
                                 image,
-                            )) => rmcp::model::Content::image(
+                            )) => rmcp::model::ContentBlock::image(
                                 String::from_utf8_lossy(&image.data).to_string(),
                                 image.mime_type.clone(),
                             ),
@@ -983,7 +995,7 @@ pub(crate) fn convert_tool_call_result_to_input(
                                 resource,
                             )) => match &resource.content_type {
                                 Some(api::mcp_resource_content::ContentType::Text(text)) => {
-                                    rmcp::model::Content::resource(
+                                    rmcp::model::ContentBlock::resource(
                                         rmcp::model::ResourceContents::text(
                                             text.content.clone(),
                                             resource.uri.clone(),
@@ -991,7 +1003,7 @@ pub(crate) fn convert_tool_call_result_to_input(
                                     )
                                 }
                                 Some(api::mcp_resource_content::ContentType::Binary(binary)) => {
-                                    rmcp::model::Content::resource(
+                                    rmcp::model::ContentBlock::resource(
                                         rmcp::model::ResourceContents::BlobResourceContents {
                                             uri: resource.uri.clone(),
                                             mime_type: Some(binary.mime_type.clone()),
@@ -1000,14 +1012,14 @@ pub(crate) fn convert_tool_call_result_to_input(
                                         },
                                     )
                                 }
-                                None => rmcp::model::Content::resource(
+                                None => rmcp::model::ContentBlock::resource(
                                     rmcp::model::ResourceContents::text(
                                         String::new(),
                                         resource.uri.clone(),
                                     ),
                                 ),
                             },
-                            None => rmcp::model::Content::text(String::new()),
+                            None => rmcp::model::ContentBlock::text(String::new()),
                         })
                         .collect();
 
@@ -1929,15 +1941,18 @@ fn create_exchange_from_messages(
                 _ => None,
             })
         })
-        // Fall back to any timestamp from the messages in this exchange
+        // Fall back to the earliest message timestamp in this exchange
         .or_else(|| {
-            message_ids.iter().find_map(|message_id| {
-                message_map.get(message_id.as_str()).and_then(|message| {
-                    message.timestamp.as_ref().map(|timestamp| {
-                        proto_timestamp_to_local_datetime(timestamp.seconds, timestamp.nanos)
+            message_ids
+                .iter()
+                .filter_map(|message_id| {
+                    message_map.get(message_id.as_str()).and_then(|message| {
+                        message.timestamp.as_ref().map(|timestamp| {
+                            proto_timestamp_to_local_datetime(timestamp.seconds, timestamp.nanos)
+                        })
                     })
                 })
-            })
+                .min()
         })
         .unwrap_or_default();
 
@@ -2081,7 +2096,8 @@ where
                 | api::message::Message::UpdateTodos(_)
                 | api::message::Message::MessagesReceivedFromAgents(_)
                 | api::message::Message::EventsFromAgents(_)
-                | api::message::Message::PassiveSuggestionResult(_) => None,
+                | api::message::Message::PassiveSuggestionResult(_)
+                | api::message::Message::RequestMetadata(_) => None,
                 // Anything else is considered agent/stream activity we want to measure
                 api::message::Message::AgentOutput(_)
                 | api::message::Message::AgentReasoning(_)

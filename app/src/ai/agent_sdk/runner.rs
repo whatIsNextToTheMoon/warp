@@ -300,7 +300,7 @@ fn confirm_delete(uid: &str, is_terminal: bool) -> Result<bool> {
 }
 
 /// Resolve a runner by UID or (unambiguous) name from a fetched list.
-fn resolve_runner<'a>(
+pub(super) fn resolve_runner<'a>(
     runners: &'a [Runner],
     id: Option<&str>,
     name: Option<&str>,
@@ -341,6 +341,7 @@ fn build_create_input(args: CreateRunnerArgs, owner: GqlOwner) -> UpsertRunnerIn
                 version: args.macos_version.map(macos_version_to_gql),
             }),
         ),
+        RunnerOsArg::Windows => (None, None),
     };
 
     let instance_shape = match (args.vcpus, args.memory_gb) {
@@ -379,6 +380,8 @@ fn build_update_input(args: &UpdateRunnerArgs, existing: &RunnerConfig) -> Resul
     let effective_os_arg = match effective_os {
         RunnerOs::Linux => RunnerOsArg::Linux,
         RunnerOs::Macos => RunnerOsArg::Macos,
+        RunnerOs::Windows => RunnerOsArg::Windows,
+        RunnerOs::Unknown => return Err(unrecognized_runner_value_error("OS")),
     };
     validate_os_config(
         effective_os_arg,
@@ -403,8 +406,12 @@ fn build_update_input(args: &UpdateRunnerArgs, existing: &RunnerConfig) -> Resul
                 .macos_version
                 .map(macos_version_to_gql)
                 .or_else(|| existing.mac.as_ref().and_then(|m| m.version));
+            if version == Some(RunnerMacOsVersion::Unknown) {
+                return Err(unrecognized_runner_value_error("macOS version"));
+            }
             (None, Some(MacOsConfigInput { version }))
         }
+        RunnerOs::Windows | RunnerOs::Unknown => (None, None),
     };
 
     // vCPUs and memory can be updated independently; each unspecified dimension
@@ -427,6 +434,10 @@ fn build_update_input(args: &UpdateRunnerArgs, existing: &RunnerConfig) -> Resul
         .clone()
         .or_else(|| existing.description.clone());
 
+    if args.arch.is_none() && existing.arch == RunnerArch::Unknown {
+        return Err(unrecognized_runner_value_error("architecture"));
+    }
+
     Ok(RunnerInput {
         name: resolve_updated_name(args.id.is_some(), args.name.as_deref(), &existing.name),
         description,
@@ -440,6 +451,13 @@ fn build_update_input(args: &UpdateRunnerArgs, existing: &RunnerConfig) -> Resul
         mac,
         linux,
     })
+}
+
+fn unrecognized_runner_value_error(field: &str) -> anyhow::Error {
+    anyhow!(
+        "This runner's {field} isn't recognized by this version of the CLI, so it can't be \
+         updated without setting {field} explicitly. Update Warp to manage this runner."
+    )
 }
 
 /// Determine the runner's name for an update. A UID identifies the runner
@@ -477,12 +495,13 @@ fn os_to_gql(os: RunnerOsArg) -> RunnerOs {
     match os {
         RunnerOsArg::Linux => RunnerOs::Linux,
         RunnerOsArg::Macos => RunnerOs::Macos,
+        RunnerOsArg::Windows => RunnerOs::Windows,
     }
 }
 
 /// Resolve a [`RunnerArchArg`] into a concrete [`RunnerArch`], mapping `auto`
-/// to the default architecture for the given OS (x86-64 on Linux, aarch64 on
-/// macOS).
+/// to the default architecture for the given OS (x86-64 on Linux and Windows,
+/// aarch64 on macOS).
 fn resolve_arch(arch: RunnerArchArg, os: RunnerOsArg) -> RunnerArch {
     match arch {
         RunnerArchArg::X8664 => RunnerArch::X8664,
@@ -490,6 +509,7 @@ fn resolve_arch(arch: RunnerArchArg, os: RunnerOsArg) -> RunnerArch {
         RunnerArchArg::Auto => match os {
             RunnerOsArg::Linux => RunnerArch::X8664,
             RunnerOsArg::Macos => RunnerArch::Aarch64,
+            RunnerOsArg::Windows => RunnerArch::X8664,
         },
     }
 }

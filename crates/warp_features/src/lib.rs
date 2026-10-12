@@ -594,6 +594,11 @@ pub enum FeatureFlag {
     /// Enables video recording of computer-use sessions for cloud agents.
     VideoRecording,
 
+    /// Gates the Windows `gdigrab` recorder behind its own switch, on top of
+    /// [`FeatureFlag::VideoRecording`]. Windows capture is newer and less proven than the
+    /// macOS/Linux ffmpeg paths, so it rolls out and can be killed independently of them.
+    WindowsVideoRecording,
+
     /// Enables team API key creation in the API key management UI.
     TeamApiKeys,
 
@@ -711,23 +716,12 @@ pub enum FeatureFlag {
     /// flows while the default behavior temporarily keeps them disabled.
     LocalClaudeCodexChildHarnesses,
 
-    /// On `wait_for_events`, confirms parent status against the server and
-    /// registers an orchestrator for the owner-side ancestor stream so it
-    /// receives events for children created out-of-band (Oz CLI / web API).
-    WaitForEventsParentRegistration,
-
     /// Gates the client-side multi-level orchestration surfaces: child
     /// conversations auto-executing their own `run_agents` calls and the
     /// confirmation-card disclosure that launched agents may start
     /// children of their own. When disabled, a child's `run_agents` call
     /// fails gracefully instead of presenting a card in a hidden pane.
     MultiLevelOrchestration,
-
-    /// Gates the unified orchestration child-tracking stack: a single
-    /// `OrchestrationChildTracker` as the sole entry point for child state,
-    /// one `include_self` ancestor SSE per parent family, and a single
-    /// `is_remote_child` placeholder flavor for both owner and viewer.
-    OrchestrationUnifiedStack,
 
     /// Shows a pending user query indicator during summarization when a follow-up
     /// prompt is queued via `/fork-and-compact` or `/compact-and`.
@@ -770,6 +764,11 @@ pub enum FeatureFlag {
     /// Enables the `--harness` flag for `oz agent run`, allowing external agent
     /// CLIs (e.g. `claude`) to execute prompts instead of Warp's agent harness.
     AgentHarness,
+
+    /// Enables the `--harness-transport acp` flag for `oz agent run`, which drives a third-party
+    /// harness over the Agent Client Protocol instead of as an interactive CLI in the terminal
+    /// session.
+    AcpHarness,
 
     /// Enables workspace- and block-snapshot handoff between cloud agent runs
     /// and the local Warp client.
@@ -865,6 +864,10 @@ pub enum FeatureFlag {
     /// selector is replaced with "Agent" and users can pick which agent
     /// identity the key authenticates as.
     NamedAgents,
+    /// Loads server-owned execution settings for paired cloud agent launches.
+    CloudAgentExecutionConfig,
+    /// Enables on-demand Factory repository checkouts and their credential scope.
+    FactoryDeferredRepositories,
     /// Gates the driver behavior that writes GitHub credentials to disk
     /// (`~/.git-credentials`, `~/.config/gh/hosts.yaml`) and runs the
     /// background refresh loop that keeps them fresh during a task run.
@@ -893,6 +896,10 @@ pub enum FeatureFlag {
     /// connect a Grok subscription instead of pasting an API key.
     SuperGrok,
 
+    /// Gates connecting a ChatGPT subscription via Sign in with ChatGPT.
+    /// Account linking is server-side (iss+client_id+sub), not local tokens.
+    ChatGPTSubscription,
+
     /// Gates Gemini Enterprise (GEAP) BYOLLM, which lets users
     /// route eliglible models to GEAP instead of Warp-managed inference.
     GeminiEnterprise,
@@ -910,6 +917,9 @@ pub enum FeatureFlag {
 
     /// Enables state-mutating recovery for abnormal terminal lifecycle sequences.
     TerminalLifecycleRecovery,
+
+    /// Recovers native cloud agent commands that terminate their persistent shell.
+    CloudAgentShellRespawn,
 
     /// Shows a warning in the agent view when the active conversation's
     /// provider-side prompt cache has expired.
@@ -950,22 +960,10 @@ pub enum FeatureFlag {
     /// setup or API key required.
     FactoryMcp,
 
-    /// Gates client-side display of the real dollar cost (from `RequestCost.cost_in_cents`)
-    /// alongside credits in the GUI footer and TUI. Mirrors the server-side
-    /// `PricingTransparencyEnabled` flag in warp-server, but is a fully independent
-    /// flag — the two do not sync automatically. Consolidated from the former
-    /// `TuiCostTransparency` flag: when enabled (dogfood/staging and local/dev
-    /// builds), the TUI footer usage entry follows the persisted
-    /// `agents.usage_display_mode` setting and is click-to-toggleable between
-    /// credits and dollars; when disabled (prod/stable), it falls back to a
-    /// static, non-interactive credits total. Will also gate the GUI footer's
-    /// dollar display once that's built.
-    PricingTransparency,
-
     /// Enables periodic workspace-handoff checkpoints during a cloud agent run,
     /// rather than only uploading a workspace snapshot once at end-of-run.
     /// Requires `OzHandoff` to also be enabled; a no-op for local runs and when
-    /// `--no-snapshot` is set. Off by default while the coordinator rolls out.
+    /// `--no-snapshot` is set.
     PeriodicHandoffCheckpoints,
 
     /// Observes Ctrl-C (`0x03`) written on the shared-session viewer input
@@ -995,6 +993,11 @@ pub enum FeatureFlag {
     /// replace inline computer-use screenshot bytes with references to
     /// Warp-managed object storage.
     StoredScreenshots,
+
+    /// Lets cloud agent environment checkouts build repositories from bare git
+    /// mirrors kept in the persistent build cache instead of cloning each one
+    /// from the remote. Disabling it restores direct, network-only checkouts.
+    GitMirrorCache,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -1014,7 +1017,10 @@ static FEATURES_INITIALIZED: AtomicBool = AtomicBool::new(false);
 /// Features used in debugging.
 pub const DEBUG_FLAGS: &[FeatureFlag] = &[FeatureFlag::DebugMode, FeatureFlag::RuntimeFeatureFlags];
 /// Features enabled only for the WarpLocal developer build.
-pub const LOCAL_FLAGS: &[FeatureFlag] = &[FeatureFlag::LocalClaudeCodexChildHarnesses];
+pub const LOCAL_FLAGS: &[FeatureFlag] = &[
+    FeatureFlag::LocalClaudeCodexChildHarnesses,
+    FeatureFlag::AcpHarness,
+];
 
 /// Features enabled for the development team.  The expectation is that, over
 /// time, these will move on to PREVIEW_FLAGS before being launched.
@@ -1042,6 +1048,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::SummarizationViaMessageReplacement,
     FeatureFlag::LocalComputerUse,
     FeatureFlag::VideoRecording,
+    FeatureFlag::WindowsVideoRecording,
     FeatureFlag::OzLaunchModal,
     // These are enabled via 100% experiment on prod warp-server,
     // but we need to enable here for dogfood builds.
@@ -1059,7 +1066,6 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::SshRemoteServer,
     FeatureFlag::RemoteCodebaseIndexing,
     FeatureFlag::GPTConfigurableContextWindow,
-    FeatureFlag::RestorePromptOnInlineModelSelectorSearch,
     FeatureFlag::WarpControlCli,
     FeatureFlag::TerminalLifecycleRecovery,
     FeatureFlag::PromptCacheExpiryWarning,
@@ -1067,21 +1073,18 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::MultiLevelOrchestration,
     FeatureFlag::McpJsonTreeView,
     FeatureFlag::BoxDrawingGlyphs,
-    FeatureFlag::PricingTransparency,
-    FeatureFlag::PeriodicHandoffCheckpoints,
     FeatureFlag::CtrlCCancelsThirdPartyHarness,
     FeatureFlag::WarpingModelName,
     FeatureFlag::LrcActivitySignal,
     FeatureFlag::StoredScreenshots,
+    FeatureFlag::GitMirrorCache,
+    FeatureFlag::CloudAgentExecutionConfig,
+    FeatureFlag::FactoryDeferredRepositories,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
 /// All PREVIEW_FLAGS are also automatically added to dogfood builds (WarpDev).
-pub const PREVIEW_FLAGS: &[FeatureFlag] = &[
-    FeatureFlag::NativeShellCompletions,
-    FeatureFlag::ShellWidgetHandoff,
-    FeatureFlag::HistorySearchRankingV2,
-];
+pub const PREVIEW_FLAGS: &[FeatureFlag] = &[];
 
 /// Features enabled for all release builds (i.e.: everything but WarpLocal).
 /// NOTE: if you are promoting a feature from Preview to launch, you'll likely
@@ -1090,7 +1093,9 @@ pub const RELEASE_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::Autoupdate,
     FeatureFlag::Changelog,
     FeatureFlag::CrashReporting,
+    FeatureFlag::PeriodicHandoffCheckpoints,
     FeatureFlag::VideoRecording,
+    FeatureFlag::WindowsVideoRecording,
     FeatureFlag::ImeMarkedText,
     // Remote server binary is not yet supported on Windows.
     #[cfg(not(windows))]

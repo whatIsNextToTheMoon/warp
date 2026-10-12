@@ -48,6 +48,7 @@ use crate::util::bindings::{self, is_binding_pty_compliant};
 use crate::util::traffic_lights::{TrafficLightData, TrafficLightMouseStates, traffic_light_data};
 use crate::view_components::DismissibleToast;
 use crate::window_settings::WindowSettings;
+use crate::workspace::OneTimeModalModel;
 use crate::workspace::WorkspaceAction;
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
@@ -126,6 +127,13 @@ pub(crate) fn unthemed_window_border() -> Border {
     } else {
         Border::all(1.).with_border_fill(Fill::black().with_opacity(0))
     }
+}
+
+fn notify_workspace_shown(ctx: &mut ViewContext<RootView>) {
+    let window_id = ctx.window_id();
+    OneTimeModalModel::handle(ctx).update(ctx, |model, ctx| {
+        model.on_workspace_shown(window_id, ctx);
+    });
 }
 
 #[derive(Debug, Clone)]
@@ -609,7 +617,7 @@ pub fn create_transferred_window(
             window_bounds,
             title: Some(WINDOW_TITLE.to_owned()),
             background_blur_radius_pixels: Some(*window_settings.background_blur_radius),
-            background_blur_texture: *window_settings.background_blur_texture,
+            background_backdrop: *window_settings.background_backdrop,
             on_gpu_driver_selected: on_gpu_driver_selected_callback(),
             ..Default::default()
         },
@@ -672,11 +680,11 @@ fn open_from_restored(arg: &OpenFromRestoredArg, ctx: &mut AppContext) {
     if let Some(app_state) = &arg.app_state {
         maybe_register_global_window_shortcuts(global_resource_handles.clone(), ctx);
 
-        let (background_blur_radius_pixels, background_blur_texture) = {
+        let (background_blur_radius_pixels, background_backdrop) = {
             let window_settings = WindowSettings::as_ref(ctx);
             (
                 Some(*window_settings.background_blur_radius),
-                *window_settings.background_blur_texture,
+                *window_settings.background_backdrop,
             )
         };
 
@@ -708,7 +716,7 @@ fn open_from_restored(arg: &OpenFromRestoredArg, ctx: &mut AppContext) {
                             title: Some("Warp".to_owned()),
                             fullscreen_state: window.fullscreen_state,
                             background_blur_radius_pixels,
-                            background_blur_texture,
+                            background_backdrop,
                             // Don't use the quake window for positioning new windows.
                             anchor_new_windows_from_closed_position:
                                 NextNewWindowsHasThisWindowsBoundsUponClose::No,
@@ -751,7 +759,7 @@ fn open_from_restored(arg: &OpenFromRestoredArg, ctx: &mut AppContext) {
                                 title: Some("Warp".to_owned()),
                                 fullscreen_state: window.fullscreen_state,
                                 background_blur_radius_pixels,
-                                background_blur_texture,
+                                background_backdrop,
                                 on_gpu_driver_selected: on_gpu_driver_selected_callback(),
                                 ..Default::default()
                             },
@@ -803,7 +811,7 @@ fn open_from_restored(arg: &OpenFromRestoredArg, ctx: &mut AppContext) {
                         title: Some("Warp".to_owned()),
                         fullscreen_state: window.fullscreen_state,
                         background_blur_radius_pixels,
-                        background_blur_texture,
+                        background_backdrop,
                         on_gpu_driver_selected: on_gpu_driver_selected_callback(),
                         ..Default::default()
                     },
@@ -1205,7 +1213,7 @@ fn default_window_options(window_settings: &WindowSettings, ctx: &AppContext) ->
         window_bounds: next_bounds,
         title: Some("Warp".to_owned()),
         background_blur_radius_pixels: Some(*window_settings.background_blur_radius),
-        background_blur_texture: *window_settings.background_blur_texture,
+        background_backdrop: *window_settings.background_backdrop,
         on_gpu_driver_selected: on_gpu_driver_selected_callback(),
         ..Default::default()
     }
@@ -1390,7 +1398,7 @@ fn toggle_quake_mode_window(global_resource_handles: &GlobalResourceHandles, ctx
                     window_bounds: WindowBounds::ExactPosition(config.window_bounds),
                     title: Some("Warp".to_owned()),
                     background_blur_radius_pixels: Some(*window_settings.background_blur_radius),
-                    background_blur_texture: *window_settings.background_blur_texture,
+                    background_backdrop: *window_settings.background_backdrop,
                     // Ignore the quake window for positioning the next window
                     anchor_new_windows_from_closed_position:
                         warpui::NextNewWindowsHasThisWindowsBoundsUponClose::No,
@@ -2945,12 +2953,16 @@ impl AuthOnboardingState {
             _ => {}
         };
         ctx.emit(RootViewEvent::AuthOnboardingStateChanged);
+        if matches!(self, AuthOnboardingState::Terminal(_)) {
+            notify_workspace_shown(ctx);
+        }
     }
 
     fn complete_sso_link(&mut self, ctx: &mut ViewContext<RootView>) {
         if let AuthOnboardingState::NeedsSsoLink(needs_sso_link_mode) = self {
             *self = AuthOnboardingState::Terminal(needs_sso_link_mode.to_workspace(ctx));
             ctx.emit(RootViewEvent::AuthOnboardingStateChanged);
+            notify_workspace_shown(ctx);
         }
     }
 

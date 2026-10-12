@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::Duration;
 
+use ai::api_keys::{ChatGPTConnection, ChatGPTConnectionStatus};
 use ai::index::full_source_code_embedding::store_client::{IntermediateNode, StoreClient};
 use ai::index::full_source_code_embedding::{
     self, CodebaseContextConfig, ContentHash, EmbeddingConfig, NodeHash, RepoMetadata,
@@ -23,6 +24,7 @@ use warp_core::features::FeatureFlag;
 use warp_errors::report_error;
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 use warp_graphql::client::Operation;
+use warp_graphql::error::{UserFacingError, UserFacingErrorInterface};
 use warp_graphql::mutations::confirm_file_artifact_upload::{
     ConfirmFileArtifactUpload, ConfirmFileArtifactUploadInput, ConfirmFileArtifactUploadResult,
     ConfirmFileArtifactUploadVariables,
@@ -37,6 +39,9 @@ use warp_graphql::mutations::create_file_artifact_upload_target::{
 use warp_graphql::mutations::delete_ai_conversation::{
     DeleteAIConversation, DeleteAIConversationVariables, DeleteConversationInput,
     DeleteConversationResult,
+};
+use warp_graphql::mutations::disconnect_chatgpt::{
+    DisconnectChatGPT, DisconnectChatGPTResult, DisconnectChatGPTVariables,
 };
 use warp_graphql::mutations::generate_code_embeddings::{
     GenerateCodeEmbeddings, GenerateCodeEmbeddingsInput, GenerateCodeEmbeddingsResult,
@@ -63,6 +68,9 @@ use warp_graphql::mutations::request_bonus::{
     ProvideNegativeFeedbackResponseForAiConversationInput,
     ProvideNegativeFeedbackResponseForAiConversationVariables, RequestsRefundedResult,
 };
+use warp_graphql::mutations::start_chatgpt_link::{
+    StartChatGPTLink, StartChatGPTLinkResult, StartChatGPTLinkVariables,
+};
 use warp_graphql::mutations::update_agent_task::{
     AgentTaskStatusMessageInput, UpdateAgentTask, UpdateAgentTaskInput, UpdateAgentTaskResult,
     UpdateAgentTaskVariables,
@@ -71,8 +79,13 @@ use warp_graphql::mutations::update_merkle_tree::{
     MerkleTreeNode, UpdateMerkleTree, UpdateMerkleTreeInput, UpdateMerkleTreeResult,
     UpdateMerkleTreeVariables,
 };
+use warp_graphql::platform_error::PlatformErrorInfo;
 use warp_graphql::queries::codebase_context_config::{
     CodebaseContextConfigQuery, CodebaseContextConfigResult, CodebaseContextConfigVariables,
+};
+#[cfg(not(target_family = "wasm"))]
+use warp_graphql::queries::execution_config::{
+    BootstrapTaskResult, ExecutionBootstrap, ExecutionBootstrapVariables, ExecutionConfiguration,
 };
 use warp_graphql::queries::free_available_models::{
     FreeAvailableModels, FreeAvailableModelsInput, FreeAvailableModelsResult,
@@ -84,6 +97,9 @@ use warp_graphql::queries::get_ai_credit_availability::{
 };
 use warp_graphql::queries::get_available_harnesses::{
     GetAvailableHarnesses, GetAvailableHarnessesVariables,
+};
+use warp_graphql::queries::get_chatgpt_connection::{
+    GetChatGPTConnection, GetChatGPTConnectionVariables,
 };
 use warp_graphql::queries::get_conversation_usage::{
     ConversationUsage, GetConversationUsage, GetConversationUsageVariables, UserResult,
@@ -120,6 +136,8 @@ use warp_graphql::queries::task_git_credentials::{
     TaskGitCredentialsLegacyInput, TaskGitCredentialsLegacyResult,
     TaskGitCredentialsLegacyVariables, TaskGitCredentialsResult, TaskGitCredentialsVariables,
 };
+#[cfg(not(target_family = "wasm"))]
+use warp_graphql::queries::task_secrets::{ManagedSecretValue, TaskSecretsInput};
 use warp_multi_agent_api::ConversationData;
 
 use super::ServerApi;
@@ -170,10 +188,65 @@ use crate::{
 
 const AI_ASSISTANT_REQUEST_TIMEOUT_SECONDS: u64 = 30;
 
+#[cfg(not(target_family = "wasm"))]
+pub(crate) struct ExecutionBootstrapData {
+    pub config: ExecutionConfiguration,
+    pub secrets: anyhow::Result<HashMap<String, ManagedSecretValue>>,
+    pub attachments: anyhow::Result<Vec<TaskAttachment>>,
+}
+
 /// A status update for a task, optionally including a platform error code.
 pub struct TaskStatusUpdate {
     pub message: String,
     pub error_code: Option<PlatformErrorCode>,
+    pub platform_error: Option<Box<PlatformErrorInfo>>,
+}
+
+/// Error fetching git credentials for a task, either a structured platform error
+/// (potentially retryable) or a request-layer failure (workload-token issuance,
+/// network transport).
+#[derive(Debug, thiserror::Error)]
+pub enum TaskGitCredentialsError {
+    #[error("{message}")]
+    Platform {
+        message: String,
+        detail: Option<String>,
+        info: Box<PlatformErrorInfo>,
+    },
+    #[error("{message}")]
+    Unstructured { message: String },
+    #[error("Failed to fetch task git credentials")]
+    Request(#[source] anyhow::Error),
+}
+
+impl TaskGitCredentialsError {
+    pub(crate) fn from_user_facing(error: UserFacingError) -> Self {
+        let UserFacingError {
+            error,
+            response_context,
+        } = error;
+        match error {
+            UserFacingErrorInterface::PlatformError(error) => Self::Platform {
+                message: error.message,
+                detail: error.detail,
+                info: Box::new(error.info.into()),
+            },
+            error => Self::Unstructured {
+                message: get_user_facing_error_message(UserFacingError {
+                    error,
+                    response_context,
+                }),
+            },
+        }
+    }
+}
+
+fn agent_task_status_message_input(update: TaskStatusUpdate) -> AgentTaskStatusMessageInput {
+    AgentTaskStatusMessageInput {
+        message: update.message,
+        error_code: update.error_code,
+        error: update.platform_error.map(|info| (*info).into()),
+    }
 }
 
 fn public_api_user_query_mode(mode: UserQueryMode) -> &'static str {
@@ -200,6 +273,7 @@ impl TaskStatusUpdate {
         Self {
             message: message.into(),
             error_code: None,
+            platform_error: None,
         }
     }
 
@@ -208,6 +282,7 @@ impl TaskStatusUpdate {
         Self {
             message: message.into(),
             error_code: Some(error_code),
+            platform_error: Some(Box::new(PlatformErrorInfo::new(error_code, false))),
         }
     }
 }
@@ -1212,6 +1287,17 @@ pub trait AIClient: 'static + Send + Sync {
     /// user can start an interactive AI request.
     async fn get_ai_credit_availability(&self) -> Result<AICreditAvailability, anyhow::Error>;
 
+    /// Fetches the ChatGPT account linked to the authenticated user, if any.
+    async fn get_chatgpt_connection(&self) -> Result<ChatGPTConnectionStatus, anyhow::Error>;
+
+    /// Unlinks the authenticated user's ChatGPT account on the server.
+    async fn disconnect_chatgpt(&self) -> Result<(), anyhow::Error>;
+
+    /// Returns the browser URL that links a ChatGPT account to the authenticated user. The
+    /// browser flow finishes by opening `continue_url` with `chatgpt_linked=1` or
+    /// `chatgpt_error=<code>` appended.
+    async fn start_chatgpt_link(&self, continue_url: String) -> Result<String, anyhow::Error>;
+
     /// Returns conversation usage history for the current user over the requested number of days.
     ///
     /// If `last_updated_end_timestamp` is provided, only conversations updated before that timestamp are returned.
@@ -1506,7 +1592,8 @@ pub trait AIClient: 'static + Send + Sync {
         task_id: String,
         workload_token: String,
         accepts_partial_refresh: bool,
-    ) -> anyhow::Result<TaskGitCredentialsResponse, anyhow::Error>;
+        use_factory_repositories: bool,
+    ) -> Result<TaskGitCredentialsResponse, TaskGitCredentialsError>;
 
     /// Authorizes a REMOTE-2661 debug agent prompt against a retained environment-setup-failure
     /// session, called by the sharer with its own workload token. Anything short of `Ok(true)`
@@ -1643,7 +1730,68 @@ fn into_file_artifact_record(
     }
 }
 
+fn task_attachments_from_list(
+    attachments: Vec<warp_graphql::queries::task_attachments::TaskAttachment>,
+) -> Vec<TaskAttachment> {
+    attachments
+        .into_iter()
+        .map(|att| TaskAttachment {
+            file_id: att.file_id.into_inner(),
+            filename: att.filename,
+            download_url: att.download_url,
+            mime_type: att.mime_type,
+        })
+        .collect()
+}
+
+fn task_attachments_from_result(result: TaskResult) -> anyhow::Result<Vec<TaskAttachment>> {
+    match result {
+        TaskResult::TaskOutput(output) => Ok(task_attachments_from_list(output.task.attachments)),
+        TaskResult::UserFacingError(error) => Err(anyhow!(get_user_facing_error_message(error))),
+        TaskResult::Unknown => Err(anyhow!("Failed to fetch task attachments")),
+    }
+}
+
 impl ServerApi {
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) async fn get_execution_bootstrap(
+        &self,
+        task_id: &str,
+        execution_id: &str,
+        workload_token: String,
+        supports_deferred_repositories: bool,
+    ) -> anyhow::Result<ExecutionBootstrapData> {
+        let operation = ExecutionBootstrap::build(ExecutionBootstrapVariables {
+            execution_id: execution_id.to_string().into(),
+            supports_deferred_repositories,
+            secrets_input: TaskSecretsInput {
+                task_id: task_id.to_string().into(),
+                workload_token,
+            },
+            task_input: TaskInput {
+                task_id: task_id.to_string().into(),
+            },
+            request_context: get_request_context(),
+        });
+        let response = self.send_graphql_request(operation, None).await?;
+        let (config, attachments) = match response.task {
+            BootstrapTaskResult::TaskOutput(output) => (
+                output.task.execution_config,
+                Ok(task_attachments_from_list(output.task.attachments)),
+            ),
+            BootstrapTaskResult::UserFacingError(error) => {
+                return Err(anyhow!(get_user_facing_error_message(error)));
+            }
+            BootstrapTaskResult::Unknown => {
+                return Err(anyhow!("Unknown execution task response"));
+            }
+        };
+        Ok(ExecutionBootstrapData {
+            config,
+            secrets: super::managed_secrets::task_secrets_from_result(response.task_secrets),
+            attachments,
+        })
+    }
     async fn get_public_api_with_team_scope<R>(
         &self,
         path: &str,
@@ -1730,17 +1878,22 @@ impl ServerApi {
         task_id: String,
         workload_token: String,
         accepts_partial_refresh: bool,
-    ) -> anyhow::Result<TaskGitCredentialsResponse, anyhow::Error> {
+        use_factory_repositories: bool,
+    ) -> Result<TaskGitCredentialsResponse, TaskGitCredentialsError> {
         let variables = TaskGitCredentialsVariables {
             input: TaskGitCredentialsInput {
                 task_id: cynic::Id::new(task_id),
                 workload_token,
                 accepts_partial_refresh: Some(accepts_partial_refresh),
+                use_factory_repositories: use_factory_repositories.then_some(true),
             },
             request_context: get_request_context(),
         };
         let operation = TaskGitCredentials::build(variables);
-        let response = self.send_graphql_request(operation, None).await?;
+        let response = self
+            .send_graphql_request(operation, None)
+            .await
+            .map_err(TaskGitCredentialsError::Request)?;
 
         match response.task_git_credentials {
             TaskGitCredentialsResult::TaskGitCredentialsOutput(output) => {
@@ -1754,11 +1907,11 @@ impl ServerApi {
                 })
             }
             TaskGitCredentialsResult::UserFacingError(error) => {
-                Err(anyhow!(get_user_facing_error_message(error)))
+                Err(TaskGitCredentialsError::from_user_facing(error))
             }
-            TaskGitCredentialsResult::Unknown => {
-                Err(anyhow!("Failed to fetch task git credentials"))
-            }
+            TaskGitCredentialsResult::Unknown => Err(TaskGitCredentialsError::Request(anyhow!(
+                "Unknown taskGitCredentials response"
+            ))),
         }
     }
 
@@ -1766,7 +1919,7 @@ impl ServerApi {
         &self,
         task_id: String,
         workload_token: String,
-    ) -> anyhow::Result<TaskGitCredentialsResponse, anyhow::Error> {
+    ) -> Result<TaskGitCredentialsResponse, TaskGitCredentialsError> {
         let variables = TaskGitCredentialsLegacyVariables {
             input: TaskGitCredentialsLegacyInput {
                 task_id: cynic::Id::new(task_id),
@@ -1775,7 +1928,10 @@ impl ServerApi {
             request_context: get_request_context(),
         };
         let operation = TaskGitCredentialsLegacy::build(variables);
-        let response = self.send_graphql_request(operation, None).await?;
+        let response = self
+            .send_graphql_request(operation, None)
+            .await
+            .map_err(TaskGitCredentialsError::Request)?;
 
         match response.task_git_credentials {
             TaskGitCredentialsLegacyResult::TaskGitCredentialsOutput(output) => {
@@ -1789,11 +1945,11 @@ impl ServerApi {
                 })
             }
             TaskGitCredentialsLegacyResult::UserFacingError(error) => {
-                Err(anyhow!(get_user_facing_error_message(error)))
+                Err(TaskGitCredentialsError::from_user_facing(error))
             }
-            TaskGitCredentialsLegacyResult::Unknown => {
-                Err(anyhow!("Failed to fetch task git credentials"))
-            }
+            TaskGitCredentialsLegacyResult::Unknown => Err(TaskGitCredentialsError::Request(
+                anyhow!("Unknown taskGitCredentials response"),
+            )),
         }
     }
 }
@@ -1809,7 +1965,10 @@ fn into_git_credential(
     }
 }
 
-fn is_unknown_git_credential_schema_error(error: &anyhow::Error) -> bool {
+fn is_unknown_git_credential_schema_error(error: &TaskGitCredentialsError) -> bool {
+    let TaskGitCredentialsError::Request(error) = error else {
+        return false;
+    };
     let message = error.to_string();
     let names_partial_refresh_field =
         message.contains("failedHosts") || message.contains("acceptsPartialRefresh");
@@ -2067,6 +2226,59 @@ impl AIClient for ServerApi {
             warp_graphql::queries::get_ai_credit_availability::UserResult::Unknown => {
                 Err(anyhow!("failed to get AI credit availability"))
             }
+        }
+    }
+
+    async fn get_chatgpt_connection(&self) -> Result<ChatGPTConnectionStatus, anyhow::Error> {
+        use warp_graphql::queries::get_chatgpt_connection::UserResult;
+
+        let operation = GetChatGPTConnection::build(GetChatGPTConnectionVariables {
+            request_context: get_request_context(),
+        });
+        let response = self.send_graphql_request(operation, None).await?;
+
+        match response.user {
+            UserResult::UserOutput(output) => Ok(match output.user.chatgpt_connection {
+                Some(connection) => ChatGPTConnectionStatus::Connected(ChatGPTConnection {
+                    email: connection.email,
+                    connected_at: connection.connected_at.utc().into(),
+                    token_sharing_active: connection.token_sharing_active,
+                }),
+                None => ChatGPTConnectionStatus::NotConnected,
+            }),
+            UserResult::UserFacingError(e) => Err(anyhow!(get_user_facing_error_message(e))),
+            UserResult::Unknown => Err(anyhow!("failed to get ChatGPT connection")),
+        }
+    }
+
+    async fn disconnect_chatgpt(&self) -> Result<(), anyhow::Error> {
+        let operation = DisconnectChatGPT::build(DisconnectChatGPTVariables {
+            request_context: get_request_context(),
+        });
+        let response = self.send_graphql_request(operation, None).await?;
+
+        match response.disconnect_chatgpt {
+            DisconnectChatGPTResult::DisconnectChatGPTOutput(_) => Ok(()),
+            DisconnectChatGPTResult::UserFacingError(e) => {
+                Err(anyhow!(get_user_facing_error_message(e)))
+            }
+            DisconnectChatGPTResult::Unknown => Err(anyhow!("failed to disconnect ChatGPT")),
+        }
+    }
+
+    async fn start_chatgpt_link(&self, continue_url: String) -> Result<String, anyhow::Error> {
+        let operation = StartChatGPTLink::build(StartChatGPTLinkVariables {
+            request_context: get_request_context(),
+            continue_url,
+        });
+        let response = self.send_graphql_request(operation, None).await?;
+
+        match response.start_chatgpt_link {
+            StartChatGPTLinkResult::StartChatGPTLinkOutput(output) => Ok(output.authorization_url),
+            StartChatGPTLinkResult::UserFacingError(e) => {
+                Err(anyhow!(get_user_facing_error_message(e)))
+            }
+            StartChatGPTLinkResult::Unknown => Err(anyhow!("failed to start ChatGPT link")),
         }
     }
 
@@ -2373,10 +2585,7 @@ impl AIClient for ServerApi {
                 task_state,
                 session_id: session_id.map(|id| id.to_string().into()),
                 conversation_id: conversation_id.map(|id| id.into()),
-                status_message: status_message.map(|update| AgentTaskStatusMessageInput {
-                    message: update.message,
-                    error_code: update.error_code,
-                }),
+                status_message: status_message.map(agent_task_status_message_input),
                 session_debug_until: session_debug_until.map(Into::into),
                 debug_agent_active,
             },
@@ -2895,17 +3104,21 @@ impl AIClient for ServerApi {
         task_id: String,
         workload_token: String,
         accepts_partial_refresh: bool,
-    ) -> anyhow::Result<TaskGitCredentialsResponse, anyhow::Error> {
+        use_factory_repositories: bool,
+    ) -> Result<TaskGitCredentialsResponse, TaskGitCredentialsError> {
         match self
             .get_task_git_credentials_current(
                 task_id.clone(),
                 workload_token.clone(),
                 accepts_partial_refresh,
+                use_factory_repositories,
             )
             .await
         {
             Ok(response) => Ok(response),
-            Err(error) if is_unknown_git_credential_schema_error(&error) => {
+            Err(error)
+                if !use_factory_repositories && is_unknown_git_credential_schema_error(&error) =>
+            {
                 log::info!(
                     "taskGitCredentials partial-refresh fields are unavailable; falling back to the pre-deploy schema"
                 );
@@ -2961,26 +3174,7 @@ impl AIClient for ServerApi {
         let operation = TaskAttachmentsQuery::build(variables);
         let response = self.send_graphql_request(operation, None).await?;
 
-        match response.task {
-            TaskResult::TaskOutput(output) => {
-                let attachments = output
-                    .task
-                    .attachments
-                    .into_iter()
-                    .map(|att| TaskAttachment {
-                        file_id: att.file_id.into_inner(),
-                        filename: att.filename,
-                        download_url: att.download_url,
-                        mime_type: att.mime_type,
-                    })
-                    .collect();
-                Ok(attachments)
-            }
-            TaskResult::UserFacingError(error) => {
-                Err(anyhow!(get_user_facing_error_message(error)))
-            }
-            TaskResult::Unknown => Err(anyhow!("Failed to fetch task attachments")),
-        }
+        task_attachments_from_result(response.task)
     }
 
     async fn create_file_artifact_upload_target(

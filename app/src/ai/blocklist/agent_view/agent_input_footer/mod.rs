@@ -40,8 +40,8 @@ use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::elements::{
     ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
     DispatchEventResult, Element, Empty, EventHandler, Flex, MainAxisAlignment, MainAxisSize,
-    OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Shrinkable, Stack,
-    Wrap, WrapFill, WrapFillEntireRun,
+    OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, SavePosition,
+    Shrinkable, Stack, Wrap, WrapFill, WrapFillEntireRun,
 };
 use warpui::{
     AppContext, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
@@ -57,6 +57,9 @@ use crate::ai::blocklist::agent_view::is_in_cloud_context;
 use crate::ai::blocklist::history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::ai::blocklist::prompt::prompt_alert::{PromptAlertEvent, PromptAlertView};
 use crate::ai::blocklist::usage::icon_for_context_window_usage;
+use crate::ai::blocklist::usage::usage_popover_view::{
+    UsagePopoverEvent, UsagePopoverView, conversation_total_text, conversation_usage_display_unit,
+};
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::appearance::Appearance;
@@ -91,7 +94,7 @@ use crate::terminal::cli_agent_sessions::{
     CLIAgentInputState, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
 };
 use crate::terminal::input::models::InlineModelSelectorTab;
-use crate::terminal::input::{HandoffComposeState, MenuPositioningProvider};
+use crate::terminal::input::{HandoffComposeState, MenuPositioning, MenuPositioningProvider};
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::local_shell::LocalShellState;
 use crate::terminal::profile_model_selector::{ProfileModelSelector, ProfileModelSelectorEvent};
@@ -116,7 +119,8 @@ use crate::workspace::ToastStack;
 #[cfg(not(target_family = "wasm"))]
 use crate::workspace::WorkspaceAction;
 use crate::workspace::view::TOGGLE_PROJECT_EXPLORER_BINDING_NAME;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
+use crate::workspaces::workspace::ChargeUnit;
 
 const ENABLE_NLD_TOOLTIP: &str = "Enable terminal command autodetection";
 const DISABLE_NLD_TOOLTIP: &str = "Disable terminal command autodetection";
@@ -133,6 +137,9 @@ const LIVE_REMOTE_VM_INDICATOR_TOOLTIP: &str = "Connected to a live cloud agent 
 const NEW_CLOUD_VM_INDICATOR_TOOLTIP: &str = "Not connected to cloud agent. Your next prompt starts a new cloud machine to continue this conversation.";
 
 const CLOUD_MODE_V2_FOOTER_GAP: f32 = 4.;
+
+/// id for the conversation usage popover's trigger button to anchor the popover overlay
+const USAGE_BUTTON_SAVE_POSITION_ID: &str = "agent_input_footer::usage_button";
 
 /// How long to wait after session creation before showing the install chip.
 /// Gives the plugin time to connect and send its `SessionStart` event.
@@ -195,6 +202,7 @@ pub struct AgentInputFooter {
     start_remote_control_button: ViewHandle<ActionButton>,
     stop_remote_control_button: ViewHandle<ActionButton>,
     context_window_button: ViewHandle<ActionButton>,
+    usage_button: ViewHandle<ActionButton>,
     /// Non-interactive indicators for a cloud follow-up pane: one shown when attached to a live
     /// remote VM, one when the next follow-up will start a new cloud VM. See
     /// [`AIQueryRouting`].
@@ -259,6 +267,12 @@ pub struct AgentInputFooter {
     /// yellow notification dot on the context-window chip when the
     /// `PromptCacheExpiryWarning` flag is enabled.
     prompt_cache_expired: bool,
+
+    /// Used to anchor the usage popover above or below the input box, matching the
+    /// surrounding menu positioning.
+    menu_positioning_provider: Arc<dyn MenuPositioningProvider>,
+    usage_popover: ViewHandle<UsagePopoverView>,
+    usage_popover_open: bool,
 }
 
 impl AgentInputFooter {
@@ -689,6 +703,24 @@ impl AgentInputFooter {
                 .with_tooltip_alignment(TooltipAlignment::Left)
         });
 
+        let usage_button = ctx.add_typed_action_view(|_ctx| {
+            ActionButton::new("", AgentInputButtonTheme)
+                .with_icon(Icon::PieChart)
+                .with_size(button_size)
+                .with_tooltip_alignment(TooltipAlignment::Left)
+                .on_click(|ctx| {
+                    ctx.dispatch_typed_action(AgentInputFooterAction::ToggleUsagePopover);
+                })
+        });
+
+        let usage_popover = ctx.add_typed_action_view(|ctx| UsagePopoverView::new(None, ctx));
+        ctx.subscribe_to_view(&usage_popover, |me, _, event, ctx| match event {
+            UsagePopoverEvent::Close => {
+                me.usage_popover_open = false;
+                ctx.notify();
+            }
+        });
+
         // Non-interactive cloud follow-up indicators. Only one is rendered at a time, chosen by
         // `AIQueryRouting` at render time.
         let live_session_indicator = ctx.add_typed_action_view(|_ctx| {
@@ -774,14 +806,24 @@ impl AgentInputFooter {
         ctx.subscribe_to_model(&NetworkStatus::handle(ctx), |_, _, _, ctx| {
             ctx.notify();
         });
-        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |_, _, _, ctx| {
+        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |me, _, event, ctx| {
+            // The tier carries the unit the usage tooltip renders in.
+            if matches!(
+                event,
+                UserWorkspacesEvent::TeamsChanged | UserWorkspacesEvent::CurrentWorkspaceChanged
+            ) {
+                me.update_usage_button(ctx);
+            }
             ctx.notify();
         });
         ctx.subscribe_to_model(&AIRequestUsageModel::handle(ctx), |_, _, _, ctx| {
             ctx.notify()
         });
-        ctx.subscribe_to_model(&AISettings::handle(ctx), |_, _, event, ctx| {
-            if matches!(
+        ctx.subscribe_to_model(&AISettings::handle(ctx), |me, _, event, ctx| {
+            if matches!(event, AISettingsChangedEvent::UsageDisplayUnit { .. }) {
+                me.update_usage_button(ctx);
+                ctx.notify()
+            } else if matches!(
                 event,
                 AISettingsChangedEvent::AIAutoDetectionEnabled { .. }
                     | AISettingsChangedEvent::ShouldForceDisableCloudHandoff { .. }
@@ -858,14 +900,36 @@ impl AgentInputFooter {
                     | BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride { .. } => {
                         me.sync_fast_forward_button(ctx);
                         me.update_context_window_button(ctx);
+                        me.update_usage_button(ctx);
+                        me.retarget_usage_popover_if_open(ctx);
                         me.model_selector.update(ctx, |_, ctx| ctx.notify());
                         ctx.notify();
+                    }
+                    BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated {
+                        conversation_id,
+                    }
+                    | BlocklistAIHistoryEvent::UpdatedConversationMetadata {
+                        conversation_id,
+                        ..
+                    } => {
+                        // Only the active conversation's usage affects this
+                        // footer's figures, and a metadata-only event can flip
+                        // the usage item's visibility, so the footer must
+                        // repaint too.
+                        let is_active_conversation = BlocklistAIHistoryModel::as_ref(ctx)
+                            .active_conversation(me.terminal_view_id)
+                            .is_some_and(|conversation| conversation.id() == *conversation_id);
+                        if is_active_conversation {
+                            me.update_usage_button(ctx);
+                            ctx.notify();
+                        }
                     }
                     BlocklistAIHistoryEvent::UpdatedTodoList { .. }
                     | BlocklistAIHistoryEvent::UpdatedConversationStatus { .. }
                     | BlocklistAIHistoryEvent::AppendedExchange { .. }
                     | BlocklistAIHistoryEvent::UpdatedStreamingExchange { .. } => {
                         me.update_context_window_button(ctx);
+                        me.update_usage_button(ctx);
                         me.model_selector.update(ctx, |_, ctx| ctx.notify());
                         ctx.notify();
                     }
@@ -922,6 +986,7 @@ impl AgentInputFooter {
             plugin_operation_in_progress: false,
             plugin_chip_ready: false,
             context_window_button,
+            usage_button,
             live_session_indicator,
             new_cloud_vm_indicator,
             model_selector: profile_model_selector_full,
@@ -945,10 +1010,14 @@ impl AgentInputFooter {
             v2_model_selector,
             prompt_cache_expiry_timer_handle: None,
             prompt_cache_expired: false,
+            menu_positioning_provider: menu_positioning_provider.clone(),
+            usage_popover,
+            usage_popover_open: false,
         };
         me.sync_fast_forward_button(ctx);
         me.sync_remote_control_button(ctx);
         me.update_context_window_button(ctx);
+        me.update_usage_button(ctx);
         me.update_display_chips(&prompt, ctx);
         // Route ambient wiring through the setter so construction and the lazy shared-session
         // viewer path share one implementation.
@@ -1401,7 +1470,7 @@ impl AgentInputFooter {
                 if result.is_ok() {
                     send_telemetry_from_ctx!(
                         TelemetryEvent::CLIAgentPluginOperationSucceeded {
-                            cli_agent: agent.into(),
+                            cli_agent: agent,
                             operation: operation_kind,
                         },
                         ctx
@@ -1410,7 +1479,7 @@ impl AgentInputFooter {
                 } else {
                     send_telemetry_from_ctx!(
                         TelemetryEvent::CLIAgentPluginOperationFailed {
-                            cli_agent: agent.into(),
+                            cli_agent: agent,
                             operation: operation_kind,
                         },
                         ctx
@@ -1569,6 +1638,7 @@ impl AgentInputFooter {
             AgentToolbarItemKind::ModelSelector
             | AgentToolbarItemKind::NLDToggle
             | AgentToolbarItemKind::ContextWindowUsage
+            | AgentToolbarItemKind::UsageSummary
             | AgentToolbarItemKind::FastForwardToggle
             | AgentToolbarItemKind::HandoffToCloud => None,
         }
@@ -1873,9 +1943,7 @@ impl AgentInputFooter {
 
                         if let Some(agent) = self.cli_agent(ctx) {
                             send_telemetry_from_ctx!(
-                                TelemetryEvent::CLIAgentToolbarVoiceInputUsed {
-                                    cli_agent: agent.into(),
-                                },
+                                TelemetryEvent::CLIAgentToolbarVoiceInputUsed { cli_agent: agent },
                                 ctx
                             );
                         }
@@ -2149,6 +2217,50 @@ impl AgentInputFooter {
         }
     }
 
+    /// Retargets (or closes) an open usage popover when the active
+    /// conversation changes, so it never shows the previous conversation's
+    /// figures.
+    fn retarget_usage_popover_if_open(&mut self, ctx: &mut ViewContext<Self>) {
+        if !self.usage_popover_open {
+            return;
+        }
+        let active_conversation_id = BlocklistAIHistoryModel::as_ref(ctx)
+            .active_conversation(self.terminal_view_id)
+            .map(|conversation| conversation.id());
+        if self.usage_popover.as_ref(ctx).conversation_id() == active_conversation_id {
+            return;
+        }
+        match active_conversation_id {
+            Some(conversation_id) => self.usage_popover.update(ctx, |popover, ctx| {
+                popover.reset_for_conversation(conversation_id, ctx);
+            }),
+            None => self.usage_popover_open = false,
+        }
+    }
+
+    /// Refreshes the usage button's tooltip with the active conversation's
+    /// total cost — the same figure the popover's header shows.
+    fn update_usage_button(&mut self, ctx: &mut ViewContext<Self>) {
+        // Falls back to the bare label rather than keeping the previous
+        // conversation's figure, which would attribute another conversation's
+        // spend to this one.
+        let tooltip = BlocklistAIHistoryModel::as_ref(ctx)
+            .active_conversation(self.terminal_view_id)
+            .map(|conversation| {
+                format!(
+                    "Conversation usage: {}",
+                    conversation_total_text(
+                        conversation,
+                        conversation_usage_display_unit(conversation, ctx),
+                    )
+                )
+            })
+            .unwrap_or_else(|| "Conversation usage".to_string());
+        self.usage_button.update(ctx, |button, ctx| {
+            button.set_tooltip(Some(tooltip), ctx);
+        });
+    }
+
     /// Schedules a refresh of the context-window button at the prompt-cache
     /// expiry instant so the notification dot appears while the conversation is idle.
     fn reschedule_prompt_cache_expiry_timer(
@@ -2279,6 +2391,54 @@ impl AgentInputFooter {
                     stack.finish()
                 })
             }
+            AgentToolbarItemKind::UsageSummary => {
+                // A persisted custom toolbar layout is replayed verbatim at render time, so
+                // the tier has to be checked here rather than only in `is_available`, which
+                // the render path does not consult.
+                match UserWorkspaces::as_ref(app).charge_unit() {
+                    ChargeUnit::Cents => {}
+                    ChargeUnit::Credits => return None,
+                }
+                let conversation = BlocklistAIHistoryModel::as_ref(app)
+                    .active_conversation(self.terminal_view_id)?;
+                if !conversation.usage_totals().has_usage {
+                    return None;
+                }
+
+                let button = SavePosition::new(
+                    ChildView::new(&self.usage_button).finish(),
+                    USAGE_BUTTON_SAVE_POSITION_ID,
+                )
+                .finish();
+                let mut stack = Stack::new().with_child(button);
+                if self.usage_popover_open {
+                    let positioning = match self.menu_positioning_provider.menu_position(app) {
+                        MenuPositioning::BelowInputBox => {
+                            OffsetPositioning::offset_from_save_position_element(
+                                USAGE_BUTTON_SAVE_POSITION_ID,
+                                vec2f(0., 4.),
+                                warpui::elements::PositionedElementOffsetBounds::WindowByPosition,
+                                warpui::elements::PositionedElementAnchor::BottomRight,
+                                ChildAnchor::TopRight,
+                            )
+                        }
+                        MenuPositioning::AboveInputBox => {
+                            OffsetPositioning::offset_from_save_position_element(
+                                USAGE_BUTTON_SAVE_POSITION_ID,
+                                vec2f(0., -4.),
+                                warpui::elements::PositionedElementOffsetBounds::WindowByPosition,
+                                warpui::elements::PositionedElementAnchor::TopRight,
+                                ChildAnchor::BottomRight,
+                            )
+                        }
+                    };
+                    stack.add_positioned_overlay_child(
+                        ChildView::new(&self.usage_popover).finish(),
+                        positioning,
+                    );
+                }
+                Some(stack.finish())
+            }
             AgentToolbarItemKind::ShareSession => {
                 if is_conversation_transcript_context {
                     return None;
@@ -2352,6 +2512,14 @@ impl AgentInputFooter {
     }
 
     #[cfg(test)]
+    pub fn usage_tooltip_for_test(&self, app: &AppContext) -> Option<String> {
+        self.usage_button
+            .as_ref(app)
+            .tooltip_for_test()
+            .map(str::to_string)
+    }
+
+    #[cfg(test)]
     pub fn new_cloud_vm_indicator_id(&self) -> EntityId {
         self.new_cloud_vm_indicator.id()
     }
@@ -2399,20 +2567,31 @@ impl View for AgentInputFooter {
                 .with_child(ChildView::new(&self.handoff_environment_selector).finish());
         }
 
-        let terminal_model = self.terminal_model.lock();
-        let shared_status = terminal_model.shared_session_status();
-        let is_cloud_context = super::is_in_cloud_context(&terminal_model);
-        let is_conversation_transcript_context =
-            is_conversation_transcript_context(self.terminal_view_id, &terminal_model, app);
+        // The lock is released before rendering toolbar items: the usage popover's menu
+        // positioning provider re-locks the same non-reentrant model.
+        let (
+            shared_status,
+            is_cloud_context,
+            is_conversation_transcript_context,
+            cloud_routing_indicator,
+        ) = {
+            let terminal_model = self.terminal_model.lock();
+            (
+                terminal_model.shared_session_status().clone(),
+                super::is_in_cloud_context(&terminal_model),
+                is_conversation_transcript_context(self.terminal_view_id, &terminal_model, app),
+                self.cloud_routing_indicator_view(&terminal_model, app),
+            )
+        };
 
-        if let Some(indicator) = self.cloud_routing_indicator_view(&terminal_model, app) {
+        if let Some(indicator) = cloud_routing_indicator {
             left_buttons.add_child(indicator);
         }
 
         for item in &left_items {
             if let Some(element) = self.render_toolbar_item(
                 item,
-                shared_status,
+                &shared_status,
                 is_cloud_context,
                 is_conversation_transcript_context,
                 app,
@@ -2439,7 +2618,7 @@ impl View for AgentInputFooter {
             for item in &right_items {
                 if let Some(element) = self.render_toolbar_item(
                     item,
-                    shared_status,
+                    &shared_status,
                     is_cloud_context,
                     is_conversation_transcript_context,
                     app,
@@ -2498,6 +2677,7 @@ pub enum AgentInputFooterAction {
     ShowContextMenu {
         position: Vector2F,
     },
+    ToggleUsagePopover,
 }
 
 impl TypedActionView for AgentInputFooter {
@@ -2523,9 +2703,7 @@ impl TypedActionView for AgentInputFooter {
             AgentInputFooterAction::InsertFilePath(path) => {
                 if let Some(agent) = self.cli_agent(ctx) {
                     send_telemetry_from_ctx!(
-                        TelemetryEvent::CLIAgentToolbarImageAttached {
-                            cli_agent: agent.into(),
-                        },
+                        TelemetryEvent::CLIAgentToolbarImageAttached { cli_agent: agent },
                         ctx
                     );
                 }
@@ -2571,7 +2749,7 @@ impl TypedActionView for AgentInputFooter {
                     if let Some(agent) = self.cli_agent(ctx) {
                         send_telemetry_from_ctx!(
                             TelemetryEvent::CLIAgentPluginChipClicked {
-                                cli_agent: agent.into(),
+                                cli_agent: agent,
                                 action: PluginChipTelemetryAction::Install,
                             },
                             ctx
@@ -2588,7 +2766,7 @@ impl TypedActionView for AgentInputFooter {
                     if let Some(agent) = self.cli_agent(ctx) {
                         send_telemetry_from_ctx!(
                             TelemetryEvent::CLIAgentPluginChipClicked {
-                                cli_agent: agent.into(),
+                                cli_agent: agent,
                                 action: PluginChipTelemetryAction::Update,
                             },
                             ctx
@@ -2604,7 +2782,7 @@ impl TypedActionView for AgentInputFooter {
                 if let Some(agent) = self.cli_agent(ctx) {
                     send_telemetry_from_ctx!(
                         TelemetryEvent::CLIAgentPluginChipClicked {
-                            cli_agent: agent.into(),
+                            cli_agent: agent,
                             action: PluginChipTelemetryAction::InstallInstructions,
                         },
                         ctx
@@ -2620,7 +2798,7 @@ impl TypedActionView for AgentInputFooter {
                 if let Some(agent) = self.cli_agent(ctx) {
                     send_telemetry_from_ctx!(
                         TelemetryEvent::CLIAgentPluginChipClicked {
-                            cli_agent: agent.into(),
+                            cli_agent: agent,
                             action: PluginChipTelemetryAction::UpdateInstructions,
                         },
                         ctx
@@ -2639,7 +2817,7 @@ impl TypedActionView for AgentInputFooter {
                 {
                     send_telemetry_from_ctx!(
                         TelemetryEvent::CLIAgentPluginChipDismissed {
-                            cli_agent: agent.into(),
+                            cli_agent: agent,
                             chip_kind: kind.into(),
                         },
                         ctx
@@ -2696,6 +2874,23 @@ impl TypedActionView for AgentInputFooter {
                 ctx.emit(AgentInputFooterEvent::ShowContextMenu {
                     position: *position,
                 });
+            }
+            AgentInputFooterAction::ToggleUsagePopover => {
+                self.usage_popover_open = !self.usage_popover_open;
+                if self.usage_popover_open {
+                    let conversation_id = BlocklistAIHistoryModel::as_ref(ctx)
+                        .active_conversation(self.terminal_view_id)
+                        .map(|conversation| conversation.id());
+                    match conversation_id {
+                        Some(conversation_id) => {
+                            self.usage_popover.update(ctx, |popover, ctx| {
+                                popover.reset_for_conversation(conversation_id, ctx);
+                            });
+                        }
+                        None => self.usage_popover_open = false,
+                    }
+                }
+                ctx.notify();
             }
         }
     }

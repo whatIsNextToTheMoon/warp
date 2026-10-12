@@ -33,8 +33,10 @@ impl std::fmt::Display for AgentAutonomy {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentDevelopmentSettings {
-    /// The selected model's ID.
-    pub selected_model_id: LLMId,
+    /// The model the user explicitly picked. `None` leaves the profile following the server's
+    /// default model, which can change after onboarding (e.g. when a ChatGPT subscription is
+    /// connected).
+    pub selected_model_id: Option<LLMId>,
     pub autonomy: Option<AgentAutonomy>,
     /// Whether the CLI agent toolbar is enabled.
     pub cli_agent_toolbar_enabled: bool,
@@ -46,10 +48,10 @@ pub struct AgentDevelopmentSettings {
     pub show_agent_notifications: bool,
 }
 
-impl AgentDevelopmentSettings {
-    pub fn new(default_model_id: LLMId) -> Self {
+impl Default for AgentDevelopmentSettings {
+    fn default() -> Self {
         Self {
-            selected_model_id: default_model_id,
+            selected_model_id: None,
             autonomy: Some(AgentAutonomy::default()),
             cli_agent_toolbar_enabled: true,
             session_default: SessionDefault::Agent,

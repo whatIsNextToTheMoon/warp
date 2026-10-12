@@ -761,7 +761,7 @@ fn server_conversation_metadata(
             context_window_usage: 0.0,
             credits_spent: 0.0,
             platform_credits_spent: 0.0,
-            total_provider_cost_in_cents: None,
+            total_billed_cost_in_cents: None,
             credits_spent_for_last_block: None,
             charged_usage_for_last_block: None,
             total_charged_usage: None,
@@ -2273,6 +2273,7 @@ fn test_shared_followup_on_existing_conversation_converts_user_query_input() {
                                                 referenced_attachments: HashMap::new(),
                                                 mode: None,
                                                 intended_agent: Default::default(),
+                                                ..Default::default()
                                             },
                                         )),
                                         request_id: request_id.to_string(),

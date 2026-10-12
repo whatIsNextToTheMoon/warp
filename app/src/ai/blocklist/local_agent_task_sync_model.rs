@@ -57,6 +57,7 @@ pub struct LocalAgentTaskSyncModel {
 }
 
 pub enum LocalAgentTaskSyncModelEvent {}
+
 /// Aggregated update to send via `AIClient::update_agent_task`. Field names
 /// match the server input shape so it is unambiguous which value flows to
 /// which server field.
@@ -69,6 +70,7 @@ pub enum LocalAgentTaskSyncModelEvent {}
 #[derive(Default)]
 struct LocalTaskUpdate {
     task_state: Option<AgentTaskState>,
+    force_task_state: bool,
     session_id: Option<SessionId>,
     server_conversation_token: Option<String>,
     status_message: Option<TaskStatusUpdate>,
@@ -187,7 +189,7 @@ impl LocalAgentTaskSyncModel {
     /// `terminal_view_id → task_id` mapping, without enqueuing the
     /// IN_PROGRESS report that `register_cli_session` sends via the real
     /// `AIClient`. Use this in tests that only need
-    /// `task_id_for_terminal_view` to resolve (e.g. exercising
+    /// `cli_harness_task_id_for_terminal_view` to resolve (e.g. exercising
     /// `TerminalView::conversation_id_for_cli_status_updates`).
     #[cfg(test)]
     pub(crate) fn register_cli_session_for_test(
@@ -207,7 +209,7 @@ impl LocalAgentTaskSyncModel {
     /// unrelated to its CLI-harness session (e.g. an earlier native Agent
     /// Mode conversation). Returns `None` for a purely interactive CLI agent
     /// session with no ambient task behind it.
-    pub fn task_id_for_terminal_view(
+    pub fn cli_harness_task_id_for_terminal_view(
         &self,
         terminal_view_id: EntityId,
     ) -> Option<AmbientAgentTaskId> {
@@ -279,9 +281,15 @@ impl LocalAgentTaskSyncModel {
             CLIAgentSessionsModelEvent::StatusChanged {
                 terminal_view_id,
                 status,
+                is_prompt_submit,
                 ..
             } => {
-                self.on_cli_session_status_changed(*terminal_view_id, status, ctx);
+                self.on_cli_session_status_changed(
+                    *terminal_view_id,
+                    status,
+                    *is_prompt_submit,
+                    ctx,
+                );
             }
             // Pane-scoped CLI agent sessions can end between preflight, the
             // harness, and follow-ups, but the mapping belongs to the driver run.
@@ -364,6 +372,7 @@ impl LocalAgentTaskSyncModel {
         &mut self,
         terminal_view_id: EntityId,
         status: &CLIAgentSessionStatus,
+        is_prompt_submit: bool,
         ctx: &mut ModelContext<Self>,
     ) {
         let Some(&task_id) = self.cli_session_task_ids.get(&terminal_view_id) else {
@@ -375,6 +384,7 @@ impl LocalAgentTaskSyncModel {
             task_id,
             LocalTaskUpdate {
                 task_state: Some(task_state),
+                force_task_state: is_prompt_submit,
                 status_message,
                 ..LocalTaskUpdate::default()
             },
@@ -408,6 +418,7 @@ impl LocalAgentTaskSyncModel {
             session_id,
             server_conversation_token,
             status_message,
+            force_task_state: _,
         } = update;
         ctx.spawn(
             async move {
@@ -543,6 +554,13 @@ fn map_conversation_status(
     }
 }
 
+#[cfg(test)]
+pub(crate) fn map_conversation_status_for_test(
+    conversation: &AIConversation,
+) -> (AgentTaskState, Option<TaskStatusUpdate>) {
+    map_conversation_status(conversation)
+}
+
 /// Maps a conversation-level error to a terminal task update. In-flight recoveries
 /// surface as `TransientError`, so an `Error` status is always terminal here — the
 /// `will_attempt_resume` rendering hint is deliberately ignored.
@@ -627,7 +645,14 @@ pub(crate) fn classify_renderable_error(
             AgentTaskState::Error,
             Some(TaskStatusUpdate::with_error_code(
                 error.to_string(),
-                PlatformErrorCode::InternalError,
+                PlatformErrorCode::AgentStreamNetworkError,
+            )),
+        ),
+        RenderableAIError::AgentStreamFailure { error_message } => (
+            AgentTaskState::Error,
+            Some(TaskStatusUpdate::with_error_code(
+                error_message,
+                PlatformErrorCode::AgentStreamFailure,
             )),
         ),
         RenderableAIError::Other {
@@ -667,6 +692,13 @@ pub(crate) fn classify_renderable_error(
                 PlatformErrorCode::InternalError,
             )),
         ),
+        RenderableAIError::ChatGPTSubscriptionError { .. } => (
+            AgentTaskState::Failed,
+            Some(TaskStatusUpdate::with_error_code(
+                error.to_string(),
+                PlatformErrorCode::InvalidRequest,
+            )),
+        ),
     }
 }
 
@@ -693,7 +725,7 @@ fn map_cli_session_status(
             };
             (task_state, message.as_ref().map(TaskStatusUpdate::message))
         }
-        CLIAgentSessionStatus::Blocked { message } => (
+        CLIAgentSessionStatus::Blocked { message, .. } => (
             AgentTaskState::Blocked,
             message.as_ref().map(TaskStatusUpdate::message),
         ),

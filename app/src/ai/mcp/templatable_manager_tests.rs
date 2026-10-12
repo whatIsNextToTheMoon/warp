@@ -1,4 +1,6 @@
 use futures_util::stream::AbortHandle;
+use mcp::oauth::CallbackResult;
+use url::Url;
 use uuid::Uuid;
 use warpui::App;
 
@@ -8,9 +10,46 @@ use crate::test_util::settings::initialize_settings_for_tests;
 use crate::{GlobalResourceHandles, GlobalResourceHandlesProvider};
 
 #[test]
+fn oauth_callback_preserves_decoded_issuer() {
+    let mut manager = TemplatableMCPServerManager::default();
+    let installation_uuid = Uuid::new_v4();
+    let (abort_handle, _) = AbortHandle::new_pair();
+    let (oauth_result_tx, oauth_result_rx) = async_channel::unbounded();
+    manager.spawned_servers.insert(
+        installation_uuid,
+        SpawnedServerInfo {
+            abort_handle,
+            oauth_result_tx,
+        },
+    );
+    manager
+        .pending_oauth_csrf
+        .insert("test-state".to_string(), installation_uuid);
+    let callback_url = Url::parse(
+        "warpdev://mcp/oauth2callback?code=test-code&state=test-state&iss=https%3A%2F%2Fmcp.linear.app",
+    )
+    .unwrap();
+
+    manager.handle_oauth_callback(&callback_url).unwrap();
+
+    match oauth_result_rx.try_recv().unwrap() {
+        CallbackResult::Success {
+            code,
+            csrf_token,
+            issuer,
+        } => {
+            assert_eq!(code, "test-code");
+            assert_eq!(csrf_token, "test-state");
+            assert_eq!(issuer.as_deref(), Some("https://mcp.linear.app"));
+        }
+        CallbackResult::Error { error } => panic!("unexpected callback error: {error:?}"),
+    }
+}
+
+#[test]
 fn reconnectable_installation_falls_back_to_ephemeral_state() {
     let mut manager = TemplatableMCPServerManager::default();
-    let installation = builtin::factory_mcp_installation("ephemeral-token");
+    let installation = builtin::factory_mcp_installation("ephemeral-token", &[]);
     let installation_uuid = installation.uuid();
 
     manager
@@ -29,11 +68,11 @@ fn reconnectable_installation_prefers_persisted_state() {
     let installation_uuid = builtin::FACTORY_MCP_INSTALLATION_UUID;
     manager.reconnectable_ephemeral_installations.insert(
         installation_uuid,
-        builtin::factory_mcp_installation("ephemeral-token"),
+        builtin::factory_mcp_installation("ephemeral-token", &[]),
     );
     manager.locally_installed_servers.insert(
         installation_uuid,
-        builtin::factory_mcp_installation("persisted-token"),
+        builtin::factory_mcp_installation("persisted-token", &[]),
     );
     let resolved = manager
         .reconnectable_installation(installation_uuid)
@@ -103,7 +142,7 @@ fn shutdown_ends_ephemeral_reconnect_lifecycle() {
         let global_resources = GlobalResourceHandles::mock(&mut app);
         app.add_singleton_model(|_| GlobalResourceHandlesProvider::new(global_resources));
 
-        let installation = builtin::factory_mcp_installation("ephemeral-token");
+        let installation = builtin::factory_mcp_installation("ephemeral-token", &[]);
         let installation_uuid = installation.uuid();
         let (result_tx, result_rx) = tokio::sync::oneshot::channel();
         let manager = app.add_model(|_| {

@@ -5,7 +5,7 @@ use crate::terminal;
 use crate::terminal::view::{
     AgentOnboardingVersion, OnboardingIntention, OnboardingVersion, TerminalAction,
 };
-use crate::workspace::Workspace;
+use crate::workspace::{OneTimeModalModel, Workspace};
 use crate::FeatureFlag;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -28,6 +28,13 @@ impl OnboardingTutorial {
             OnboardingTutorial::NoProject { intention } => *intention,
         }
     }
+}
+
+/// A tutorial dispatch held back until the blocking one-time modal that was open closes.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct DeferredOnboardingTutorial {
+    has_project: bool,
+    intention: OnboardingIntention,
 }
 
 impl From<SelectedSettings> for OnboardingTutorial {
@@ -106,13 +113,23 @@ impl Workspace {
         }
     }
 
-    /// Dispatch the agent onboarding tutorial flow to the active terminal.
+    /// Dispatch the agent onboarding tutorial flow to the active terminal. While a blocking
+    /// one-time modal (e.g. the ChatGPT plan modal) is open, the dispatch is held until it
+    /// closes so the callout doesn't compete with the modal for attention and focus.
     fn dispatch_agent_onboarding_tutorial(
-        &self,
+        &mut self,
         has_project: bool,
         intention: OnboardingIntention,
         ctx: &mut ViewContext<Self>,
     ) {
+        if OneTimeModalModel::as_ref(ctx).is_any_modal_open() {
+            self.onboarding_tutorial_deferred_by_modal = Some(DeferredOnboardingTutorial {
+                has_project,
+                intention,
+            });
+            return;
+        }
+
         let version = OnboardingVersion::Agent(if FeatureFlag::AgentView.is_enabled() {
             AgentOnboardingVersion::AgentModality {
                 has_project,
@@ -122,6 +139,23 @@ impl Workspace {
             AgentOnboardingVersion::UniversalInput { has_project }
         });
         self.dispatch_onboarding(TerminalAction::OnboardingFlow(version), ctx);
+        OneTimeModalModel::handle(ctx).update(ctx, |model, ctx| {
+            model.set_onboarding_tutorial_active(true, ctx);
+        });
+    }
+
+    /// Starts a tutorial that was held back by a one-time modal, now that the modal closed.
+    pub(super) fn resume_onboarding_tutorial_deferred_by_modal(
+        &mut self,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if let Some(DeferredOnboardingTutorial {
+            has_project,
+            intention,
+        }) = self.onboarding_tutorial_deferred_by_modal.take()
+        {
+            self.dispatch_agent_onboarding_tutorial(has_project, intention, ctx);
+        }
     }
 
     /// Dispatch the onboarding tutorial after a pending command (e.g. worktree

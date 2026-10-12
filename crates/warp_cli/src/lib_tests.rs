@@ -3,9 +3,13 @@ use std::ffi::OsString;
 use clap::Parser;
 
 use super::*;
-use crate::agent::{AgentCommand, Harness, OutputFormat, RepositoryForge, RepositoryHeadRef};
+use crate::agent::{
+    AgentCommand, Harness, HarnessTransport, OutputFormat, RepositoryForge, RepositoryHeadRef,
+    RepositoryPreparationOverride,
+};
 use crate::artifact::ArtifactCommand;
 use crate::environment::{EnvironmentCommand, ImageCommand};
+use crate::federate::FederateCommand;
 use crate::harness_support::{HarnessSupportCommand, TaskStatus};
 use crate::integration::IntegrationCommand;
 use crate::memory_store::{MemoryCommand, MemoryStoreCommand};
@@ -19,9 +23,235 @@ fn identifies_worker_subcommands() {
     assert!(is_worker_invocation("minidump-server"));
     #[cfg(unix)]
     assert!(is_worker_invocation(&terminal_server_subcommand()));
-    #[cfg(feature = "plugin_host")]
-    assert!(is_worker_invocation("--plugin-host"));
     assert!(!is_worker_invocation("--prompt"));
+}
+
+#[test]
+fn execution_config_launch_requires_task_id() {
+    let missing_task =
+        Args::try_parse_from(["warp", "agent", "run", "--execution-id", "execution"]);
+    assert!(missing_task.is_err());
+}
+
+#[test]
+fn execution_config_launch_accepts_legacy_settings() {
+    Args::try_parse_from([
+        "warp",
+        "agent",
+        "run",
+        "--task-id",
+        "task",
+        "--execution-id",
+        "execution",
+        "--model",
+        "legacy-model",
+        "--environment",
+        "legacy-environment",
+        "--share",
+        "team:edit",
+        "--no-snapshot",
+        "--skill",
+        "legacy-skill",
+        "--mcp",
+        r#"{"legacy":{"command":"legacy-mcp"}}"#,
+        "--computer-use",
+        "--idle-on-complete",
+        "10m",
+        "--idle-on-fail",
+        "5m",
+        "--conversation",
+        "legacy-conversation",
+        "--profile",
+        "legacy-profile",
+        "--harness",
+        "claude",
+        "--bedrock-inference-role",
+        "legacy-role",
+        "--bedrock-role-region",
+        "us-west-2",
+        "--skip-initial-turn",
+        "--remove-repository-origins",
+    ])
+    .expect("legacy settings must remain compatible with execution bootstrap");
+}
+
+#[test]
+fn execution_config_launch_accepts_operational_timeouts_without_restricting_legacy() {
+    Args::try_parse_from([
+        "warp",
+        "agent",
+        "run",
+        "--task-id",
+        "task",
+        "--execution-id",
+        "execution",
+        "--snapshot-upload-timeout",
+        "2m",
+        "--snapshot-script-timeout",
+        "30s",
+    ])
+    .unwrap();
+    Args::try_parse_from([
+        "warp",
+        "agent",
+        "run",
+        "--task-id",
+        "task",
+        "--model",
+        "auto",
+        "--no-snapshot",
+    ])
+    .unwrap();
+    Args::try_parse_from([
+        "warp", "agent", "run", "--prompt", "hello", "--model", "auto",
+    ])
+    .unwrap();
+}
+
+#[test]
+#[serial_test::serial]
+fn execution_config_env_selects_bootstrap_with_legacy_settings() {
+    let previous = set_env_var("WARP_EXECUTION_ID", "execution-from-env");
+    let parsed = Args::try_parse_from([
+        "warp",
+        "agent",
+        "run",
+        "--task-id",
+        "task",
+        "--model",
+        "legacy-model",
+        "--share",
+        "team:edit",
+        "--computer-use",
+        "--idle-on-complete",
+        "10m",
+    ])
+    .unwrap();
+    let Some(Command::CommandLine(command)) = parsed.command() else {
+        panic!("expected a CLI command");
+    };
+    let CliCommand::Agent(AgentCommand::Run(args)) = command.as_ref() else {
+        panic!("expected agent run");
+    };
+    let execution_id = args.execution_id.clone();
+    restore_env_var("WARP_EXECUTION_ID", previous);
+
+    assert_eq!(execution_id.as_deref(), Some("execution-from-env"));
+}
+
+#[test]
+#[serial_test::serial]
+fn execution_config_flag_takes_precedence_over_environment() {
+    let previous = set_env_var("WARP_EXECUTION_ID", "execution-from-env");
+    let parsed = Args::try_parse_from([
+        "warp",
+        "agent",
+        "run",
+        "--task-id",
+        "task",
+        "--execution-id",
+        "explicit-execution",
+    ])
+    .unwrap();
+    let Some(Command::CommandLine(command)) = parsed.command() else {
+        panic!("expected a CLI command");
+    };
+    let CliCommand::Agent(AgentCommand::Run(args)) = command.as_ref() else {
+        panic!("expected agent run");
+    };
+    let execution_id = args.execution_id.clone();
+    restore_env_var("WARP_EXECUTION_ID", previous);
+
+    assert_eq!(execution_id.as_deref(), Some("explicit-execution"));
+}
+
+#[test]
+#[serial_test::serial]
+fn execution_config_env_requires_task_id() {
+    let previous = set_env_var("WARP_EXECUTION_ID", "parent-execution");
+    let parsed = Args::try_parse_from(["warp", "agent", "run"]);
+    restore_env_var("WARP_EXECUTION_ID", previous);
+    let error = parsed.expect_err("an environment-supplied execution ID requires a task ID");
+    assert!(error.to_string().contains("--task-id"));
+}
+
+#[test]
+#[serial_test::serial]
+fn local_run_accepts_inherited_execution_config_env() {
+    let previous = set_env_var("WARP_EXECUTION_ID", "parent-execution");
+    let parsed = Args::try_parse_from(["warp", "agent", "run", "--prompt", "hello"]);
+    restore_env_var("WARP_EXECUTION_ID", previous);
+    let parsed = parsed.unwrap();
+    let Some(Command::CommandLine(command)) = parsed.command() else {
+        panic!("expected a CLI command");
+    };
+    let CliCommand::Agent(AgentCommand::Run(args)) = command.as_ref() else {
+        panic!("expected agent run");
+    };
+    assert_eq!(args.task_id, None);
+    assert_eq!(args.execution_id.as_deref(), Some("parent-execution"));
+}
+
+#[test]
+#[serial_test::serial]
+fn execution_config_launch_ignores_legacy_failure_retention_env() {
+    let previous = set_env_var("OZ_IDLE_ON_FAIL", "20m");
+    let parsed = Args::try_parse_from([
+        "warp",
+        "agent",
+        "run",
+        "--task-id",
+        "task",
+        "--execution-id",
+        "execution",
+    ]);
+    restore_env_var("OZ_IDLE_ON_FAIL", previous);
+    assert!(
+        parsed.is_ok(),
+        "legacy worker environment must not block the new launch"
+    );
+}
+
+#[test]
+fn agent_run_accepts_git_valid_substituted_branch_override() {
+    let base = r#"{"code_forge":"GITHUB","repo_owner":"source","repo_name":"warp","head":{"type":"BRANCH","value":"frozen/prepare"},"clone_from":{"code_forge":"GITHUB","owner":"target","repo":"warp"},"preserve_origin":true}"#;
+    let valid = base.replace("frozen/prepare", "release+candidate");
+    let args = Args::try_parse_from([
+        "warp",
+        "agent",
+        "run",
+        "--task-id",
+        "550e8400-e29b-41d4-a716-446655440000",
+        "--repository-head-override-json",
+        &valid,
+    ])
+    .unwrap();
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp agent run` command");
+    };
+    let CliCommand::Agent(AgentCommand::Run(run_args)) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp agent run` command");
+    };
+    assert_eq!(
+        run_args.repository_preparation_overrides[0].head,
+        RepositoryHeadRef::Branch("release+candidate".to_string())
+    );
+
+    for invalid in [
+        base.replace(
+            ",\"clone_from\":{\"code_forge\":\"GITHUB\",\"owner\":\"target\",\"repo\":\"warp\"}",
+            "",
+        ),
+        base.replace(
+            "\"preserve_origin\":true",
+            "\"preserve_origin\":true,\"default_branch\":\"main\"",
+        ),
+    ] {
+        assert!(
+            invalid.parse::<RepositoryPreparationOverride>().is_err(),
+            "{invalid}"
+        );
+    }
 }
 
 #[test]
@@ -40,6 +270,108 @@ fn runner_list_accepts_team_uid() {
         args.team_selection.requested_team_uid(),
         Some("team_uid00000000000123")
     );
+}
+#[test]
+fn agent_run_parses_sparse_repository_substitution() {
+    let args = Args::try_parse_from([
+        "warp",
+        "agent",
+        "run",
+        "--task-id",
+        "550e8400-e29b-41d4-a716-446655440000",
+        "--repository-head-override-json",
+        r#"{"code_forge":"GITHUB","repo_owner":"warpdotdev","repo_name":"warp","head":{"type":"COMMIT_SHA","value":"0123456789abcdef0123456789abcdef01234567"},"clone_from":{"code_forge":"GITHUB","owner":"warpdotdev","repo":"warp-for-benchmarks"},"preserve_origin":true}"#,
+    ])
+    .unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp agent run` command");
+    };
+    let CliCommand::Agent(AgentCommand::Run(run_args)) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp agent run` command");
+    };
+
+    let mapped = &run_args.repository_preparation_overrides[0];
+    assert_eq!(
+        mapped
+            .clone_from
+            .as_ref()
+            .map(|identity| identity.repo_name.as_str()),
+        Some("warp-for-benchmarks")
+    );
+    assert!(mapped.preserve_origin);
+    assert_eq!(
+        mapped.head,
+        RepositoryHeadRef::CommitSha("0123456789abcdef0123456789abcdef01234567".to_string())
+    );
+}
+
+#[test]
+fn agent_run_rejects_malformed_sparse_repository_substitution_payloads() {
+    for invalid_override in [
+        r#"{"code_forge":"GITHUB","repo_owner":"","repo_name":"warp","head":{"type":"BRANCH","value":"main"}}"#,
+        r#"{"code_forge":"GITHUB","repo_owner":"warpdotdev","repo_name":"warp","head":{"type":"COMMIT_SHA","value":"0123456789abcdef0123456789abcdef01234567"},"clone_from":{"code_forge":"GITHUB","owner":"","repo":"target"},"preserve_origin":true}"#,
+        r#"{"code_forge":"GITHUB","repo_owner":"warpdotdev","repo_name":"warp","head":{"type":"COMMIT_SHA","value":"0123456789abcdef0123456789abcdef01234567"},"clone_from":{"code_forge":"GITHUB","owner":"warpdotdev","repo":"target"}}"#,
+        r#"{"code_forge":"GITHUB","repo_owner":"warpdotdev","repo_name":"warp","head":{"type":"COMMIT_SHA","value":"0123456789abcdef0123456789abcdef01234567"},"preserve_origin":true}"#,
+    ] {
+        Args::try_parse_from([
+            "warp",
+            "agent",
+            "run",
+            "--task-id",
+            "550e8400-e29b-41d4-a716-446655440000",
+            "--repository-head-override-json",
+            invalid_override,
+        ])
+        .expect_err("invalid repository preparation payload must fail parsing");
+    }
+}
+
+#[test]
+fn agent_run_parses_harness_transport() {
+    let parse = |extra: &[&str]| {
+        let args = Args::try_parse_from(
+            [
+                "warp",
+                "agent",
+                "run",
+                "--prompt",
+                "hi",
+                "--harness",
+                "claude",
+            ]
+            .into_iter()
+            .chain(extra.iter().copied()),
+        )
+        .unwrap();
+        let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+            panic!("Expected `warp agent run` command");
+        };
+        let CliCommand::Agent(AgentCommand::Run(run_args)) = *boxed_cmd else {
+            panic!("Expected `warp agent run` command");
+        };
+        run_args
+    };
+
+    let default = parse(&[]);
+    assert_eq!(default.harness_transport, None);
+
+    let acp = parse(&["--harness-transport", "acp"]);
+    assert_eq!(acp.harness_transport, Some(HarnessTransport::Acp));
+
+    let pty = parse(&["--harness-transport", "pty"]);
+    assert_eq!(pty.harness_transport, Some(HarnessTransport::Pty));
+
+    Args::try_parse_from([
+        "warp",
+        "agent",
+        "run",
+        "--prompt",
+        "hi",
+        "--harness-transport",
+        "telepathy",
+    ])
+    .expect_err("unknown transports must fail parsing");
 }
 
 #[test]
@@ -296,6 +628,130 @@ fn restore_env_var(name: &str, previous: Option<OsString>) {
     }
 }
 
+fn issue_token_args(args: Args) -> crate::federate::IssueTokenArgs {
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp federate issue-token` command");
+    };
+    let CliCommand::Federate(FederateCommand::IssueToken(args)) = *boxed_cmd else {
+        panic!("Expected `warp federate issue-token` command");
+    };
+    args
+}
+
+#[test]
+#[serial_test::serial]
+fn federate_issue_token_reads_run_id_from_env() {
+    let previous = set_env_var(OZ_RUN_ID_ENV, "run-from-env");
+
+    let parsed = Args::try_parse_from([
+        "warp",
+        "federate",
+        "issue-token",
+        "--audience",
+        "example.com",
+    ]);
+
+    restore_env_var(OZ_RUN_ID_ENV, previous);
+
+    let args = issue_token_args(parsed.expect("OZ_RUN_ID should satisfy --run-id"));
+    assert_eq!(args.run_id, "run-from-env");
+}
+
+#[test]
+#[serial_test::serial]
+fn federate_issue_token_explicit_run_id_overrides_env() {
+    let previous = set_env_var(OZ_RUN_ID_ENV, "run-from-env");
+
+    let parsed = Args::try_parse_from([
+        "warp",
+        "federate",
+        "issue-token",
+        "--run-id",
+        "run-from-flag",
+        "--audience",
+        "example.com",
+    ]);
+
+    restore_env_var(OZ_RUN_ID_ENV, previous);
+
+    let args = issue_token_args(parsed.expect("explicit --run-id should parse"));
+    assert_eq!(args.run_id, "run-from-flag");
+}
+
+#[test]
+#[serial_test::serial]
+fn federate_issue_token_requires_run_id_without_flag_or_env() {
+    let previous = std::env::var_os(OZ_RUN_ID_ENV);
+    restore_env_var(OZ_RUN_ID_ENV, None);
+
+    let error = Args::try_parse_from([
+        "warp",
+        "federate",
+        "issue-token",
+        "--audience",
+        "example.com",
+    ])
+    .expect_err("missing run ID should fail");
+
+    restore_env_var(OZ_RUN_ID_ENV, previous);
+
+    assert!(error.to_string().contains("--run-id"));
+}
+
+#[test]
+fn federate_issue_token_handles_all_supported_subject_claims() {
+    let supported_claims = [
+        "principal",
+        "scoped_principal",
+        "email",
+        "teams",
+        "factory_uid",
+        "agent_type",
+        "environment",
+        "agent_name",
+        "skill_spec",
+        "run_id",
+        "host",
+    ];
+    let mut argv = vec![
+        "warp",
+        "federate",
+        "issue-token",
+        "--run-id",
+        "run-id",
+        "--audience",
+        "example.com",
+        "--subject-template",
+    ];
+    argv.extend(supported_claims);
+
+    let args = issue_token_args(
+        Args::try_parse_from(argv).expect("all supported subject claims should parse"),
+    );
+    let parsed_claims: Vec<_> = args
+        .subject_template
+        .as_deref()
+        .expect("subject template should be populated")
+        .iter()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(parsed_claims, supported_claims);
+
+    let mut command = <Args as clap::CommandFactory>::command();
+    let help = command
+        .find_subcommand_mut("federate")
+        .expect("federate subcommand exists")
+        .find_subcommand_mut("issue-token")
+        .expect("issue-token subcommand exists")
+        .render_long_help()
+        .to_string();
+    for claim in supported_claims {
+        assert!(
+            help.contains(claim),
+            "help should document the supported {claim} subject claim:\n{help}"
+        );
+    }
+}
 #[test]
 fn agent_run_accepts_model() {
     let args = Args::try_parse_from([
@@ -425,25 +881,25 @@ fn agent_run_parses_repeated_repository_head_override_json() {
         panic!("Expected `warp agent run` command");
     };
 
-    assert_eq!(run_args.repository_head_overrides.len(), 2);
+    assert_eq!(run_args.repository_preparation_overrides.len(), 2);
     assert_eq!(
-        run_args.repository_head_overrides[0].code_forge,
+        run_args.repository_preparation_overrides[0].code_forge,
         RepositoryForge::GitHub
     );
     assert_eq!(
-        run_args.repository_head_overrides[0].head,
+        run_args.repository_preparation_overrides[0].head,
         RepositoryHeadRef::CommitSha("0123456789abcdef0123456789abcdef01234567".to_string())
     );
     assert_eq!(
-        run_args.repository_head_overrides[1].code_forge,
+        run_args.repository_preparation_overrides[1].code_forge,
         RepositoryForge::GitLab
     );
     assert_eq!(
-        run_args.repository_head_overrides[1].repo_owner,
+        run_args.repository_preparation_overrides[1].repo_owner,
         "platform/backend"
     );
     assert_eq!(
-        run_args.repository_head_overrides[1].head,
+        run_args.repository_preparation_overrides[1].head,
         RepositoryHeadRef::Branch("develop".to_string())
     );
 }
@@ -987,7 +1443,7 @@ fn agent_run_accepts_idle_on_fail_flag() {
     };
 
     assert_eq!(
-        run_args.idle_on_fail,
+        run_args.effective_idle_on_fail(),
         Some(humantime::Duration::from(std::time::Duration::from_secs(
             15 * 60
         )))
@@ -1042,7 +1498,7 @@ fn agent_run_reads_idle_on_fail_from_env() {
     };
 
     assert_eq!(
-        run_args.idle_on_fail,
+        run_args.effective_idle_on_fail(),
         Some(humantime::Duration::from(std::time::Duration::from_secs(
             20 * 60
         )))
@@ -1075,7 +1531,7 @@ fn agent_run_idle_on_fail_flag_overrides_env() {
     };
 
     assert_eq!(
-        run_args.idle_on_fail,
+        run_args.effective_idle_on_fail(),
         Some(humantime::Duration::from(std::time::Duration::from_secs(
             3 * 60
         )))
@@ -1100,7 +1556,7 @@ fn agent_run_leaves_idle_on_fail_unset_without_flag_or_env() {
         panic!("Expected `warp agent run` command");
     };
 
-    assert!(run_args.idle_on_fail.is_none());
+    assert!(run_args.effective_idle_on_fail().is_none());
 }
 
 #[test]
@@ -1126,7 +1582,7 @@ fn agent_run_idle_on_fail_is_independent_of_idle_on_complete() {
         panic!("Expected `warp agent run` command");
     };
 
-    assert!(run_args.idle_on_fail.is_some());
+    assert!(run_args.effective_idle_on_fail().is_some());
     assert!(run_args.idle_on_complete.is_none());
 }
 
@@ -2546,6 +3002,7 @@ fn environment_update_accepts_description() {
         id,
         description,
         remove_description,
+        default_runner,
         ..
     }) = boxed_cmd.as_ref()
     else {
@@ -2555,6 +3012,61 @@ fn environment_update_accepts_description() {
     assert_eq!(id, "env-id");
     assert_eq!(description.as_deref(), Some("Updated description"));
     assert!(!remove_description);
+    assert!(default_runner.is_none());
+}
+
+#[test]
+fn environment_update_accepts_default_runner_uid() {
+    let args = Args::try_parse_from([
+        "warp",
+        "environment",
+        "update",
+        "env-id",
+        "--default-runner",
+        "runner-uid",
+        "--force",
+    ])
+    .unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp environment update` command");
+    };
+    let CliCommand::Environment(EnvironmentCommand::Update {
+        default_runner,
+        repo,
+        setup_command,
+        remove_repo,
+        remove_setup_command,
+        force,
+        ..
+    }) = boxed_cmd.as_ref()
+    else {
+        panic!("Expected `warp environment update` command");
+    };
+
+    assert_eq!(default_runner.as_deref(), Some("runner-uid"));
+    assert!(repo.is_empty());
+    assert!(setup_command.is_empty());
+    assert!(remove_repo.is_empty());
+    assert!(remove_setup_command.is_empty());
+    assert!(force);
+}
+
+#[test]
+fn environment_update_rejects_blank_default_runner() {
+    for uid in ["", " \t"] {
+        assert!(
+            Args::try_parse_from([
+                "warp",
+                "environment",
+                "update",
+                "env-id",
+                "--default-runner",
+                uid,
+            ])
+            .is_err()
+        );
+    }
 }
 
 #[test]
@@ -3219,6 +3731,8 @@ fn report_shutdown_clean_parses() {
 
     assert!(shutdown_args.error_category.is_none());
     assert!(shutdown_args.error_message.is_none());
+    assert!(shutdown_args.pid.is_none());
+    assert!(shutdown_args.exit_code.is_none());
 }
 
 #[test]
@@ -3325,6 +3839,10 @@ fn report_shutdown_abnormal_parses() {
         "oom",
         "--error-message",
         "out of memory",
+        "--pid",
+        "1234",
+        "--exit-code",
+        "143",
     ])
     .unwrap();
 
@@ -3343,6 +3861,46 @@ fn report_shutdown_abnormal_parses() {
         shutdown_args.error_message.as_deref(),
         Some("out of memory")
     );
+    assert_eq!(shutdown_args.pid, Some(1234));
+    assert_eq!(shutdown_args.exit_code, Some(143));
+}
+
+#[test]
+fn report_shutdown_rejects_zero_exit_code() {
+    let result = Args::try_parse_from([
+        "warp",
+        "harness-support",
+        "--run-id",
+        "run-1",
+        "report-shutdown",
+        "--error-category",
+        "process_exit",
+        "--error-message",
+        "agent exited",
+        "--exit-code",
+        "0",
+    ]);
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn report_shutdown_rejects_exit_code_above_api_range() {
+    let result = Args::try_parse_from([
+        "warp",
+        "harness-support",
+        "--run-id",
+        "run-1",
+        "report-shutdown",
+        "--error-category",
+        "process_exit",
+        "--error-message",
+        "agent exited",
+        "--exit-code",
+        "256",
+    ]);
+
+    assert!(result.is_err());
 }
 
 #[test]
