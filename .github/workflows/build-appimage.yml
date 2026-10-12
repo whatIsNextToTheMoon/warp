@@ -58,6 +58,7 @@ jobs:
           or test(custom_title_does_not_stack_duplicate_spinner_frames)
           or test(strip_agent_spinner_prefixes_only_removes_frames)
           or test(use_agent_footer_is_never_stacked_in_the_blocklist)
+          or test(remove_all_rich_content)
           or test(completion_sources_resolution_tests)'
 
   arch_package:

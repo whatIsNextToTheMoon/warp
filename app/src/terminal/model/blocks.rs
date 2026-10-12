@@ -1202,7 +1202,10 @@ impl BlockList {
     }
 
     fn first_rich_content_index(&self, view_id: EntityId) -> Option<TotalIndex> {
-        let mut cursor = self.block_heights.cursor::<(), TotalIndex>();
+        // Read `item`/`start` only after seeking: an unpositioned cursor panics with
+        // "Must seek before calling this method" (and otherwise silently yields no items).
+        let mut cursor = self.block_heights.cursor::<TotalIndex, TotalIndex>();
+        cursor.seek(&TotalIndex(0), SeekBias::Left);
         while let Some(item) = cursor.item() {
             if let BlockHeightItem::RichContent(rich_content) = item {
                 if rich_content.view_id == view_id {
@@ -1214,25 +1217,28 @@ impl BlockList {
         None
     }
 
+    /// Test helper: how many rich content items are currently stored for `view_id`.
+    #[cfg(test)]
+    pub fn rich_content_item_count(&self, view_id: EntityId) -> usize {
+        let mut cursor = self.block_heights.cursor::<TotalIndex, TotalIndex>();
+        cursor.seek(&TotalIndex(0), SeekBias::Left);
+        let mut count = 0;
+        while let Some(item) = cursor.item() {
+            if matches!(
+                item,
+                BlockHeightItem::RichContent(rich_content) if rich_content.view_id == view_id
+            ) {
+                count += 1;
+            }
+            cursor.next();
+        }
+        count
+    }
+
     /// Removes every rich content item for `view_id` and returns how many were
     /// removed. Callers rely on the count to detect entries that outlived the
     /// view bookkeeping (session restore, alt-screen transitions), which would
     /// otherwise render the same child view twice.
-    /// Test helper: how many rich content items are currently stored for `view_id`.
-    #[cfg(test)]
-    pub fn rich_content_item_count(&self, view_id: EntityId) -> usize {
-        self.block_heights
-            .items()
-            .iter()
-            .filter(|item| {
-                matches!(
-                    item,
-                    BlockHeightItem::RichContent(rich_content) if rich_content.view_id == view_id
-                )
-            })
-            .count()
-    }
-
     pub fn remove_all_rich_content(&mut self, view_id: EntityId) -> usize {
         self.dirty_rich_content_items.remove(&view_id);
         if self.pinned_to_bottom == Some(view_id) {
