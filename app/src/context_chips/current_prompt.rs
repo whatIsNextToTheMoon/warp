@@ -784,7 +784,13 @@ impl CurrentPrompt {
         match generator {
             PromptGenerator::ShellCommand(cmd) => {
                 let Some(exec_ctx) = self.prepare_shell_command_context(cmd, ctx) else {
-                    log::warn!("Generator for {chip_kind:?}: could not prepare execution context");
+                    // This is a routine "not ready yet" state rather than an error: the active
+                    // block may not have reported a session id yet (before the first precmd) or
+                    // the session may still be bootstrapping. Every configured chip hits it on
+                    // every prompt refresh, so logging at warn level flooded the log with
+                    // ~1.9k lines on startup. Keep it at debug level; the chip value is still
+                    // cleared and marked as errored below.
+                    log::debug!("Generator for {chip_kind:?}: could not prepare execution context");
                     self.update_chip_value(chip_kind, None);
                     self.update_on_click_value(chip_kind, None);
                     self.set_chip_update_status(chip_kind, ChipUpdateStatus::Error);

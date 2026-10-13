@@ -1,7 +1,7 @@
 //! Module containing an implementation of an audible bell for Linux backends.
 
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -11,6 +11,11 @@ use x11rb::rust_connection::RustConnection;
 
 const FALLBACK_BELL_MIN_INTERVAL: Duration = Duration::from_millis(80);
 const FREEDESKTOP_BELL_SOUND: &str = "/usr/share/sounds/freedesktop/stereo/bell.oga";
+
+/// Upper bound on the number of not-yet-reaped fallback bell helpers we keep
+/// around. The helpers are short lived; the bound only exists so a burst of
+/// bells cannot accumulate children indefinitely.
+const MAX_PENDING_FALLBACK_BELL_HELPERS: usize = 8;
 
 #[derive(Clone, Copy)]
 struct FallbackBellCommand {
@@ -27,6 +32,12 @@ pub(super) struct AudibleBell {
     connection: Option<RustConnection>,
     fallback_command: Option<FallbackBellCommand>,
     last_fallback_bell_at: Mutex<Option<Instant>>,
+    /// Helpers spawned by [`Self::ring_fallback`] that have not been awaited yet.
+    ///
+    /// [`std::process::Child`] is _not_ reaped when it is dropped, so a helper
+    /// that exits without a `wait` call stays a zombie until the app exits. We
+    /// therefore keep the handles and reap them on subsequent rings.
+    pending_fallback_helpers: Mutex<Vec<Child>>,
 }
 
 impl AudibleBell {
@@ -38,6 +49,7 @@ impl AudibleBell {
             connection,
             fallback_command: fallback_bell_command(),
             last_fallback_bell_at: Mutex::new(None),
+            pending_fallback_helpers: Mutex::new(Vec::new()),
         }
     }
 
@@ -88,7 +100,9 @@ impl AudibleBell {
             *last = Some(now);
         }
 
-        Command::new(command.program)
+        self.reap_finished_fallback_helpers();
+
+        let helper = Command::new(command.program)
             .args(command.args)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -96,7 +110,38 @@ impl AudibleBell {
             .spawn()
             .with_context(|| format!("Unable to spawn audible bell command {}", command.program))?;
 
+        self.track_fallback_helper(helper);
+
         Ok(())
+    }
+
+    /// Reaps fallback bell helpers that have already exited.
+    ///
+    /// [`std::process::Child`] is not reaped when it is dropped, so without this
+    /// every ring would leave a zombie behind until the app exits.
+    fn reap_finished_fallback_helpers(&self) {
+        let Ok(mut helpers) = self.pending_fallback_helpers.lock() else {
+            return;
+        };
+        helpers.retain_mut(|helper| !matches!(helper.try_wait(), Ok(Some(_))));
+    }
+
+    /// Stores a freshly spawned helper, blocking once on the oldest entry if the
+    /// backlog is full so the number of live children stays bounded.
+    fn track_fallback_helper(&self, helper: Child) {
+        let Ok(mut helpers) = self.pending_fallback_helpers.lock() else {
+            // The mutex is poisoned; dropping the handle is the best we can do.
+            return;
+        };
+
+        if helpers.len() >= MAX_PENDING_FALLBACK_BELL_HELPERS {
+            // The oldest helper was spawned several bells ago, so it has almost
+            // certainly exited already and this returns immediately.
+            let mut oldest = helpers.remove(0);
+            let _ = oldest.wait();
+        }
+
+        helpers.push(helper);
     }
 }
 
@@ -140,4 +185,42 @@ fn command_exists(program: &str) -> bool {
     };
 
     std::env::split_paths(&path).any(|dir| dir.join(program).is_file())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `Command::spawn` returns a [`Child`] that is not reaped on drop. The bell
+    /// fallback used to drop it straight away, which left one zombie per ring
+    /// (`canberra-gtk-play` being the usual culprit). Ringing the bell twice must
+    /// therefore reap the first helper rather than leaving it behind.
+    #[test]
+    fn fallback_bell_helpers_are_reaped_instead_of_lingering_as_zombies() {
+        let bell = AudibleBell::new();
+        let helper = Command::new("true")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("should be able to spawn `true`");
+        bell.track_fallback_helper(helper);
+
+        // `true` exits immediately; a later ring reaps it. Poll to keep the test
+        // robust on a loaded machine.
+        for _ in 0..50 {
+            std::thread::sleep(Duration::from_millis(20));
+            bell.reap_finished_fallback_helpers();
+
+            let pending = bell
+                .pending_fallback_helpers
+                .lock()
+                .expect("pending helper mutex should not be poisoned");
+            if pending.is_empty() {
+                return;
+            }
+        }
+
+        panic!("fallback bell helper was never reaped");
+    }
 }
