@@ -10,10 +10,9 @@ ARG USER_GID=$USER_UID
 # when someone queries package info for our packages.
 RUN echo 'PACKAGER="Warp Linux Maintainers <linux-maintainers@warp.dev>"' >> /etc/makepkg.conf
 
-# Fetch package lists and install sudo, git, and protobuf (git is needed by
-# cargo to resolve git dependencies during license generation, and protobuf
-# provides protoc for generating rust bindings of protobuf APIs).
-RUN pacman -Sy --needed --noconfirm sudo git protobuf
+# Refresh the base image and package lists together to avoid partial upgrades. git resolves
+# dependencies during license generation, and protobuf provides protoc for generated bindings.
+RUN pacman -Syu --needed --noconfirm sudo git protobuf
 
 # Downgrade fakeroot to version 1.34.  Version 1.35 switches from calling
 # `close` in a loop to using the new `close_range` syscall, which seems to

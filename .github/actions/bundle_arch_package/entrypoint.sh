@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 
+set -e
+
 BUILD_ARCH="$3"
 BUILD_ARCH="${BUILD_ARCH:-$(uname -m)}"
 
-# Ensure we build with the most up-to-date package list. This could get stale due to Docker
-# filesystem caching.
-sudo pacman -Sy
+# Update packages together with cached package lists, retaining the Dockerfile's fakeroot workaround.
+sudo pacman -Syu --noconfirm --ignore fakeroot
 
 # Run the bundle script, specifying the release channel and tag, skipping
 # building the binary (as we have already done so), and only bundling the
