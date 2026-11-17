@@ -6267,7 +6267,7 @@ fn test_restore_last_command_uses_restored_block_history() {
 fn prepare_running_snapshot_block(view: &mut TerminalView) {
     // Drive persistence explicitly so queued shell-bootstrap events cannot force extra snapshots.
     let mut model = TerminalModel::mock(None, None);
-    let size = model.block_list().size().size;
+    let size = *model.block_list().size();
     model.resize(crate::terminal::SizeUpdate::from_cell_dimensions(
         size, 24, 80,
     ));
