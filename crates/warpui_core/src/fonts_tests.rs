@@ -199,3 +199,17 @@ fn em_width_falls_back_when_horizontal_advance_is_zero() {
 
     assert_eq!(cache.em_width(FamilyId(0), 16.0), 16.0);
 }
+
+#[test]
+fn mock_font_has_usable_monospace_metrics() {
+    let cache = Cache::new(Box::new(platform::test::FontDB::new()));
+    let font_id = cache.select_font(FamilyId(0), Properties::default());
+    let (glyph_id, _) = cache
+        .glyph_for_char(font_id, 'm', false)
+        .expect("the test font must provide an 'm' glyph");
+    let width = cache.em_width(FamilyId(0), 13.0);
+    let advance = cache.glyph_advance(font_id, 13.0, glyph_id).unwrap().x();
+
+    assert!(width.is_finite() && width > 0.0);
+    assert_eq!(width, advance, "monospace bounds and advance must agree");
+}

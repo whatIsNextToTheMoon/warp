@@ -575,7 +575,7 @@ impl platform::FontDB for FontDB {
         _font_id: crate::fonts::FontId,
         _glyph_id: crate::fonts::GlyphId,
     ) -> Result<Vector2I> {
-        Ok(Vector2I::zero())
+        Ok(vec2i(1024, 0))
     }
 
     fn load_family_name_from_id(&self, _id: crate::fonts::FamilyId) -> Option<String> {
@@ -598,7 +598,7 @@ impl platform::FontDB for FontDB {
         _font_id: crate::fonts::FontId,
         _glyph_id: crate::fonts::GlyphId,
     ) -> Result<RectI> {
-        Ok(RectI::default())
+        Ok(RectI::new(Vector2I::zero(), vec2i(1024, 2048)))
     }
 
     fn rasterize_glyph(
@@ -627,7 +627,7 @@ impl platform::FontDB for FontDB {
         _font_id: crate::fonts::FontId,
         _char: char,
     ) -> Option<crate::fonts::GlyphId> {
-        Some(0)
+        Some(1)
     }
 
     fn family_id_for_name(&self, _name: &str) -> Option<FamilyId> {

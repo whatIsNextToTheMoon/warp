@@ -52,7 +52,7 @@ jobs:
           tool: nextest
       - name: Run editor and terminal regressions
         run: >-
-          xvfb-run -a cargo nextest run --locked --no-fail-fast -p warp -p warp_files --lib
+          xvfb-run -a cargo nextest run --locked --no-fail-fast -p warp -p warp_files -p warpui_core --lib
           -E 'test(editor_file_reader::tests::) or test(symbol_pair) or test(test_autocomplete_symbols)
           or test(rejected_editor_content) or test(custom_title_preserves_live_spinner)
           or test(custom_title_does_not_stack_duplicate_spinner_frames)
@@ -61,6 +61,7 @@ jobs:
           or test(fallback_bell_helpers_are_reaped)
           or test(active_block_snapshot_)
           or test(read_only_connection_pool_)
+          or test(mock_font_has_usable_monospace_metrics)
           or test(completion_sources_resolution_tests)'
 
   arch_package:

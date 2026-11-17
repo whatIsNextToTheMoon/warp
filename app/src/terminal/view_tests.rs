@@ -6264,6 +6264,17 @@ fn test_restore_last_command_uses_restored_block_history() {
     })
 }
 
+fn prepare_running_snapshot_block(view: &mut TerminalView) {
+    // Drive persistence explicitly so queued shell-bootstrap events cannot force extra snapshots.
+    let mut model = TerminalModel::mock(None, None);
+    let size = model.block_list().size().size;
+    model.resize(crate::terminal::SizeUpdate::from_cell_dimensions(
+        size, 24, 80,
+    ));
+    model.simulate_long_running_block("sleep 10", "still running");
+    view.model = Arc::new(FairMutex::new(model));
+}
+
 #[test]
 fn test_active_block_snapshot_captures_running_command_for_crash_restore() {
     App::test((), |mut app| async move {
@@ -6271,9 +6282,7 @@ fn test_active_block_snapshot_captures_running_command_for_crash_restore() {
         let terminal = add_window_with_terminal(&mut app, None);
 
         terminal.update(&mut app, |view, ctx| {
-            view.model
-                .lock()
-                .simulate_long_running_block("sleep 10", "still running");
+            prepare_running_snapshot_block(view);
 
             let (snapshot, _is_local) = view
                 .active_block_snapshot_for_restore(ctx)
@@ -6281,8 +6290,10 @@ fn test_active_block_snapshot_captures_running_command_for_crash_restore() {
             assert!(snapshot.did_execute);
             assert!(snapshot.start_ts.is_some());
             assert!(snapshot.completed_ts.is_some());
-            assert!(String::from_utf8_lossy(&snapshot.stylized_command).contains("sleep 10"));
-            assert!(String::from_utf8_lossy(&snapshot.stylized_output).contains("still running"));
+            let command = String::from_utf8_lossy(&snapshot.stylized_command);
+            let output = String::from_utf8_lossy(&snapshot.stylized_output);
+            assert!(command.contains("sleep 10"), "{command:?}");
+            assert!(output.contains("still running"), "{output:?}");
         });
     })
 }
@@ -11114,9 +11125,7 @@ fn test_active_block_snapshot_is_debounced_until_output_goes_quiet() {
         });
 
         let pending = terminal.update(&mut app, |view, ctx| {
-            view.model
-                .lock()
-                .simulate_long_running_block("sleep 10", "still running");
+            prepare_running_snapshot_block(view);
             view.active_block_persist_debounce_override = Some(Duration::ZERO);
             let mut pending = Vec::new();
             for _ in 0..3 {
@@ -11164,9 +11173,7 @@ fn test_active_block_snapshot_is_skipped_while_alt_screen_is_active() {
         });
 
         terminal.update(&mut app, |view, ctx| {
-            view.model
-                .lock()
-                .simulate_long_running_block("sleep 10", "still running");
+            prepare_running_snapshot_block(view);
             view.model.lock().set_mode(ansi::Mode::SwapScreen {
                 save_cursor_and_clear_screen: true,
             });
@@ -11206,9 +11213,7 @@ fn test_active_block_snapshot_is_forced_after_max_interval() {
         });
 
         terminal.update(&mut app, |view, ctx| {
-            view.model
-                .lock()
-                .simulate_long_running_block("sleep 10", "still running");
+            prepare_running_snapshot_block(view);
             // Pretend the last snapshot happened longer ago than the maximum interval.
             view.last_active_block_persisted_at =
                 Some(Instant::now() - ACTIVE_BLOCK_PERSIST_MAX_INTERVAL);
@@ -11243,9 +11248,7 @@ fn test_active_block_snapshot_is_skipped_when_restore_is_disabled_before_timer_f
         });
 
         let pending = terminal.update(&mut app, |view, ctx| {
-            view.model
-                .lock()
-                .simulate_long_running_block("sleep 10", "still running");
+            prepare_running_snapshot_block(view);
             view.active_block_persist_debounce_override = Some(Duration::ZERO);
             view.maybe_persist_active_block_for_restore(false, ctx);
             let future_id = view
@@ -11284,9 +11287,7 @@ fn test_active_block_snapshot_is_skipped_when_alt_screen_opens_before_timer_fire
         });
 
         let pending = terminal.update(&mut app, |view, ctx| {
-            view.model
-                .lock()
-                .simulate_long_running_block("sleep 10", "still running");
+            prepare_running_snapshot_block(view);
             view.active_block_persist_debounce_override = Some(Duration::ZERO);
             view.maybe_persist_active_block_for_restore(false, ctx);
             let future_id = view
@@ -11325,9 +11326,7 @@ fn test_active_block_snapshot_is_bounded_without_a_command_start_snapshot() {
         });
 
         terminal.update(&mut app, |view, ctx| {
-            view.model
-                .lock()
-                .simulate_long_running_block("sleep 10", "still running");
+            prepare_running_snapshot_block(view);
             view.maybe_persist_active_block_for_restore(false, ctx);
             let first_attempt = view
                 .last_active_block_persisted_at
