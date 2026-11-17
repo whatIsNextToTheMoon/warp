@@ -3,8 +3,9 @@ use std::convert::TryInto;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender};
-use std::sync::{Arc, Once};
+use std::sync::{Arc, Mutex, Once, OnceLock, Weak};
 use std::time::{Duration, Instant};
 use std::{fs, thread};
 
@@ -205,8 +206,66 @@ fn read_persisted_data(
 
 /// Returns a read-only connection to the sqlite database.
 /// We want only one write connection to exist and use event processing to write any data needed.
+///
+/// Prefer [`read_only_connection_pool`] for long-lived readers: each connection keeps its own
+/// file handles and WAL index, so one connection per pane does not scale.
 pub fn establish_ro_connection(database_url: &str) -> Result<SqliteConnection> {
     establish_connection(database_url, true)
+}
+
+/// Maximum number of read-only connections shared by readers of one database.
+const READ_ONLY_POOL_SIZE: usize = 4;
+
+/// A small round-robin pool of read-only connections to one database.
+///
+/// Reads are short-lived (a single query at a time), so a fixed number of shared connections
+/// is enough and keeps the descriptor count bounded regardless of how many panes are open.
+pub struct ReadOnlyConnectionPool {
+    connections: Vec<Mutex<SqliteConnection>>,
+    next: AtomicUsize,
+}
+
+impl ReadOnlyConnectionPool {
+    fn new(database_url: &str) -> Result<Self> {
+        let mut connections = Vec::with_capacity(READ_ONLY_POOL_SIZE);
+        for _ in 0..READ_ONLY_POOL_SIZE {
+            connections.push(Mutex::new(establish_ro_connection(database_url)?));
+        }
+        Ok(Self {
+            connections,
+            next: AtomicUsize::new(0),
+        })
+    }
+
+    /// Runs `f` against one of the pooled connections, handing it back afterwards.
+    ///
+    /// Returns `None` if the connection's lock is poisoned, which callers treat the same way
+    /// as a missing database.
+    pub fn with_connection<R>(&self, f: impl FnOnce(&mut SqliteConnection) -> R) -> Option<R> {
+        let index = self.next.fetch_add(1, Ordering::Relaxed) % self.connections.len();
+        let mut connection = self.connections[index].lock().ok()?;
+        Some(f(&mut connection))
+    }
+}
+
+/// Lazily-created read-only pools, keyed by database URL.
+static READ_ONLY_POOLS: OnceLock<Mutex<HashMap<String, Weak<ReadOnlyConnectionPool>>>> =
+    OnceLock::new();
+
+/// Returns the shared read-only connection pool for `database_url`, creating it on first use.
+///
+/// Returns `None` if the database cannot be opened. Pools are shared per database URL and close
+/// their connections when the last reader drops its reference.
+pub fn read_only_connection_pool(database_url: &str) -> Option<Arc<ReadOnlyConnectionPool>> {
+    let pools = READ_ONLY_POOLS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut pools = pools.lock().ok()?;
+    if let Some(pool) = pools.get(database_url).and_then(Weak::upgrade) {
+        return Some(pool);
+    }
+    pools.retain(|_, pool| pool.strong_count() > 0);
+    let pool = Arc::new(ReadOnlyConnectionPool::new(database_url).ok()?);
+    pools.insert(database_url.to_owned(), Arc::downgrade(&pool));
+    Some(pool)
 }
 
 fn establish_connection(database_url: &str, read_only: bool) -> Result<SqliteConnection> {

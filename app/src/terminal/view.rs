@@ -793,9 +793,11 @@ pub const NOTIFICATIONS_TROUBLESHOOT_URL: &str =
 
 const DEBOUNCE_PERIOD: Duration = Duration::from_millis(40);
 const FIND_QUERY_DEBOUNCE_PERIOD: Duration = Duration::from_millis(1000);
-/// Maximum frequency for persisting a changing active command block while output is streaming.
+/// How long output must stay quiet before a changing active command block is snapshotted.
+const ACTIVE_BLOCK_PERSIST_DEBOUNCE: Duration = Duration::from_secs(15);
+/// Upper bound on how long a continuously-updating active block may go without a snapshot.
 /// Completed blocks still take the existing immediate persistence path.
-const ACTIVE_BLOCK_PERSIST_INTERVAL: Duration = Duration::from_secs(2);
+const ACTIVE_BLOCK_PERSIST_MAX_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Key used in user preferences to persist the "don't show again" choice for the OSC 52
 /// clipboard blocked banner.
@@ -2872,10 +2874,17 @@ pub struct TerminalView {
     current_prompt: ModelHandle<PromptType>,
 
     model_event_sender: Option<SyncSender<persistence::ModelEvent>>,
-    /// Last active-block persistence attempt, used to avoid writing on every terminal wakeup.
-    last_active_block_persist_attempt: Option<Instant>,
+    active_block_persist_debounce_handle: Option<SpawnedFutureHandle>,
+    /// Rejects callbacks already queued on the UI thread when their timer is cancelled.
+    active_block_persist_generation: u64,
+    /// Last snapshot attempt, or the first wakeup when no snapshot has been attempted.
+    last_active_block_persisted_at: Option<Instant>,
     /// Content fingerprint of the last queued active-block snapshot.
     last_active_block_persisted_fingerprint: Option<u64>,
+    /// Test-only override for the periodic snapshot debounce window, so tests do not have to
+    /// wait the full production interval.
+    #[cfg(test)]
+    active_block_persist_debounce_override: Option<Duration>,
 
     /// The child views that represent rich content. These can be inserted into the block list with
     /// the `insert_rich_content` helper function.
@@ -4607,8 +4616,12 @@ impl TerminalView {
             is_focused_and_active: true,
             current_prompt,
             model_event_sender,
-            last_active_block_persist_attempt: None,
+            active_block_persist_debounce_handle: None,
+            active_block_persist_generation: 0,
+            last_active_block_persisted_at: None,
             last_active_block_persisted_fingerprint: None,
+            #[cfg(test)]
+            active_block_persist_debounce_override: None,
             block_filter_editor,
             active_filter_editor_block_index: None,
             rich_content_views: Vec::new(),
@@ -12302,18 +12315,87 @@ impl TerminalView {
         if !AppExecutionMode::as_ref(ctx).can_save_session()
             || !*GeneralSettings::as_ref(ctx).restore_session
         {
+            self.cancel_active_block_persist_debounce();
             return;
         }
 
+        // A forced snapshot (command start) must land immediately: crash recovery depends on
+        // the command being on disk before it produces any output.
+        if force {
+            self.cancel_active_block_persist_debounce();
+            self.persist_active_block_snapshot_now(ctx);
+            return;
+        }
+
+        // Full-screen TUIs (codex/claude) repaint the screen instead of appending to
+        // scrollback, so snapshotting them on every wakeup is pure write amplification with
+        // little restore value. Command start/end still snapshot normally.
+        if self.model.lock().is_alt_screen_active() {
+            self.cancel_active_block_persist_debounce();
+            return;
+        }
+
+        // Output has been flowing for long enough that we must not defer any further.
         let now = Instant::now();
-        if !force
-            && self
-                .last_active_block_persist_attempt
-                .is_some_and(|last| now.duration_since(last) < ACTIVE_BLOCK_PERSIST_INTERVAL)
+        let last_attempt = self.last_active_block_persisted_at.get_or_insert(now);
+        if now.duration_since(*last_attempt) >= ACTIVE_BLOCK_PERSIST_MAX_INTERVAL {
+            self.cancel_active_block_persist_debounce();
+            self.persist_active_block_snapshot_now(ctx);
+            return;
+        }
+
+        // Output is still arriving: restart the debounce timer so the snapshot only happens
+        // once the stream goes quiet.
+        self.cancel_active_block_persist_debounce();
+        let debounce = self.active_block_persist_debounce();
+        let generation = self.active_block_persist_generation;
+        let handle = ctx.spawn(
+            async move {
+                Timer::after(debounce).await;
+            },
+            move |me, _, ctx| {
+                if me.active_block_persist_generation != generation {
+                    return;
+                }
+                me.active_block_persist_debounce_handle = None;
+                if !me.model.lock().is_alt_screen_active() {
+                    me.persist_active_block_snapshot_now(ctx);
+                }
+            },
+        );
+        self.active_block_persist_debounce_handle = Some(handle);
+    }
+
+    /// Debounce window used for the periodic active-block snapshot.
+    fn active_block_persist_debounce(&self) -> Duration {
+        #[cfg(test)]
+        {
+            self.active_block_persist_debounce_override
+                .unwrap_or(ACTIVE_BLOCK_PERSIST_DEBOUNCE)
+        }
+        #[cfg(not(test))]
+        {
+            ACTIVE_BLOCK_PERSIST_DEBOUNCE
+        }
+    }
+
+    /// Cancels a pending debounced active-block snapshot, if any.
+    fn cancel_active_block_persist_debounce(&mut self) {
+        self.active_block_persist_generation = self.active_block_persist_generation.wrapping_add(1);
+        if let Some(handle) = self.active_block_persist_debounce_handle.take() {
+            handle.abort();
+        }
+    }
+
+    /// Serializes the active block and queues it for persistence, skipping the write when the
+    /// content is unchanged since the last queued snapshot.
+    fn persist_active_block_snapshot_now(&mut self, ctx: &mut ViewContext<Self>) {
+        if !AppExecutionMode::as_ref(ctx).can_save_session()
+            || !*GeneralSettings::as_ref(ctx).restore_session
         {
             return;
         }
-        self.last_active_block_persist_attempt = Some(now);
+        self.last_active_block_persisted_at = Some(Instant::now());
 
         let Some((block, is_local)) = self.active_block_snapshot_for_restore(ctx) else {
             return;

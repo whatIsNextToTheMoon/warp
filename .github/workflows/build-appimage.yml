@@ -59,6 +59,8 @@ jobs:
           or test(strip_agent_spinner_prefixes_only_removes_frames)
           or test(remove_all_rich_content)
           or test(fallback_bell_helpers_are_reaped)
+          or test(active_block_snapshot_)
+          or test(read_only_connection_pool_)
           or test(completion_sources_resolution_tests)'
 
   arch_package:

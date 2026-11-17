@@ -7,16 +7,12 @@ use std::collections::{HashMap, HashSet};
 #[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
-#[cfg(not(target_family = "wasm"))]
-use diesel::SqliteConnection;
 use futures_util::stream::AbortHandle;
 use mcp::TemplatableMCPServerInfo;
 #[cfg(not(target_family = "wasm"))]
 use mcp::oauth;
 #[cfg(not(target_family = "wasm"))]
 pub use native::McpIntegration;
-#[cfg(not(target_family = "wasm"))]
-use parking_lot::Mutex;
 #[cfg(not(target_family = "wasm"))]
 use simple_logger::SimpleLogger;
 use uuid::Uuid;
@@ -28,6 +24,8 @@ use warpui::{Entity, SingletonEntity};
 use crate::ai::mcp::templatable::CloudTemplatableMCPServer;
 use crate::ai::mcp::templatable_installation::TemplatableMCPServerInstallation;
 use crate::ai::mcp::{FileBasedMCPManager, MCPServerState};
+#[cfg(not(target_family = "wasm"))]
+use crate::persistence::ReadOnlyConnectionPool;
 
 #[cfg(not(target_family = "wasm"))]
 type ReconnectResultSender =
@@ -63,7 +61,7 @@ pub struct TemplatableMCPServerManager {
     #[cfg(not(target_family = "wasm"))]
     file_based_server_credentials: oauth::FileBasedPersistedCredentialsMap,
     #[cfg(not(target_family = "wasm"))]
-    database_connection: Option<Arc<Mutex<SqliteConnection>>>,
+    database_connection: Option<Arc<ReadOnlyConnectionPool>>,
     /// Error messages for failed servers, keyed by installation UUID.
     server_error_messages: HashMap<Uuid, String>,
     /// Spawner for running tasks in the context of this manager.

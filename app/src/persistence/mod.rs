@@ -36,6 +36,8 @@ pub use sqlite::database_file_path_for_current_scope;
 pub use sqlite::database_file_path_for_scope;
 #[cfg(any(feature = "local_fs", feature = "integration_tests"))]
 pub use sqlite::establish_ro_connection;
+#[cfg(any(feature = "local_fs", feature = "integration_tests"))]
+pub use sqlite::{ReadOnlyConnectionPool, read_only_connection_pool};
 use uuid::Uuid;
 use warp_core::command::ExitCode;
 use warp_errors::report_error;

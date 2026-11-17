@@ -12,9 +12,10 @@ use warp_core::features::FeatureFlag;
 use warp_graphql::scalars::time::ServerTimestamp;
 
 use super::{
-    app_database_file_path, database_file_path_for_current_scope, database_file_path_for_scope,
-    decode_path, deduplicate_events, encode_path, get_all_codebase_index_metadata,
-    read_sqlite_data, save_app_state, save_codebase_index_metadata, setup_database, start_writer,
+    READ_ONLY_POOL_SIZE, app_database_file_path, database_file_path_for_current_scope,
+    database_file_path_for_scope, decode_path, deduplicate_events, encode_path,
+    get_all_codebase_index_metadata, read_only_connection_pool, read_sqlite_data, save_app_state,
+    save_codebase_index_metadata, setup_database, start_writer,
 };
 use crate::app_state::{
     AppState, CodePaneSnapShot, CodePaneTabSnapshot, LeafContents, LeafSnapshot, PaneNodeSnapshot,
@@ -1158,4 +1159,118 @@ fn team_member_is_disabled_round_trips_through_sqlite_cache() {
         .expect("disabled member should be present");
     assert!(!active_member.is_disabled);
     assert!(disabled_member.is_disabled);
+}
+
+/// Every reader used to open (and keep) its own `SqliteConnection`. In WAL mode each
+/// connection carries its own descriptor and WAL index, so a handful of panes produced
+/// dozens of handles. The pool must keep the number of connections bounded.
+#[test]
+fn read_only_connection_pool_keeps_a_bounded_number_of_connections() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let _conn = setup_database(&database_path).expect("database should initialize");
+
+    let db_url = database_path.to_str().expect("path should be valid UTF-8");
+    let pool = read_only_connection_pool(db_url).expect("pool should be created");
+
+    assert_eq!(
+        pool.connections.len(),
+        READ_ONLY_POOL_SIZE,
+        "the pool must not grow with the number of readers"
+    );
+
+    // Round-robin across the pooled connections: repeated borrows must cycle through exactly
+    // the pooled set rather than creating new connections.
+    let mut seen = std::collections::HashSet::new();
+    for _ in 0..(READ_ONLY_POOL_SIZE * 3) {
+        let ptr = pool
+            .with_connection(|conn| conn as *mut _ as usize)
+            .expect("pooled connection should be usable");
+        seen.insert(ptr);
+    }
+    assert_eq!(
+        seen.len(),
+        READ_ONLY_POOL_SIZE,
+        "borrows must be served by the pooled connections"
+    );
+}
+
+/// The pool is cached per database URL so that every reader in the process shares it.
+#[test]
+fn read_only_connection_pool_is_shared_per_database_url() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let _conn = setup_database(&database_path).expect("database should initialize");
+
+    let db_url = database_path.to_str().expect("path should be valid UTF-8");
+    let first = read_only_connection_pool(db_url).expect("pool should be created");
+    let second = read_only_connection_pool(db_url).expect("pool should be reused");
+
+    assert!(
+        Arc::ptr_eq(&first, &second),
+        "readers for the same database must share one pool"
+    );
+}
+
+/// Concurrent readers must be able to borrow from the pool without panicking.
+#[test]
+fn read_only_connection_pool_serves_concurrent_readers() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let _conn = setup_database(&database_path).expect("database should initialize");
+
+    let db_url = database_path
+        .to_str()
+        .expect("path should be valid UTF-8")
+        .to_owned();
+    let pool = read_only_connection_pool(&db_url).expect("pool should be created");
+
+    let handles: Vec<_> = (0..8)
+        .map(|_| {
+            let pool = pool.clone();
+            std::thread::spawn(move || {
+                for _ in 0..25 {
+                    let value = pool.with_connection(|conn| {
+                        conn.batch_execute("SELECT 1")
+                            .expect("query should succeed");
+                    });
+                    assert!(value.is_some(), "concurrent borrow must succeed");
+                }
+            })
+        })
+        .collect();
+
+    for handle in handles {
+        handle.join().expect("reader thread should not panic");
+    }
+}
+
+#[test]
+fn read_only_connection_pool_releases_connections_after_last_reader() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let _conn = setup_database(&database_path).expect("database should initialize");
+    let db_url = database_path.to_str().expect("path should be valid UTF-8");
+    let first = read_only_connection_pool(db_url).expect("pool should be created");
+    let second = read_only_connection_pool(db_url).expect("pool should be shared");
+    let weak = Arc::downgrade(&first);
+
+    drop(first);
+    assert!(
+        weak.upgrade().is_some(),
+        "the remaining reader must keep the pool alive"
+    );
+    drop(second);
+    assert!(
+        weak.upgrade().is_none(),
+        "the cache must not keep database files open"
+    );
+
+    let reopened = read_only_connection_pool(db_url).expect("pool should reopen");
+    assert!(
+        reopened
+            .with_connection(|conn| conn.batch_execute("SELECT 1"))
+            .unwrap()
+            .is_ok()
+    );
 }

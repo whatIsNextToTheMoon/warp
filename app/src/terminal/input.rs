@@ -40,16 +40,12 @@ use std::time::Duration;
 use ai::skills::SkillReference;
 use async_channel::Sender;
 use base64::Engine as _;
-#[cfg(feature = "local_fs")]
-use diesel::SqliteConnection;
 use futures::FutureExt as _;
 use futures::stream::AbortHandle;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use ordered_float::Float;
 use parking_lot::FairMutex;
-#[cfg(feature = "local_fs")]
-use parking_lot::Mutex;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -103,8 +99,7 @@ use warpui::units::IntoPixels;
 use warpui::{
     AppContext, CursorInfo, Entity, EntityId, FocusContext, ModelAsRef, ModelHandle,
     SingletonEntity, TypedActionView, View, ViewContext, ViewHandle, ViewUpdateError,
-    WeakViewHandle, end_trace,
-    start_trace,
+    WeakViewHandle, end_trace, start_trace,
 };
 
 use self::decorations::InputBackgroundJobOptions;
@@ -248,7 +243,9 @@ use crate::network::NetworkStatus;
 use crate::pane_group::PaneGroupAction;
 use crate::pane_group::focus_state::PaneFocusHandle;
 #[cfg(feature = "local_fs")]
-use crate::persistence::{database_file_path_for_current_scope, establish_ro_connection};
+use crate::persistence::{
+    ReadOnlyConnectionPool, database_file_path_for_current_scope, read_only_connection_pool,
+};
 use crate::prefix::longest_common_prefix;
 use crate::prompt::editor_modal::OpenSource as PromptEditorOpenSource;
 use crate::resource_center::{
@@ -1899,7 +1896,7 @@ pub struct Input {
     hoverable_handle: MouseStateHandle,
 
     #[cfg(feature = "local_fs")]
-    conn: Option<Arc<Mutex<SqliteConnection>>>,
+    conn: Option<Arc<ReadOnlyConnectionPool>>,
 
     /// Cached hint text to ensure it remains stable during shell initialization hooks
     cached_agent_mode_hint_text: Option<&'static str>,
@@ -4314,10 +4311,8 @@ impl Input {
         };
 
         #[cfg(feature = "local_fs")]
-        if let Some(db_url) = database_file_path_for_current_scope().to_str()
-            && let Ok(conn) = establish_ro_connection(db_url)
-        {
-            input.conn = Some(Arc::new(Mutex::new(conn)));
+        if let Some(db_url) = database_file_path_for_current_scope().to_str() {
+            input.conn = read_only_connection_pool(db_url);
         }
 
         if input.model.lock().shared_session_status().is_viewer() {
@@ -10503,21 +10498,22 @@ impl Input {
                     #[cfg(feature = "local_fs")]
                     // First, use rich history to find commands with a matching prefix that were run
                     // in a similar context, taking into account the most recent block run.
-                    if let Some(conn) = conn
+                    if let Some(pool) = conn
                         && let Some((last_command, last_serialized_block)) =
                             &last_user_block_completed_data
                     {
-                        let similar_history_contexts = {
-                            let mut conn = conn.lock();
-                            NextCommandModel::get_similar_history_context(
-                                &mut conn,
-                                last_command,
-                                &last_serialized_block.pwd,
-                                last_serialized_block.exit_code,
-                                last_serialized_block.shell_host.as_ref(),
-                                0,
-                            )
-                        };
+                        let similar_history_contexts = pool
+                            .with_connection(|conn| {
+                                NextCommandModel::get_similar_history_context(
+                                    conn,
+                                    last_command,
+                                    &last_serialized_block.pwd,
+                                    last_serialized_block.exit_code,
+                                    last_serialized_block.shell_host.as_ref(),
+                                    0,
+                                )
+                            })
+                            .unwrap_or_default();
                         if !similar_history_contexts.is_empty() {
                             let mut history_next_command_counts = counter::Counter::<String>::new();
                             // Find the most likely next command after a similar context, out of those that have a matching prefix and aren't ignored.

@@ -7,7 +7,7 @@ use chrono::Utc;
 use futures::stream::AbortHandle;
 use itertools::Itertools;
 #[cfg_attr(not(feature = "local_fs"), allow(unused_imports))]
-use parking_lot::{FairMutex, Mutex};
+use parking_lot::FairMutex;
 use warp_completer::completer::{
     self, AliasExpansionResult, CompleterOptions, CompletionsFallbackStrategy, MatchStrategy,
     expand_command_aliases,
@@ -31,7 +31,9 @@ use crate::ai::blocklist::BlocklistAIController;
 use crate::ai_assistant::execution_context::WarpAiExecutionContext;
 use crate::completer::SessionContext;
 #[cfg(feature = "local_fs")]
-use crate::persistence::{database_file_path_for_current_scope, establish_ro_connection};
+use crate::persistence::{
+    ReadOnlyConnectionPool, database_file_path_for_current_scope, read_only_connection_pool,
+};
 use crate::server::server_api::{AIApiError, ServerApi};
 use crate::server::team_scope::RequestTeamScope;
 use crate::settings::AISettings;
@@ -142,7 +144,7 @@ pub struct NextCommandModel {
     /// so next-command requests resolve against that team rather than the server's default.
     ai_controller: ModelHandle<BlocklistAIController>,
     #[cfg(feature = "local_fs")]
-    conn: Option<Arc<Mutex<SqliteConnection>>>,
+    conn: Option<Arc<ReadOnlyConnectionPool>>,
 
     next_command_state: NextCommandSuggestionState,
     /// Context used to generate the zero-state suggestion.
@@ -170,11 +172,7 @@ impl NextCommandModel {
         #[cfg(feature = "local_fs")]
         let conn = database_file_path_for_current_scope()
             .to_str()
-            .and_then(|db_url| {
-                establish_ro_connection(db_url)
-                    .ok()
-                    .map(|conn| Arc::new(Mutex::new(conn)))
-            });
+            .and_then(read_only_connection_pool);
         Self {
             sessions,
             model,
@@ -283,7 +281,7 @@ impl NextCommandModel {
     #[cfg_attr(not(feature = "local_fs"), allow(unused_variables))]
     fn get_next_command_context(
         terminal_model: Arc<FairMutex<TerminalModel>>,
-        #[cfg(feature = "local_fs")] conn: Option<Arc<Mutex<SqliteConnection>>>,
+        #[cfg(feature = "local_fs")] conn: Option<Arc<ReadOnlyConnectionPool>>,
         ai_execution_context: WarpAiExecutionContext,
         block_completed: &UserBlockCompleted,
     ) -> NextCommandContext {
@@ -291,8 +289,7 @@ impl NextCommandModel {
         let mut history_contexts = vec![];
         let context_messages = get_context_messages(terminal_model.clone(), 5, 100, 200);
         #[cfg(feature = "local_fs")]
-        if let Some(conn) = conn {
-            let mut conn = conn.lock();
+        if let Some(pool) = conn {
             let serialized_block = block_completed.serialized_block.get_with(|compute| {
                 let model = terminal_model.lock();
                 compute(model.block_list())
@@ -301,14 +298,18 @@ impl NextCommandModel {
                 let model = terminal_model.lock();
                 compute(model.block_list())
             });
-            history_contexts = Self::get_similar_history_context(
-                &mut conn,
-                command,
-                &serialized_block.pwd,
-                serialized_block.exit_code,
-                serialized_block.shell_host.as_ref(),
-                NUM_ADDITIONAL_PREV_COMMAND_CONTEXT_LLM,
-            );
+            history_contexts = pool
+                .with_connection(|conn| {
+                    Self::get_similar_history_context(
+                        conn,
+                        command,
+                        &serialized_block.pwd,
+                        serialized_block.exit_code,
+                        serialized_block.shell_host.as_ref(),
+                        NUM_ADDITIONAL_PREV_COMMAND_CONTEXT_LLM,
+                    )
+                })
+                .unwrap_or_default();
         }
         NextCommandContext {
             history_contexts,

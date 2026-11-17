@@ -1,5 +1,4 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 
 use async_compat::CompatExt as _;
 use mcp::oauth::{
@@ -9,7 +8,6 @@ use mcp::oauth::{
     write_to_secure_storage,
 };
 use mcp::runtime::{error_to_user_message, spawn_server};
-use parking_lot::Mutex;
 use simple_logger::manager::LogManager;
 use url::Url;
 use uuid::Uuid;
@@ -46,7 +44,7 @@ use crate::cloud_object::{
 };
 use crate::drive::CloudObjectTypeAndId;
 use crate::persistence::{
-    ModelEvent, database_file_path_for_current_scope, establish_ro_connection,
+    ModelEvent, database_file_path_for_current_scope, read_only_connection_pool,
 };
 use crate::server::cloud_objects::update_manager::{InitiatedBy, UpdateManager};
 use crate::server::ids::{ClientId, ServerId, SyncId};
@@ -383,14 +381,9 @@ impl TemplatableMCPServerManager {
             });
         }
 
-        let database_connection =
-            database_file_path_for_current_scope()
-                .to_str()
-                .and_then(|db_url| {
-                    establish_ro_connection(db_url)
-                        .ok()
-                        .map(|conn| Arc::new(Mutex::new(conn)))
-                });
+        let database_connection = database_file_path_for_current_scope()
+            .to_str()
+            .and_then(read_only_connection_pool);
 
         let mut me = Self {
             cloud_templatable_mcp_servers: Default::default(),
@@ -1677,10 +1670,13 @@ impl TemplatableMCPServerManager {
             return Err(LegacyToTemplatableMCPConversionError::TemplateAlreadyExists);
         }
 
-        if let Some(conn) = &self.database_connection {
-            let mut conn = conn.lock();
-            legacy_mcp_server.fill_environment_variables(&mut conn);
-        } else {
+        let Some(pool) = &self.database_connection else {
+            return Err(LegacyToTemplatableMCPConversionError::NoDBConnection);
+        };
+        if pool
+            .with_connection(|conn| legacy_mcp_server.fill_environment_variables(conn))
+            .is_none()
+        {
             return Err(LegacyToTemplatableMCPConversionError::NoDBConnection);
         }
 

@@ -2,10 +2,8 @@
 
 use std::collections::{HashMap, HashSet};
 #[cfg(feature = "local_fs")]
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-#[cfg(feature = "local_fs")]
-use diesel::SqliteConnection;
 use warpui::{Entity, SingletonEntity};
 
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};
@@ -14,7 +12,9 @@ use crate::ai::blocklist::history_model::convert_persisted_conversation_to_ai_co
 #[cfg(test)]
 use crate::persistence::model::AgentConversation;
 #[cfg(feature = "local_fs")]
-use crate::persistence::{database_file_path_for_current_scope, establish_ro_connection};
+use crate::persistence::{
+    ReadOnlyConnectionPool, database_file_path_for_current_scope, read_only_connection_pool,
+};
 
 /// Singleton model that restores agent conversations on demand.
 ///
@@ -31,7 +31,7 @@ pub struct RestoredAgentConversations {
     /// otherwise serve the same conversation repeatedly.
     taken: HashSet<AIConversationId>,
     #[cfg(feature = "local_fs")]
-    db_connection: Option<Arc<Mutex<SqliteConnection>>>,
+    db_connection: Option<Arc<ReadOnlyConnectionPool>>,
 }
 
 impl RestoredAgentConversations {
@@ -39,11 +39,7 @@ impl RestoredAgentConversations {
         #[cfg(feature = "local_fs")]
         let db_connection = database_file_path_for_current_scope()
             .to_str()
-            .and_then(|db_url| {
-                establish_ro_connection(db_url)
-                    .ok()
-                    .map(|conn| Arc::new(Mutex::new(conn)))
-            });
+            .and_then(read_only_connection_pool);
 
         Self {
             conversations: HashMap::new(),
@@ -83,21 +79,22 @@ impl RestoredAgentConversations {
     fn load_from_db(&self, id: &AIConversationId) -> Option<AIConversation> {
         #[cfg(feature = "local_fs")]
         {
-            let conn = self.db_connection.clone()?;
-            let mut conn = conn.lock().ok()?;
-            match crate::persistence::agent::read_agent_conversation_by_id(
-                &mut conn,
-                &id.to_string(),
-            ) {
-                Ok(Some(conversation)) => {
-                    convert_persisted_conversation_to_ai_conversation_with_metadata(conversation)
+            let pool = self.db_connection.clone()?;
+            let id_str = id.to_string();
+            pool.with_connection(|conn| {
+                match crate::persistence::agent::read_agent_conversation_by_id(conn, &id_str) {
+                    Ok(Some(conversation)) => {
+                        convert_persisted_conversation_to_ai_conversation_with_metadata(
+                            conversation,
+                        )
+                    }
+                    Ok(None) => None,
+                    Err(e) => {
+                        log::warn!("Failed to read AgentConversation {id}: {e:?}");
+                        None
+                    }
                 }
-                Ok(None) => None,
-                Err(e) => {
-                    log::warn!("Failed to read AgentConversation {id}: {e:?}");
-                    None
-                }
-            }
+            })?
         }
         #[cfg(not(feature = "local_fs"))]
         {

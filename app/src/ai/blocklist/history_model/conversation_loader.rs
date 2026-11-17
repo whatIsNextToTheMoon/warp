@@ -342,12 +342,10 @@ impl BlocklistAIHistoryModel {
         // If not in memory, try to load from the database
         #[cfg(feature = "local_fs")]
         {
-            let persisted_ai_conversation = self.db_connection.clone().and_then(|conn| {
-                let mut conn = conn.lock().ok()?;
-
+            let persisted_ai_conversation = self.db_connection.clone().and_then(|pool| {
                 let id_str = conversation_id.to_string();
                 log::info!("Loading conversation {id_str} from db");
-                match read_agent_conversation_by_id(&mut conn, &id_str) {
+                pool.with_connection(|conn| match read_agent_conversation_by_id(conn, &id_str) {
                     Ok(Some(conv)) => Some(conv),
                     Ok(None) => {
                         log::warn!("No AgentConversation found with id {id_str}");
@@ -357,7 +355,7 @@ impl BlocklistAIHistoryModel {
                         log::warn!("Failed to read AgentConversation {id_str}: {e:?}");
                         None
                     }
-                }
+                })?
             });
 
             // Convert the persisted conversation to an AIConversation

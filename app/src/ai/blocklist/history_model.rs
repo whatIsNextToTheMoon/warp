@@ -1,14 +1,10 @@
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-#[cfg(feature = "local_fs")]
-use std::sync::Mutex;
 
 use ai::skills::SkillPathOrigin;
 use anyhow::anyhow;
 use chrono::{DateTime, Local, NaiveDateTime};
-#[cfg(feature = "local_fs")]
-use diesel::SqliteConnection;
 use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -45,7 +41,9 @@ use crate::input_suggestions::HistoryOrder;
 use crate::persistence::ModelEvent;
 use crate::persistence::model::{AgentConversation, AgentConversationData};
 #[cfg(feature = "local_fs")]
-use crate::persistence::{database_file_path_for_current_scope, establish_ro_connection};
+use crate::persistence::{
+    ReadOnlyConnectionPool, database_file_path_for_current_scope, read_only_connection_pool,
+};
 use crate::server::server_api::ServerApiProvider;
 use crate::terminal::model::block::BlockId;
 use crate::terminal::view::blocklist_filter;
@@ -332,7 +330,7 @@ pub struct BlocklistAIHistoryModel {
     in_flight_server_metadata_fetches: HashSet<AIConversationId>,
 
     #[cfg(feature = "local_fs")]
-    db_connection: Option<Arc<Mutex<SqliteConnection>>>,
+    db_connection: Option<Arc<ReadOnlyConnectionPool>>,
 }
 
 impl BlocklistAIHistoryModel {
@@ -344,11 +342,7 @@ impl BlocklistAIHistoryModel {
         #[cfg(feature = "local_fs")]
         let db_connection = database_file_path_for_current_scope()
             .to_str()
-            .and_then(|db_url| {
-                establish_ro_connection(db_url)
-                    .ok()
-                    .map(|conn| Arc::new(Mutex::new(conn)))
-            });
+            .and_then(read_only_connection_pool);
 
         let prompt_history = prompt_history
             .into_iter()

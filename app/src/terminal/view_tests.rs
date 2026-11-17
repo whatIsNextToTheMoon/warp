@@ -11096,3 +11096,251 @@ fn visible_bootstrap_block_leaves_focus_on_tab_group_rename_editor() {
         }));
     });
 }
+
+#[test]
+fn test_active_block_snapshot_is_debounced_until_output_goes_quiet() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        let snapshots: Rc<RefCell<usize>> = Rc::new(RefCell::new(0));
+        let counter = snapshots.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let Event::ActiveBlockSnapshot { .. } = event {
+                    *counter.borrow_mut() += 1;
+                }
+            });
+        });
+
+        let pending = terminal.update(&mut app, |view, ctx| {
+            view.model
+                .lock()
+                .simulate_long_running_block("sleep 10", "still running");
+            view.active_block_persist_debounce_override = Some(Duration::ZERO);
+            let mut pending = Vec::new();
+            for _ in 0..3 {
+                view.maybe_persist_active_block_for_restore(false, ctx);
+                let future_id = view
+                    .active_block_persist_debounce_handle
+                    .as_ref()
+                    .unwrap()
+                    .future_id();
+                pending.push(ctx.await_spawned_future(future_id));
+            }
+            pending
+        });
+        for future in pending {
+            future.await;
+        }
+
+        assert_eq!(
+            *snapshots.borrow(),
+            1,
+            "superseded wakeups must not emit extra snapshots"
+        );
+        assert!(terminal.read(&app, |view, _| {
+            view.active_block_persist_debounce_handle.is_none()
+        }));
+    })
+}
+
+/// Full-screen TUIs repaint the screen instead of appending to scrollback, so the periodic
+/// snapshot is skipped entirely while the alt screen is active.
+#[test]
+fn test_active_block_snapshot_is_skipped_while_alt_screen_is_active() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        let snapshots: Rc<RefCell<usize>> = Rc::new(RefCell::new(0));
+        let counter = snapshots.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let Event::ActiveBlockSnapshot { .. } = event {
+                    *counter.borrow_mut() += 1;
+                }
+            });
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.model
+                .lock()
+                .simulate_long_running_block("sleep 10", "still running");
+            view.model.lock().set_mode(ansi::Mode::SwapScreen {
+                save_cursor_and_clear_screen: true,
+            });
+            assert!(view.model.lock().is_alt_screen_active());
+
+            view.maybe_persist_active_block_for_restore(false, ctx);
+            assert!(
+                view.active_block_persist_debounce_handle.is_none(),
+                "alt-screen output must not schedule a snapshot"
+            );
+        });
+
+        assert_eq!(
+            *snapshots.borrow(),
+            0,
+            "alt-screen output must not be snapshotted"
+        );
+    })
+}
+
+/// A continuously-updating command must still be snapshotted eventually, so crash recovery
+/// cannot be starved by an endless stream of output.
+#[test]
+fn test_active_block_snapshot_is_forced_after_max_interval() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        let snapshots: Rc<RefCell<usize>> = Rc::new(RefCell::new(0));
+        let counter = snapshots.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let Event::ActiveBlockSnapshot { .. } = event {
+                    *counter.borrow_mut() += 1;
+                }
+            });
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.model
+                .lock()
+                .simulate_long_running_block("sleep 10", "still running");
+            // Pretend the last snapshot happened longer ago than the maximum interval.
+            view.last_active_block_persisted_at =
+                Some(Instant::now() - ACTIVE_BLOCK_PERSIST_MAX_INTERVAL);
+            view.maybe_persist_active_block_for_restore(false, ctx);
+            assert!(
+                view.active_block_persist_debounce_handle.is_none(),
+                "the max-interval path must snapshot immediately instead of debouncing"
+            );
+        });
+
+        assert_eq!(
+            *snapshots.borrow(),
+            1,
+            "the max interval must force a snapshot"
+        );
+    })
+}
+
+#[test]
+fn test_active_block_snapshot_is_skipped_when_restore_is_disabled_before_timer_fires() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let snapshots = Rc::new(RefCell::new(0));
+        let counter = snapshots.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let Event::ActiveBlockSnapshot { .. } = event {
+                    *counter.borrow_mut() += 1;
+                }
+            });
+        });
+
+        let pending = terminal.update(&mut app, |view, ctx| {
+            view.model
+                .lock()
+                .simulate_long_running_block("sleep 10", "still running");
+            view.active_block_persist_debounce_override = Some(Duration::ZERO);
+            view.maybe_persist_active_block_for_restore(false, ctx);
+            let future_id = view
+                .active_block_persist_debounce_handle
+                .as_ref()
+                .unwrap()
+                .future_id();
+            GeneralSettings::handle(ctx).update(ctx, |settings, ctx| {
+                settings.restore_session.set_value(false, ctx).unwrap();
+            });
+            ctx.await_spawned_future(future_id)
+        });
+        pending.await;
+
+        assert_eq!(
+            *snapshots.borrow(),
+            0,
+            "disabling restore must suppress an already queued snapshot"
+        );
+    });
+}
+
+#[test]
+fn test_active_block_snapshot_is_skipped_when_alt_screen_opens_before_timer_fires() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let snapshots = Rc::new(RefCell::new(0));
+        let counter = snapshots.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let Event::ActiveBlockSnapshot { .. } = event {
+                    *counter.borrow_mut() += 1;
+                }
+            });
+        });
+
+        let pending = terminal.update(&mut app, |view, ctx| {
+            view.model
+                .lock()
+                .simulate_long_running_block("sleep 10", "still running");
+            view.active_block_persist_debounce_override = Some(Duration::ZERO);
+            view.maybe_persist_active_block_for_restore(false, ctx);
+            let future_id = view
+                .active_block_persist_debounce_handle
+                .as_ref()
+                .unwrap()
+                .future_id();
+            view.model.lock().set_mode(ansi::Mode::SwapScreen {
+                save_cursor_and_clear_screen: true,
+            });
+            ctx.await_spawned_future(future_id)
+        });
+        pending.await;
+
+        assert_eq!(
+            *snapshots.borrow(),
+            0,
+            "a queued snapshot must respect the current screen mode"
+        );
+    });
+}
+
+#[test]
+fn test_active_block_snapshot_is_bounded_without_a_command_start_snapshot() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let snapshots = Rc::new(RefCell::new(0));
+        let counter = snapshots.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let Event::ActiveBlockSnapshot { .. } = event {
+                    *counter.borrow_mut() += 1;
+                }
+            });
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.model
+                .lock()
+                .simulate_long_running_block("sleep 10", "still running");
+            view.maybe_persist_active_block_for_restore(false, ctx);
+            let first_attempt = view
+                .last_active_block_persisted_at
+                .expect("the first wakeup must start the maximum-interval clock");
+            view.last_active_block_persisted_at =
+                Some(first_attempt - ACTIVE_BLOCK_PERSIST_MAX_INTERVAL);
+            view.maybe_persist_active_block_for_restore(false, ctx);
+        });
+
+        assert_eq!(
+            *snapshots.borrow(),
+            1,
+            "continuous output must not defer the first snapshot forever"
+        );
+    });
+}

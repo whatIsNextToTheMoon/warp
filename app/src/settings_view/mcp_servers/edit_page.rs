@@ -3,11 +3,6 @@ use std::path::Path;
 #[cfg(feature = "local_fs")]
 use std::sync::Arc;
 
-#[cfg(feature = "local_fs")]
-#[cfg(not(target_family = "wasm"))]
-use diesel::SqliteConnection;
-#[cfg(feature = "local_fs")]
-use parking_lot::Mutex;
 use pathfinder_geometry::vector::vec2f;
 use settings::Setting as _;
 use uuid::Uuid;
@@ -42,7 +37,9 @@ use crate::cloud_object::{CloudObject, Space};
 use crate::code::editor::view::{CodeEditorRenderOptions, CodeEditorView};
 use crate::persistence::ModelEvent;
 #[cfg(feature = "local_fs")]
-use crate::persistence::{database_file_path_for_current_scope, establish_ro_connection};
+use crate::persistence::{
+    ReadOnlyConnectionPool, database_file_path_for_current_scope, read_only_connection_pool,
+};
 use crate::server::cloud_objects::update_manager::InitiatedBy;
 use crate::server::telemetry::{MCPTemplateCreationSource, TelemetryEvent};
 use crate::settings_view::mcp_servers::destructive_mcp_confirmation_dialog::{
@@ -127,7 +124,7 @@ pub struct MCPServersEditPageView {
 
     #[cfg(feature = "local_fs")]
     #[allow(dead_code)]
-    database_connection: Option<Arc<Mutex<SqliteConnection>>>,
+    database_connection: Option<Arc<ReadOnlyConnectionPool>>,
 }
 
 impl MCPServersEditPageView {
@@ -194,14 +191,9 @@ impl MCPServersEditPageView {
         });
 
         #[cfg(feature = "local_fs")]
-        let database_connection =
-            database_file_path_for_current_scope()
-                .to_str()
-                .and_then(|db_url| {
-                    establish_ro_connection(db_url)
-                        .ok()
-                        .map(|conn| Arc::new(Mutex::new(conn)))
-                });
+        let database_connection = database_file_path_for_current_scope()
+            .to_str()
+            .and_then(read_only_connection_pool);
 
         Self {
             handle: ctx.handle(),
