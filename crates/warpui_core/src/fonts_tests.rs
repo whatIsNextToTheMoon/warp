@@ -157,7 +157,7 @@ impl platform::FontDB for EmWidthFontDB {
     }
 
     fn glyph_for_char(&self, _font_id: FontId, _char: char) -> Option<GlyphId> {
-        Some(0)
+        Some(1)
     }
 
     fn family_id_for_name(&self, _name: &str) -> Option<FamilyId> {
