@@ -77,6 +77,7 @@ use crate::terminal::model::block::AgentViewVisibility;
 use crate::terminal::model::blocks::{TotalIndex, insert_block};
 use crate::terminal::model::grid::Dimensions as _;
 use crate::terminal::model::terminal_model::WithinBlock;
+use crate::terminal::model::test_utils::{TestBlockListBuilder, block_size};
 use crate::terminal::session_settings::AgentToolbarChipSelection;
 use crate::terminal::shared_session::shared_handlers::{
     RemoteUpdateGuard, apply_cli_agent_state_update,
@@ -6290,10 +6291,18 @@ fn test_active_block_snapshot_captures_running_command_for_crash_restore() {
             assert!(snapshot.did_execute);
             assert!(snapshot.start_ts.is_some());
             assert!(snapshot.completed_ts.is_some());
-            let command = String::from_utf8_lossy(&snapshot.stylized_command);
-            let output = String::from_utf8_lossy(&snapshot.stylized_output);
-            assert!(command.contains("sleep 10"), "{command:?}");
-            assert!(output.contains("still running"), "{output:?}");
+            let mut sizes = block_size();
+            sizes.size = SizeInfo::new_without_font_metrics(24, 80);
+            let restored_blocks = [(*snapshot).clone().into()];
+            let restored = TestBlockListBuilder::new()
+                .with_block_sizes(sizes)
+                .with_restored_blocks(&restored_blocks)
+                .build();
+            let block = restored
+                .block_with_id(&snapshot.id)
+                .expect("the running command snapshot must be restorable");
+            assert_eq!(block.command_to_string(), "sleep 10");
+            assert_eq!(block.output_to_string(), "still running");
         });
     })
 }
