@@ -719,6 +719,8 @@ async fn spawn_uses_resolved_team_scope() {
         .returning(|_| Ok(task_with(AmbientAgentTaskState::Succeeded, None, None)));
 
     let request = crate::server::server_api::ai::SpawnAgentRequest {
+        delegated_github_coauthor_user_uid: None,
+        metadata: Default::default(),
         prompt: Some("test".to_string()),
         mode: UserQueryMode::Normal,
         config: None,
@@ -797,6 +799,8 @@ async fn poll_retries_transient_429_errors() {
 
     let ai_client = Arc::new(mock);
     let request = crate::server::server_api::ai::SpawnAgentRequest {
+        delegated_github_coauthor_user_uid: None,
+        metadata: Default::default(),
         prompt: Some("test".to_string()),
         mode: crate::ai::agent::UserQueryMode::Normal,
         config: None,
@@ -866,6 +870,8 @@ async fn poll_fails_on_permanent_http_error() {
 
     let ai_client = Arc::new(mock);
     let request = crate::server::server_api::ai::SpawnAgentRequest {
+        delegated_github_coauthor_user_uid: None,
+        metadata: Default::default(),
         prompt: Some("test".to_string()),
         mode: crate::ai::agent::UserQueryMode::Normal,
         config: None,
@@ -936,6 +942,8 @@ async fn poll_gives_up_after_max_transient_retries() {
 
     let ai_client = Arc::new(mock);
     let request = crate::server::server_api::ai::SpawnAgentRequest {
+        delegated_github_coauthor_user_uid: None,
+        metadata: Default::default(),
         prompt: Some("test".to_string()),
         mode: crate::ai::agent::UserQueryMode::Normal,
         config: None,
@@ -1000,6 +1008,8 @@ async fn poll_stops_on_terminal_failure_like_state() {
 
     let ai_client = Arc::new(mock);
     let request = crate::server::server_api::ai::SpawnAgentRequest {
+        delegated_github_coauthor_user_uid: None,
+        metadata: Default::default(),
         prompt: Some("test".to_string()),
         mode: UserQueryMode::Normal,
         config: None,
@@ -1147,6 +1157,8 @@ async fn poll_for_session_join_info_waits_until_link_is_available() {
 
     let ai_client = Arc::new(mock);
     let request = crate::server::server_api::ai::SpawnAgentRequest {
+        delegated_github_coauthor_user_uid: None,
+        metadata: Default::default(),
         prompt: Some("test".to_string()),
         mode: UserQueryMode::Normal,
         config: None,

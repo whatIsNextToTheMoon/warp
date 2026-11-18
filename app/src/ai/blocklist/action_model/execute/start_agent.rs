@@ -35,6 +35,8 @@ impl StartAgentRequestId {
 
 #[derive(Clone)]
 pub struct StartAgentRequest {
+    pub delegated_github_coauthor_user_uid: Option<String>,
+    pub metadata: HashMap<String, String>,
     pub id: StartAgentRequestId,
     pub name: String,
     pub prompt: String,
@@ -252,9 +254,11 @@ impl StartAgentExecutor {
         name: String,
         prompt: String,
         execution_mode: StartAgentExecutionMode,
+        metadata: HashMap<String, String>,
         lifecycle_subscription: Option<Vec<LifecycleEventType>>,
         parent_conversation_id: AIConversationId,
         parent_run_id: Option<String>,
+        delegated_github_coauthor_user_uid: Option<String>,
         request_team_scope: RequestTeamScope,
         ctx: &mut ModelContext<Self>,
     ) -> async_channel::Receiver<StartAgentOutcome> {
@@ -274,9 +278,11 @@ impl StartAgentExecutor {
                 name,
                 prompt,
                 execution_mode,
+                metadata,
                 lifecycle_subscription,
                 parent_conversation_id,
                 parent_run_id,
+                delegated_github_coauthor_user_uid,
                 request_team_scope,
             },
         )));

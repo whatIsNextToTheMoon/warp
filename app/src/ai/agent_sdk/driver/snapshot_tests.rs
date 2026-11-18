@@ -8,6 +8,7 @@ use command::blocking::Command as BlockingCommand;
 use mockito::{Matcher, Server, ServerGuard};
 use tempfile::{Builder as TempDirBuilder, TempDir};
 use tokio::runtime::Runtime;
+use warp_cli::agent::Harness;
 
 use super::*;
 use crate::ai::agent::api::ServerConversationToken;
@@ -16,7 +17,7 @@ use crate::ai::agent_sdk::test_support::build_test_http_client;
 use crate::ai::artifacts::Artifact;
 use crate::server::server_api::harness_support::{
     CommitSnapshotResponse, ReportArtifactResponse, ResolvePromptRequest, ResolvedHarnessPrompt,
-    SnapshotUploadMode,
+    SnapshotUploadMode, WaitForEventsResponse,
 };
 
 // ------------------------------------------------------------------------------------------------
@@ -118,7 +119,23 @@ impl TestClient {
 
 #[async_trait]
 impl HarnessSupportClient for TestClient {
-    async fn create_external_conversation(&self, _format: &str) -> Result<ServerConversationToken> {
+    async fn wait_for_events(&self, _run_ids: &[String]) -> Result<WaitForEventsResponse> {
+        unimplemented!("not used by upload_snapshot_from_declarations_file")
+    }
+
+    async fn create_external_conversation(
+        &self,
+        _format: &str,
+        _harness: Harness,
+    ) -> Result<ServerConversationToken> {
+        unimplemented!("not used by upload_snapshot_from_declarations_file")
+    }
+
+    async fn upload_conversation_data(
+        &self,
+        _conversation_id: &ServerConversationToken,
+        _conversation_data: &[u8],
+    ) -> Result<()> {
         unimplemented!("not used by upload_snapshot_from_declarations_file")
     }
 
@@ -157,6 +174,14 @@ impl HarnessSupportClient for TestClient {
 
     async fn finish_task(&self, _success: bool, _summary: &str) -> Result<()> {
         unimplemented!("not used by upload_snapshot_from_declarations_file")
+    }
+
+    async fn report_transport(
+        &self,
+        _transport: warp_cli::agent::HarnessTransport,
+        _fallback_reason: Option<&'static str>,
+    ) -> Result<()> {
+        Ok(())
     }
 
     async fn report_clean_shutdown(&self) -> Result<()> {
@@ -222,7 +247,7 @@ impl HarnessSupportClient for TestClient {
         })
     }
 
-    fn http_client(&self) -> &http_client::Client {
+    fn external_http_client(&self) -> &http_client::Client {
         &self.http
     }
 }

@@ -30,6 +30,8 @@ use crate::test_fixtures::{TestHostView, add_test_action_model};
 /// Builds a request with the given harness and execution mode.
 fn request(harness: &str, execution_mode: RunAgentsExecutionMode) -> RunAgentsRequest {
     RunAgentsRequest {
+        delegated_github_coauthor_user_uid: None,
+        metadata: Default::default(),
         summary: "Parallelize the task.".to_string(),
         base_prompt: "base".to_string(),
         skills: Vec::new(),
@@ -37,6 +39,7 @@ fn request(harness: &str, execution_mode: RunAgentsExecutionMode) -> RunAgentsRe
         harness_type: harness.to_string(),
         execution_mode,
         agent_run_configs: vec![RunAgentsAgentRunConfig {
+            metadata: Default::default(),
             name: "researcher".to_string(),
             prompt: "research".to_string(),
             title: "Researcher".to_string(),
@@ -207,7 +210,7 @@ fn window_team_change_reseeds_the_auth_secret_for_the_new_scope() {
         let action = AIAgentAction {
             id: AIAgentActionId::from("run-agents-team-scope".to_string()),
             task_id: TaskId::new("task-1".to_string()),
-            action: AIAgentActionType::RunAgents(incoming.clone()),
+            action: AIAgentActionType::RunAgents(Box::new(incoming.clone())),
             requires_result: true,
         };
         let action_model = add_test_action_model(&mut app);
@@ -218,7 +221,7 @@ fn window_team_change_reseeds_the_auth_secret_for_the_new_scope() {
         let other_action = AIAgentAction {
             id: AIAgentActionId::from("run-agents-other-window".to_string()),
             task_id: TaskId::new("task-2".to_string()),
-            action: AIAgentActionType::RunAgents(other_incoming.clone()),
+            action: AIAgentActionType::RunAgents(Box::new(other_incoming.clone())),
             requires_result: true,
         };
         let block = app.update(|ctx| {
@@ -336,7 +339,8 @@ fn local_request_with_implicit_oz_harness_preserves_explicit_model() {
 
 #[test]
 fn build_request_carries_card_fields_and_edited_run_wide_state() {
-    let original = request("oz", remote("env-1", "warp"));
+    let mut original = request("oz", remote("env-1", "warp"));
+    original.delegated_github_coauthor_user_uid = Some("delegating-human".to_string());
     let mut state = TuiOrchestrationBlock::config_state_from_request(&original, None);
     state.model_id = "gpt-5".to_string();
     state.harness_type = "codex".to_string();
@@ -350,6 +354,10 @@ fn build_request_carries_card_fields_and_edited_run_wide_state() {
     assert_eq!(built.base_prompt, original.base_prompt);
     assert_eq!(built.agent_run_configs, original.agent_run_configs);
     assert_eq!(built.plan_id, original.plan_id);
+    assert_eq!(
+        built.delegated_github_coauthor_user_uid,
+        original.delegated_github_coauthor_user_uid
+    );
     // Run-wide fields come from the edited state; the per-call
     // computer-use flag is preserved through the round trip.
     assert_eq!(built.model_id, "gpt-5");
@@ -498,7 +506,7 @@ fn test_block(
     let action = AIAgentAction {
         id: AIAgentActionId::from("run-agents-1".to_string()),
         task_id: TaskId::new("task-1".to_string()),
-        action: AIAgentActionType::RunAgents(request.clone()),
+        action: AIAgentActionType::RunAgents(Box::new(request.clone())),
         requires_result: true,
     };
     let controller = Rc::new(TestController::default());
@@ -546,7 +554,7 @@ fn renderable_test_block(app: &mut App) -> ViewHandle<TuiOrchestrationBlock> {
     let action = AIAgentAction {
         id: AIAgentActionId::from("run-agents-1".to_string()),
         task_id: TaskId::new("task-1".to_string()),
-        action: AIAgentActionType::RunAgents(request.clone()),
+        action: AIAgentActionType::RunAgents(Box::new(request.clone())),
         requires_result: true,
     };
     let controller: Rc<dyn OrchestrationBlockController> = Rc::new(TestController::default());
@@ -928,7 +936,9 @@ fn background_page_invalidation_does_not_take_focus() {
 #[test]
 fn accepting_dispatches_once_and_releases_focus() {
     App::test((), |mut app| async move {
-        let request = request("oz", RunAgentsExecutionMode::Local);
+        let mut request = request("oz", RunAgentsExecutionMode::Local);
+        request.metadata = [("ticket_id".to_string(), "ENG-42".to_string())].into();
+        request.agent_run_configs[0].metadata = [("stage".to_string(), String::new())].into();
         let (block, controller) = test_block(&mut app, &request);
         assert!(app.read(|ctx| block.as_ref(ctx).is_awaiting_confirmation(ctx)));
 

@@ -993,6 +993,8 @@ fn build_spawn_request(
     };
 
     SpawnAgentRequest {
+        delegated_github_coauthor_user_uid: None,
+        metadata: Default::default(),
         prompt,
         mode,
         config: Some(config),

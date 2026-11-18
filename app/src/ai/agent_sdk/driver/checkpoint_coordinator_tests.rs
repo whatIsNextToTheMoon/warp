@@ -12,6 +12,7 @@ use mockito::{Matcher, Server};
 use tempfile::TempDir;
 use tokio::sync::oneshot;
 use uuid::Uuid;
+use warp_cli::agent::Harness;
 
 use super::*;
 use crate::ai::agent::api::ServerConversationToken;
@@ -19,7 +20,7 @@ use crate::ai::agent_sdk::test_support::build_test_http_client;
 use crate::ai::artifacts::Artifact;
 use crate::server::server_api::harness_support::{
     CommitSnapshotRequest, CommitSnapshotResponse, ReportArtifactResponse, ResolvePromptRequest,
-    ResolvedHarnessPrompt, SnapshotUploadRequest, UploadTarget,
+    ResolvedHarnessPrompt, SnapshotUploadRequest, UploadTarget, WaitForEventsResponse,
 };
 
 fn fresh_task_id() -> AmbientAgentTaskId {
@@ -91,7 +92,23 @@ impl FailingUploadTargetsClient {
 
 #[async_trait]
 impl HarnessSupportClient for FailingUploadTargetsClient {
-    async fn create_external_conversation(&self, _format: &str) -> Result<ServerConversationToken> {
+    async fn wait_for_events(&self, _run_ids: &[String]) -> Result<WaitForEventsResponse> {
+        unimplemented!("not used by the coordinator")
+    }
+
+    async fn create_external_conversation(
+        &self,
+        _format: &str,
+        _harness: Harness,
+    ) -> Result<ServerConversationToken> {
+        unimplemented!("not used by the coordinator")
+    }
+
+    async fn upload_conversation_data(
+        &self,
+        _conversation_id: &ServerConversationToken,
+        _conversation_data: &[u8],
+    ) -> Result<()> {
         unimplemented!("not used by the coordinator")
     }
     async fn get_transcript_upload_target(
@@ -121,6 +138,14 @@ impl HarnessSupportClient for FailingUploadTargetsClient {
     async fn finish_task(&self, _success: bool, _summary: &str) -> Result<()> {
         unimplemented!("not used by the coordinator")
     }
+    async fn report_transport(
+        &self,
+        _transport: warp_cli::agent::HarnessTransport,
+        _fallback_reason: Option<&'static str>,
+    ) -> Result<()> {
+        Ok(())
+    }
+
     async fn report_clean_shutdown(&self) -> Result<()> {
         unimplemented!("not used by the coordinator")
     }
@@ -148,7 +173,7 @@ impl HarnessSupportClient for FailingUploadTargetsClient {
     async fn fetch_transcript(&self) -> Result<bytes::Bytes> {
         unimplemented!("not used by the coordinator")
     }
-    fn http_client(&self) -> &http_client::Client {
+    fn external_http_client(&self) -> &http_client::Client {
         &self.http
     }
 }
@@ -192,7 +217,23 @@ impl RecordingClient {
 
 #[async_trait]
 impl HarnessSupportClient for RecordingClient {
-    async fn create_external_conversation(&self, _format: &str) -> Result<ServerConversationToken> {
+    async fn wait_for_events(&self, _run_ids: &[String]) -> Result<WaitForEventsResponse> {
+        unimplemented!("not used by the coordinator")
+    }
+
+    async fn create_external_conversation(
+        &self,
+        _format: &str,
+        _harness: Harness,
+    ) -> Result<ServerConversationToken> {
+        unimplemented!("not used by the coordinator")
+    }
+
+    async fn upload_conversation_data(
+        &self,
+        _conversation_id: &ServerConversationToken,
+        _conversation_data: &[u8],
+    ) -> Result<()> {
         unimplemented!("not used by the coordinator")
     }
     async fn get_transcript_upload_target(
@@ -222,6 +263,14 @@ impl HarnessSupportClient for RecordingClient {
     async fn finish_task(&self, _success: bool, _summary: &str) -> Result<()> {
         unimplemented!("not used by the coordinator")
     }
+    async fn report_transport(
+        &self,
+        _transport: warp_cli::agent::HarnessTransport,
+        _fallback_reason: Option<&'static str>,
+    ) -> Result<()> {
+        Ok(())
+    }
+
     async fn report_clean_shutdown(&self) -> Result<()> {
         unimplemented!("not used by the coordinator")
     }
@@ -267,7 +316,7 @@ impl HarnessSupportClient for RecordingClient {
     async fn fetch_transcript(&self) -> Result<bytes::Bytes> {
         unimplemented!("not used by the coordinator")
     }
-    fn http_client(&self) -> &http_client::Client {
+    fn external_http_client(&self) -> &http_client::Client {
         &self.http
     }
 }

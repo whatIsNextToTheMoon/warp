@@ -352,6 +352,8 @@ fn set_live_execution_session_marks_session_live_until_it_ends() {
 
 fn retry_request(prompt: impl Into<String>) -> SpawnAgentRequest {
     SpawnAgentRequest {
+        delegated_github_coauthor_user_uid: None,
+        metadata: Default::default(),
         prompt: Some(prompt.into()),
         mode: crate::server::server_api::ai::UserQueryMode::Normal,
         config: Some(AgentConfigSnapshot {
