@@ -172,7 +172,7 @@ fn builtin_mcp_installation(
     let templatable_mcp_server = TemplatableMCPServer {
         uuid: server.template_uuid,
         name: server.name.to_string(),
-        description: Some(server.description.to_string()),
+        description: Some(crate::i18n::ui_str(server.description)),
         template: JsonTemplate {
             json: template_json,
             // Fully resolved: the token is baked into the header, so there

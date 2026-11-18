@@ -3587,5 +3587,7 @@
   "The pi harness is not available.": "Pi 运行环境不可用。",
   "Failed to revert changes to {file_name}": "无法撤销对 {file_name} 的更改",
   "LLM provider API key": "大语言模型提供商 API 密钥",
-  "You are not logged in - please open Warp Agent CLI to log in.": "你尚未登录，请打开 Warp Agent CLI 登录。"
+  "You are not logged in - please open Warp Agent CLI to log in.": "你尚未登录，请打开 Warp Agent CLI 登录。",
+  "Warp's hosted Factory MCP server. Work with your team's software factories: list factories and their tasks, inspect a task's status and outputs, and send work in or hand it back.": "Warp 托管的 Factory MCP 服务器。你可以列出团队的软件工厂及其任务，查看任务状态和输出，并提交或交回工作。",
+  "Warp's hosted preview URLs MCP server. Expose a port from this cloud agent run's sandbox as a shareable preview URL.": "Warp 托管的预览链接 MCP 服务器。可将本次云端代理运行的沙箱端口发布为可分享的预览链接。"
 }

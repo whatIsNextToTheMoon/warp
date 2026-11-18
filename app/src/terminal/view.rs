@@ -630,6 +630,11 @@ use crate::terminal::links::should_directly_open_link;
 use crate::terminal::model::blocks::AgentTranscriptNavigableItem;
 use crate::terminal::model_events::{AnsiHandlerEvent, ModelEvent, ModelEventDispatcher};
 use crate::terminal::shared_session::manager::Manager;
+use crate::terminal::shell_recovery::{
+    CloudShellRecoveryRequest, ShellReplacementRequest, recovered_command_output,
+};
+use crate::workspace::WorkspaceRegistry;
+use crate::workspaces::workspace::ChargeUnit;
 use action::RememberForWarpification;
 use block_banner::{WarpifyBannerState, render_warpification_banner};
 use bookmarks::render_floating_block_snapshot;
